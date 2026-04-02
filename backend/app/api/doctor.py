@@ -1,0 +1,438 @@
+from flask import request, jsonify
+from flask_jwt_extended import jwt_required, get_jwt_identity
+from backend.app import db
+from backend.app.api import bp
+from backend.app.models import User, Patient, Visit, Drug, PrescriptionItem, DiagnosisDict
+from backend.app.utils.decorators import role_required
+from datetime import datetime
+import math
+import time
+from sqlalchemy import or_, case
+from pypinyin import pinyin, Style
+
+
+def _name_pinyin_parts(text):
+    if not isinstance(text, str) or not text:
+        return "", ""
+    initials_list = pinyin(text, style=Style.FIRST_LETTER, strict=False)
+    initials = "".join([x[0] for x in initials_list if x]).lower()
+    full_list = pinyin(text, style=Style.NORMAL, strict=False)
+    full = "".join([x[0] for x in full_list if x]).lower()
+    return full, initials
+
+@bp.route('/doctor/patient/search', methods=['GET'])
+@role_required('doctor')
+def search_patient():
+    start = time.perf_counter()
+    keyword = request.args.get('keyword', '').strip()
+    if not keyword:
+        return jsonify({"msg": "Missing keyword parameter"}), 400
+
+    kw_lower = keyword.lower()
+
+    user_id = get_jwt_identity()
+    now_ts = time.time()
+    if not hasattr(search_patient, "_rate"):
+        search_patient._rate = {}
+    bucket = search_patient._rate.setdefault(str(user_id), [])
+    bucket[:] = [t for t in bucket if now_ts - t < 10]
+    if len(bucket) >= 30:
+        return jsonify({"msg": "Too many requests"}), 429
+    bucket.append(now_ts)
+
+    filters = [Patient.name.contains(keyword)]
+    if not any('\u4e00' <= ch <= '\u9fff' for ch in keyword):
+        filters.append(Patient.name_pinyin.contains(kw_lower))
+        filters.append(Patient.name_initials.contains(kw_lower))
+
+    rank = case(
+        (Patient.name == keyword, 0),
+        (Patient.name.like(f"{keyword}%"), 1),
+        (Patient.name.like(f"%{keyword}%"), 2),
+        (Patient.name_initials == kw_lower, 3),
+        (Patient.name_pinyin == kw_lower, 4),
+        (Patient.name_initials.like(f"{kw_lower}%"), 5),
+        (Patient.name_pinyin.like(f"{kw_lower}%"), 6),
+        (Patient.name_initials.like(f"%{kw_lower}%"), 7),
+        (Patient.name_pinyin.like(f"%{kw_lower}%"), 8),
+        else_=99
+    )
+    patients = Patient.query.filter(or_(*filters)).order_by(rank).limit(100).all()
+
+    if not patients:
+        resp = jsonify({"data": []})
+        resp.headers["X-Response-Time-ms"] = f"{(time.perf_counter() - start) * 1000:.2f}"
+        return resp, 200
+
+    data = []
+    for patient in patients:
+        if not patient.name_pinyin or not patient.name_initials:
+            full, initials = _name_pinyin_parts(patient.name)
+            if full or initials:
+                patient.name_pinyin = full
+                patient.name_initials = initials
+        data.append({
+            "id": patient.id,
+            "name": patient.name,
+            "gender": patient.gender,
+            "phone": patient.phone
+        })
+
+    db.session.commit()
+    resp = jsonify({"data": data})
+    resp.headers["X-Response-Time-ms"] = f"{(time.perf_counter() - start) * 1000:.2f}"
+    return resp, 200
+
+@bp.route('/doctor/patient', methods=['POST'])
+@role_required('doctor')
+def create_patient():
+    data = request.get_json() or {}
+    required_fields = ['name', 'gender', 'phone']
+
+    for field in required_fields:
+        if field not in data:
+            return jsonify({"msg": f"Missing required field: {field}"}), 400
+
+    full_py, initials_py = _name_pinyin_parts(data['name'])
+    patient = Patient(
+        name=data['name'],
+        name_pinyin=full_py,
+        name_initials=initials_py,
+        gender=data['gender'],
+        phone=data['phone']
+    )
+    db.session.add(patient)
+    db.session.commit()
+
+    return jsonify({"data": {"id": patient.id}}), 201
+
+@bp.route('/doctor/patient/<int:id>', methods=['PUT'])
+@role_required('doctor')
+def update_patient(id):
+    patient = Patient.query.get_or_404(id)
+    data = request.get_json() or {}
+    
+    if 'phone' in data:
+        patient.phone = data['phone']
+        
+    db.session.commit()
+    return jsonify({"msg": "Patient updated successfully"}), 200
+
+@bp.route('/doctor/patient/<int:patient_id>/visits', methods=['GET'])
+@role_required('doctor')
+def get_patient_history(patient_id):
+    patient = Patient.query.get_or_404(patient_id)
+    visits = patient.visits.order_by(Visit.timestamp.desc()).all()
+
+    data = []
+    for visit in visits:
+        data.append({
+            "visit_id": visit.id,
+            "date": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "diagnosis": visit.diagnosis,
+            "total_amount": visit.total_amount
+        })
+
+    return jsonify({"data": data}), 200
+
+@bp.route('/doctor/drugs/search', methods=['GET'])
+@role_required('doctor')
+def search_drugs():
+    keyword = request.args.get('keyword', '')
+    query = Drug.query.filter_by(status=1)
+    if keyword:
+        query = query.filter(
+            (Drug.name.contains(keyword)) |
+            (Drug.specification.contains(keyword))
+        )
+
+    drugs = query.limit(20).all()
+    data = []
+    for drug in drugs:
+        data.append({
+            "id": drug.id,
+            "name": drug.name,
+            "type": drug.type,
+            "specification": drug.specification,
+            "unit": drug.unit,
+            "price": drug.price,
+            "has_scattered": drug.has_scattered,
+            "scattered_price": drug.scattered_price,
+            "conversion_rate": drug.conversion_rate,
+            "stock": drug.stock
+        })
+
+    return jsonify({"data": data}), 200
+
+@bp.route('/doctor/diagnoses/search', methods=['GET'])
+@role_required('doctor')
+def search_diagnoses():
+    keyword = request.args.get('keyword', '').lower()
+    query = DiagnosisDict.query
+    if keyword:
+        # Check if it contains Chinese characters
+        if any('\u4e00' <= char <= '\u9fff' for char in keyword):
+            # Keyword has Chinese, match name
+            query = query.filter(DiagnosisDict.name.contains(keyword))
+        else:
+            # Keyword is english/pinyin/code
+            query = query.filter(
+                (DiagnosisDict.code.contains(keyword)) |
+                (DiagnosisDict.pinyin.contains(f"{keyword}|")) |
+                (DiagnosisDict.pinyin.contains(f"|{keyword}")) |
+                (DiagnosisDict.pinyin.like(f"{keyword}%")) |
+                (DiagnosisDict.pinyin.like(f"%|{keyword}%")) |
+                (DiagnosisDict.pinyin.contains(keyword)) |
+                (DiagnosisDict.name.contains(keyword))
+            )
+
+    # First fetch some, since memory sort is needed
+    diagnoses = query.limit(200).all()
+    
+    # Sort handling for better matching
+    if not any('\u4e00' <= char <= '\u9fff' for char in keyword):
+        # 1. Exact match code or starts with code
+        # 2. Pinyin contains |keyword (exact match of full pinyin)
+        # 3. Pinyin starts with keyword (exact match of initials)
+        # 4. Pinyin contains keyword exactly like gm (in gmpy)
+        # 5. Other contains
+        def sort_key(x):
+            if x.code.lower() == keyword: return 0
+            if x.code.lower().startswith(keyword): return 1
+            
+            pinyin_parts = x.pinyin.split('|')
+            initials = pinyin_parts[0] if len(pinyin_parts) > 0 else ""
+            full_pinyin = pinyin_parts[1] if len(pinyin_parts) > 1 else ""
+            
+            # Exact match for full pinyin
+            if full_pinyin == keyword: return 2
+            # Exact match for initials
+            if initials == keyword: return 3
+            
+            if full_pinyin.startswith(keyword): return 4
+            if initials.startswith(keyword): return 5 + len(initials) / 100.0
+            
+            if keyword in initials: return 6
+            if keyword in full_pinyin: return 7
+            
+            if keyword in x.name.lower(): return 8
+            
+            return 9
+            
+        diagnoses = query.limit(500).all()
+        diagnoses.sort(key=sort_key)
+        
+    # Before truncating, maybe specifically find common diseases like "感冒" if matched
+    if not any('\u4e00' <= char <= '\u9fff' for char in keyword):
+        # We also sort by the length of the name so shorter ones (like "感冒") appear before "急性鼻咽炎［感冒］" if both match equally
+        def final_sort_key(x):
+            # Check if name is exactly "感冒" and keyword is "gm"
+            is_exact_common = 0
+            if keyword == 'gm' and x.name == '感冒': is_exact_common = -1
+            if keyword == 'ganmao' and x.name == '感冒': is_exact_common = -1
+            return (is_exact_common, sort_key(x), len(x.name))
+        diagnoses.sort(key=final_sort_key)
+        
+    diagnoses = diagnoses[:50]
+    data = []
+    for diag in diagnoses:
+        data.append({
+            "id": diag.id,
+            "code": diag.code,
+            "name": diag.name,
+            "pinyin": diag.pinyin
+        })
+
+    return jsonify({"data": data}), 200
+
+@bp.route('/doctor/visits', methods=['POST'])
+@role_required('doctor')
+def create_visit():
+    data = request.get_json() or {}
+    patient_id = data.get('patient_id')
+    items = data.get('items', [])
+
+    if not patient_id:
+        return jsonify({"msg": "Missing patient_id"}), 400
+
+    # Verify stock availability
+    total_amount = float(data.get('consultation_fee', 0))
+    drug_items = []
+
+    for item in items:
+        drug = Drug.query.get(item['drug_id'])
+        if not drug:
+            return jsonify({"msg": f"Drug/Item {item['drug_id']} not found"}), 404
+
+        is_scattered = item.get('is_scattered', False)
+        
+        if is_scattered and not drug.has_scattered:
+            return jsonify({"msg": f"Drug {drug.name} does not support scattered sale"}), 400
+
+        # Calculate prices and costs
+        if is_scattered:
+            unit_price = drug.scattered_price or 0.0
+            conv_rate = drug.conversion_rate or 1
+            purchase_cost = (drug.purchase_price or 0.0) / conv_rate * item['quantity']
+            stock_needed = item['quantity'] / conv_rate
+        else:
+            unit_price = drug.price or 0.0
+            purchase_cost = (drug.purchase_price or 0.0) * item['quantity']
+            stock_needed = item['quantity']
+
+        # Only check stock for actual drugs (type == 1)
+        if drug.type == 1 and drug.stock < math.ceil(stock_needed):
+            return jsonify({"msg": f"Insufficient stock for {drug.name}"}), 400
+
+        item_amount = item['quantity'] * unit_price
+        total_amount += item_amount
+
+        drug_items.append({
+            "drug": drug,
+            "quantity": item['quantity'],
+            "usage": item.get('usage'),
+            "dosage": item.get('dosage'),
+            "frequency": item.get('frequency'),
+            "timing": item.get('timing'),
+            "days": item.get('days', 1),
+            "price_at_visit": unit_price,
+            "amount": item_amount,
+            "is_scattered": is_scattered,
+            "purchase_cost": purchase_cost
+        })
+
+    # Create Visit
+    user_id = get_jwt_identity()
+    visit = Visit(
+        patient_id=patient_id,
+        doctor_id=int(user_id),
+        chief_complaint=data.get('chief_complaint'),
+        present_illness=data.get('present_illness'),
+        past_history=data.get('past_history'),
+        physical_exam=data.get('physical_exam'),
+        diagnosis=data.get('diagnosis'),
+        doctor_advice=data.get('doctor_advice'),
+        consultation_fee=data.get('consultation_fee', 0),
+        total_amount=total_amount,
+        status='pending'
+    )
+    db.session.add(visit)
+    db.session.flush() # get visit.id
+
+    # Create Prescription Items
+    for item in drug_items:
+        p_item = PrescriptionItem(
+            visit_id=visit.id,
+            drug_id=item['drug'].id,
+            usage=item['usage'],
+            dosage=item['dosage'],
+            frequency=item['frequency'],
+            timing=item['timing'],
+            days=item['days'],
+            quantity=item['quantity'],
+            price_at_visit=item['price_at_visit'],
+            amount=item['amount'],
+            is_scattered=item['is_scattered'],
+            purchase_cost=item['purchase_cost']
+        )
+        db.session.add(p_item)
+
+    db.session.commit()
+
+    return jsonify({"data": {"visit_id": visit.id}}), 201
+
+@bp.route('/doctor/visits/history', methods=['GET'])
+@role_required('doctor')
+def get_visit_history():
+    user_id = get_jwt_identity()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('size', 20, type=int)
+
+    query = Visit.query.filter_by(doctor_id=int(user_id)).order_by(Visit.timestamp.desc())
+
+    # Optional filters
+    start_date = request.args.get('start_date')
+    if start_date:
+        query = query.filter(Visit.timestamp >= datetime.strptime(start_date, '%Y-%m-%d'))
+
+    # Preload patient information to avoid N+1 queries
+    query = query.options(db.joinedload(Visit.patient))
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    data = []
+    for visit in pagination.items:
+        data.append({
+            "id": visit.id,
+            "patient_name": visit.patient.name,
+            "date": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "diagnosis": visit.diagnosis,
+            "status": visit.status,
+            "total_amount": visit.total_amount
+        })
+
+    return jsonify({
+        "data": data,
+        "meta": {
+            "page": page,
+            "per_page": per_page,
+            "total": pagination.total,
+            "pages": pagination.pages
+        }
+    }), 200
+
+@bp.route('/doctor/visits/<int:visit_id>', methods=['GET'])
+@role_required('doctor')
+def get_doctor_visit_detail(visit_id):
+    user_id = get_jwt_identity()
+    # Preload patient, items and drug information to avoid N+1 queries
+    visit = Visit.query.options(
+        db.joinedload(Visit.patient),
+        db.joinedload(Visit.items).joinedload(PrescriptionItem.drug)
+    ).get_or_404(visit_id)
+
+    # Ensure doctor can only view their own visits (or maybe allow viewing others? For now restrict to own)
+    if visit.doctor_id != int(user_id):
+        return jsonify({"msg": "Unauthorized to view this visit"}), 403
+
+    items = []
+    for item in visit.items:
+        items.append({
+            "drug_name": item.drug.name,
+            "specification": item.drug.specification,
+            "usage": item.usage,
+            "dosage": item.dosage,
+            "frequency": item.frequency,
+            "timing": item.timing,
+            "days": item.days,
+            "quantity": item.quantity,
+            "amount": item.amount,
+            "is_scattered": item.is_scattered
+        })
+
+    return jsonify({
+        "data": {
+            "visit_id": visit.id,
+            "patient": {
+                "name": visit.patient.name,
+                "student_id": visit.patient.student_id,
+                "gender": visit.patient.gender,
+                "grade": visit.patient.grade,
+                "college": visit.patient.college,
+                "major": visit.patient.major,
+                "class_name": visit.patient.class_name,
+                "phone": visit.patient.phone
+            },
+            "created_at": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "chief_complaint": visit.chief_complaint,
+            "present_illness": visit.present_illness,
+            "past_history": visit.past_history,
+            "physical_exam": visit.physical_exam,
+            "diagnosis": visit.diagnosis,
+            "doctor_advice": visit.doctor_advice,
+            "consultation_fee": visit.consultation_fee,
+            "total_amount": visit.total_amount,
+            "status": visit.status,
+            "items": items
+        }
+    }), 200
