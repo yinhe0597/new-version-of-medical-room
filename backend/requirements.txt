@@ -1,0 +1,13 @@
+Flask
+Flask-SQLAlchemy
+Flask-Migrate
+python-dotenv
+Flask-JWT-Extended
+pymysql
+cryptography
+pandas
+xlrd
+pypinyin
+numpy
+openpyxl
+requests
