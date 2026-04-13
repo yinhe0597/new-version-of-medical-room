@@ -2,7 +2,7 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Patient, Visit, Drug, PrescriptionItem, DiagnosisDict, VISIT_STATUS_PENDING
+from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, VISIT_STATUS_PENDING
 from backend.app.utils.decorators import role_required
 from datetime import datetime
 import math
@@ -156,13 +156,20 @@ def search_drugs():
     drugs = query.limit(20).all()
     data = []
     for drug in drugs:
+        if drug.type == 1 and (drug.stock or 0) <= 0:
+            if drug.variant_type in ["retail", "pack"] or drug.has_scattered:
+                continue
         data.append({
             "id": drug.id,
             "name": drug.name,
+            "base_name": drug.base_name,
             "type": drug.type,
             "specification": drug.specification,
             "unit": drug.unit,
             "price": drug.price,
+            "variant_type": drug.variant_type,
+            "stock_group_code": drug.stock_group_code,
+            "unit_amount": drug.unit_amount,
             "has_scattered": drug.has_scattered,
             "scattered_price": drug.scattered_price,
             "conversion_rate": drug.conversion_rate,
@@ -262,16 +269,86 @@ def create_visit():
     if not patient_id:
         return jsonify({"msg": "Missing patient_id"}), 400
 
+    diagnosis = (data.get("diagnosis") or "").strip()
+    if not diagnosis:
+        return jsonify({"msg": "Missing diagnosis", "field": "diagnosis"}), 400
+
+    if not isinstance(items, list) or len(items) == 0:
+        return jsonify({"msg": "Missing items", "field": "items"}), 400
+
     # Verify stock availability
     total_amount = float(data.get('consultation_fee', 0))
     drug_items = []
 
-    for item in items:
-        drug = Drug.query.get(item['drug_id'])
-        if not drug:
-            return jsonify({"msg": f"Drug/Item {item['drug_id']} not found"}), 404
+    for idx, item in enumerate(items):
+        drug_id = item.get("drug_id") if isinstance(item, dict) else None
+        if drug_id is None:
+            return jsonify({"msg": "Missing drug_id", "field": "drug_id", "item_index": idx}), 400
 
-        is_scattered = item.get('is_scattered', False)
+        drug = Drug.query.get(drug_id)
+        if not drug:
+            return jsonify({"msg": f"Drug/Item {drug_id} not found", "item_index": idx}), 404
+
+        try:
+            quantity = int(item.get("quantity"))
+        except Exception:
+            return jsonify({"msg": "Invalid quantity", "field": "quantity", "item_index": idx}), 400
+        if quantity <= 0:
+            return jsonify({"msg": "Invalid quantity", "field": "quantity", "item_index": idx}), 400
+
+        try:
+            days = int(item.get("days", 1))
+        except Exception:
+            return jsonify({"msg": "Invalid days", "field": "days", "item_index": idx}), 400
+        if days <= 0:
+            return jsonify({"msg": "Invalid days", "field": "days", "item_index": idx}), 400
+
+        if drug.type == 1:
+            for f in ["usage", "dosage", "frequency", "timing"]:
+                val = (item.get(f) or "").strip()
+                if not val:
+                    return jsonify({"msg": f"Missing {f}", "field": f, "item_index": idx}), 400
+
+        if drug.type == 1 and drug.stock_group_code:
+            group = DrugStockGroup.query.filter_by(group_code=drug.stock_group_code).first()
+            if group is None:
+                return jsonify({"msg": "Stock group not found"}), 400
+            unit_amount = int(drug.unit_amount or 0)
+            if unit_amount <= 0:
+                return jsonify({"msg": "Invalid unit_amount", "item_index": idx}), 400
+            needed_units = quantity * unit_amount
+            if group.total_units < needed_units:
+                pack_avail = group.total_units // int(group.pack_amount or 1)
+                retail_avail = group.total_units // int(group.retail_amount or 1) if group.retail_amount else None
+                extra = f", pack_available={pack_avail}"
+                if retail_avail is not None:
+                    extra += f", retail_available={retail_avail}"
+                return jsonify({"msg": f"Insufficient stock for {drug.base_name or drug.name}{extra}"}), 400
+
+            unit_price = drug.price or 0.0
+            if drug.variant_type == "retail" and group.pack_drug and group.pack_drug.purchase_price and group.pack_amount:
+                purchase_cost = float(group.pack_drug.purchase_price or 0.0) / float(group.pack_amount) * float(unit_amount) * quantity
+            else:
+                purchase_cost = float(drug.purchase_price or 0.0) * quantity
+
+            item_amount = quantity * unit_price
+            total_amount += item_amount
+            drug_items.append({
+                "drug": drug,
+                "quantity": quantity,
+                "usage": item.get("usage"),
+                "dosage": item.get("dosage"),
+                "frequency": item.get("frequency"),
+                "timing": item.get("timing"),
+                "days": days,
+                "price_at_visit": unit_price,
+                "amount": item_amount,
+                "is_scattered": False,
+                "purchase_cost": purchase_cost,
+            })
+            continue
+
+        is_scattered = bool(item.get('is_scattered', False)) if drug.type == 1 else False
         
         if is_scattered and not drug.has_scattered:
             return jsonify({"msg": f"Drug {drug.name} does not support scattered sale"}), 400
@@ -280,28 +357,28 @@ def create_visit():
         if is_scattered:
             unit_price = drug.scattered_price or 0.0
             conv_rate = drug.conversion_rate or 1
-            purchase_cost = (drug.purchase_price or 0.0) / conv_rate * item['quantity']
-            stock_needed = item['quantity'] / conv_rate
+            purchase_cost = (drug.purchase_price or 0.0) / conv_rate * quantity
+            stock_needed = quantity / conv_rate
         else:
             unit_price = drug.price or 0.0
-            purchase_cost = (drug.purchase_price or 0.0) * item['quantity']
-            stock_needed = item['quantity']
+            purchase_cost = (drug.purchase_price or 0.0) * quantity
+            stock_needed = quantity
 
         # Only check stock for actual drugs (type == 1)
         if drug.type == 1 and drug.stock < math.ceil(stock_needed):
             return jsonify({"msg": f"Insufficient stock for {drug.name}"}), 400
 
-        item_amount = item['quantity'] * unit_price
+        item_amount = quantity * unit_price
         total_amount += item_amount
 
         drug_items.append({
             "drug": drug,
-            "quantity": item['quantity'],
+            "quantity": quantity,
             "usage": item.get('usage'),
             "dosage": item.get('dosage'),
             "frequency": item.get('frequency'),
             "timing": item.get('timing'),
-            "days": item.get('days', 1),
+            "days": days,
             "price_at_visit": unit_price,
             "amount": item_amount,
             "is_scattered": is_scattered,
@@ -317,7 +394,7 @@ def create_visit():
         present_illness=data.get('present_illness'),
         past_history=data.get('past_history'),
         physical_exam=data.get('physical_exam'),
-        diagnosis=data.get('diagnosis'),
+        diagnosis=diagnosis,
         doctor_advice=data.get('doctor_advice'),
         consultation_fee=data.get('consultation_fee', 0),
         total_amount=total_amount,

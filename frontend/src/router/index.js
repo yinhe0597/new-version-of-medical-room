@@ -60,6 +60,16 @@ const routes = [
         component: () => import('@/views/nurse/Inventory.vue')
       },
       {
+        path: 'drugs',
+        name: 'NurseDrugManagement',
+        component: () => import('@/views/nurse/DrugManagement.vue')
+      },
+      {
+        path: 'statistics',
+        name: 'NurseStatistics',
+        component: () => import('@/views/nurse/Statistics.vue')
+      },
+      {
         path: '',
         redirect: '/nurse/pending'
       }

@@ -204,7 +204,7 @@ def import_patients():
         return jsonify({"msg": f"Error parsing CSV: {str(e)}"}), 500
 
 @bp.route('/admin/drugs', methods=['GET'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def get_drugs():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('size', 20, type=int)
@@ -245,7 +245,7 @@ def get_drugs():
     }), 200
 
 @bp.route('/admin/drugs', methods=['POST'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def create_drug():
     data = request.get_json() or {}
 
@@ -282,7 +282,7 @@ def create_drug():
     return jsonify({"data": {"id": drug.id}}), 201
 
 @bp.route('/admin/drugs/<int:id>', methods=['PUT'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def update_drug(id):
     drug = Drug.query.get_or_404(id)
     data = request.get_json() or {}
@@ -305,7 +305,7 @@ def update_drug(id):
     return jsonify({"msg": "Drug updated successfully"}), 200
 
 @bp.route('/admin/drugs/<int:id>', methods=['DELETE'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def delete_drug(id):
     drug = Drug.query.get_or_404(id)
     try:
@@ -320,7 +320,7 @@ def delete_drug(id):
         return jsonify({"msg": f"删除失败: {str(e)}"}), 500
 
 @bp.route('/admin/drugs/import', methods=['POST'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def import_drugs():
     if 'file' not in request.files:
         return jsonify({"msg": "No file part"}), 400
@@ -410,7 +410,7 @@ def import_drugs():
         return jsonify({"msg": f"Import failed: {str(e)}"}), 500
 
 @bp.route('/admin/drugs/import_xls', methods=['POST'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def import_drugs_xls():
     if 'file' not in request.files:
         return jsonify({"msg": "No file part"}), 400
@@ -505,7 +505,7 @@ def import_drugs_xls():
         return jsonify({"msg": f"Import failed: {str(e)}"}), 500
 
 @bp.route('/admin/drugs/template', methods=['GET'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def get_drug_template():
     si = io.BytesIO()
     si.write(b'\xef\xbb\xbf')
@@ -524,7 +524,7 @@ def get_drug_template():
     return output
 
 @bp.route('/admin/drugs/smart-inventory', methods=['POST'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def smart_inventory():
     total_merged = 0
     total_deleted = 0
@@ -596,7 +596,7 @@ def smart_inventory():
         return jsonify({"msg": f"智能盘库失败: {str(e)}"}), 500
 
 @bp.route('/admin/statistics/revenue', methods=['GET'])
-@role_required('admin')
+@role_required(['admin', 'nurse'])
 def get_revenue_stats():
     stats_type = request.args.get('type', 'daily')
     target_date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
@@ -664,6 +664,136 @@ def get_revenue_stats():
 
     except ValueError:
         return jsonify({"msg": "Invalid date format"}), 400
+
+
+@bp.route("/admin/statistics/revenue/export", methods=["GET"])
+@role_required(["admin", "nurse"])
+def export_revenue_stats():
+    from openpyxl import Workbook
+
+    stats_type = request.args.get("type", "daily")
+    target_date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+
+    try:
+        if stats_type == "daily":
+            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+            start = datetime.combine(target_date, datetime.min.time())
+            end = start + timedelta(days=1)
+            date_label = target_date_str
+        elif stats_type == "monthly":
+            target_year, target_month = map(int, target_date_str.split("-")[:2])
+            start = datetime(target_year, target_month, 1)
+            if target_month == 12:
+                end = datetime(target_year + 1, 1, 1)
+            else:
+                end = datetime(target_year, target_month + 1, 1)
+            date_label = f"{target_year:04d}-{target_month:02d}"
+        elif stats_type == "yearly":
+            target_year = int(target_date_str.split("-")[0])
+            start = datetime(target_year, 1, 1)
+            end = datetime(target_year + 1, 1, 1)
+            date_label = f"{target_year:04d}"
+        else:
+            return jsonify({"msg": "Invalid type"}), 400
+    except Exception:
+        return jsonify({"msg": "Invalid date format"}), 400
+
+    def safe_text(val):
+        s = "" if val is None else str(val)
+        if s.startswith(("=", "+", "-", "@")):
+            return "'" + s
+        return s
+
+    query = Payment.query.filter(Payment.payment_date >= start, Payment.payment_date < end)
+    payments = query.options(
+        db.joinedload(Payment.visit).joinedload(Visit.patient),
+        db.joinedload(Payment.visit).joinedload(Visit.doctor),
+        db.joinedload(Payment.visit).joinedload(Visit.items),
+        db.joinedload(Payment.nurse),
+    ).all()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "revenue"
+
+    ws.append(
+        [
+            "支付时间",
+            "visit_id",
+            "患者姓名",
+            "学号",
+            "医生",
+            "护士",
+            "支付方式",
+            "诊察费",
+            "药品金额",
+            "总金额",
+            "成本",
+            "利润",
+            "诊断",
+        ]
+    )
+
+    total_revenue = 0.0
+    consultation_revenue = 0.0
+    drug_revenue = 0.0
+    total_cost = 0.0
+    total_profit = 0.0
+
+    for p in payments:
+        v = p.visit
+        if v is None:
+            continue
+        consult = float(v.consultation_fee or 0.0)
+        amount = float(p.amount or 0.0)
+        drug_amt = float(v.total_amount or 0.0) - consult
+        cost = 0.0
+        for it in v.items:
+            cost += float(it.purchase_cost or 0.0)
+        profit = amount - cost
+
+        total_revenue += amount
+        consultation_revenue += consult
+        drug_revenue += drug_amt
+        total_cost += cost
+        total_profit += profit
+
+        ws.append(
+            [
+                safe_text(p.payment_date.strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else ""),
+                v.id,
+                safe_text(v.patient.name if v.patient else ""),
+                safe_text(v.patient.student_id if v.patient else ""),
+                safe_text(v.doctor.real_name if v.doctor else ""),
+                safe_text(p.nurse.real_name if getattr(p, "nurse", None) else ""),
+                safe_text(p.payment_method or ""),
+                round(consult, 2),
+                round(drug_amt, 2),
+                round(amount, 2),
+                round(cost, 2),
+                round(profit, 2),
+                safe_text(v.diagnosis or ""),
+            ]
+        )
+
+    ws2 = wb.create_sheet("summary")
+    ws2.append(["维度", safe_text(stats_type)])
+    ws2.append(["日期", safe_text(date_label)])
+    ws2.append(["总收入", round(total_revenue, 2)])
+    ws2.append(["药品收入", round(drug_revenue, 2)])
+    ws2.append(["诊察费收入", round(consultation_revenue, 2)])
+    ws2.append(["总成本", round(total_cost, 2)])
+    ws2.append(["总利润", round(total_profit, 2)])
+
+    stream = io.BytesIO()
+    wb.save(stream)
+    payload = stream.getvalue()
+
+    filename = f"revenue_{stats_type}_{date_label}.xlsx"
+    resp = make_response(payload)
+    resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    resp.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    return resp
 
 @bp.route('/admin/users', methods=['GET'])
 @role_required('admin')

@@ -15,7 +15,15 @@
         </el-menu-item>
         <el-menu-item index="/nurse/inventory">
           <el-icon><Box /></el-icon>
-          <span>库存盘点</span>
+          <span>库存与入库</span>
+        </el-menu-item>
+        <el-menu-item index="/nurse/drugs">
+          <el-icon><FirstAidKit /></el-icon>
+          <span>药品管理</span>
+        </el-menu-item>
+        <el-menu-item index="/nurse/statistics">
+          <el-icon><DataLine /></el-icon>
+          <span>统计报表</span>
         </el-menu-item>
       </el-menu>
     </el-aside>
@@ -39,7 +47,7 @@
 import { computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { Timer, Box } from '@element-plus/icons-vue'
+import { Timer, Box, FirstAidKit, DataLine } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 const router = useRouter()

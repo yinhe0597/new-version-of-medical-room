@@ -77,9 +77,31 @@ class Drug(db.Model):
     has_scattered = db.Column(db.Boolean, default=False)
     scattered_price = db.Column(db.Float, nullable=True)
     conversion_rate = db.Column(db.Integer, nullable=True)
+    variant_type = db.Column(db.String(20), nullable=True)
+    stock_group_code = db.Column(db.String(36), index=True, nullable=True)
+    unit_amount = db.Column(db.Integer, nullable=True)
+    base_name = db.Column(db.String(128), nullable=True)
 
     def __repr__(self):
         return f'<Drug/Item {self.name}>'
+
+class DrugStockGroup(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    group_code = db.Column(db.String(36), unique=True, index=True, nullable=False)
+    batch_no = db.Column(db.String(50), index=True, nullable=False)
+    base_name = db.Column(db.String(128), index=True, nullable=False)
+    unit_name = db.Column(db.String(20), nullable=False)
+    total_units = db.Column(db.Integer, nullable=False)
+    pack_amount = db.Column(db.Integer, nullable=False)
+    retail_amount = db.Column(db.Integer, nullable=True)
+    pack_drug_id = db.Column(db.Integer, db.ForeignKey('drug.id'), nullable=False)
+    retail_drug_id = db.Column(db.Integer, db.ForeignKey('drug.id'), nullable=True)
+    created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    pack_drug = db.relationship('Drug', foreign_keys=[pack_drug_id])
+    retail_drug = db.relationship('Drug', foreign_keys=[retail_drug_id])
+    creator = db.relationship('User', foreign_keys=[created_by])
 
 class Visit(db.Model):
     id = db.Column(db.Integer, primary_key=True)
