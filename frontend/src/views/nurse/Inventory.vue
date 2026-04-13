@@ -1,6 +1,10 @@
 <template>
   <div class="inventory-container">
     <el-tabs v-model="activeTab" class="inventory-tabs">
+      <el-tab-pane label="入库管理" name="inbound">
+        <DrugEntry />
+      </el-tab-pane>
+
       <!-- 盘点操作标签页 -->
       <el-tab-pane label="库存盘点" name="inventory">
         <el-card>
@@ -120,6 +124,7 @@ import { ref, onMounted, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/api/request'
+import DrugEntry from '@/components/DrugEntry.vue'
 
 const activeTab = ref('inventory')
 

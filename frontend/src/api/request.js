@@ -44,7 +44,11 @@ service.interceptors.response.use(
                 window.location.href = '/login'
             }
         }
-        return Promise.reject(error.response.data)
+        const payload = error.response.data
+        if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+            return Promise.reject({ ...payload, code: error.response.status })
+        }
+        return Promise.reject({ msg: payload || 'Request failed', code: error.response.status })
     }
     return Promise.reject(error)
   }

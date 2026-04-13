@@ -21,7 +21,7 @@
               @change="fetchStats"
             />
             
-            <el-button type="success" :icon="Download" style="margin-left: 10px">导出Excel</el-button>
+            <el-button type="success" :icon="Download" style="margin-left: 10px" @click="exportExcel">导出Excel</el-button>
           </div>
         </div>
       </template>
@@ -86,6 +86,7 @@ import { ref, computed, onMounted } from 'vue'
 import request from '@/api/request'
 import { Download } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
+import { ElMessage } from 'element-plus'
 
 const statsType = ref('daily')
 const date = ref(dayjs().format('YYYY-MM-DD'))
@@ -126,6 +127,30 @@ const fetchStats = async () => {
     stats.value = res.data
   } catch (error) {
     console.error(error)
+  }
+}
+
+const exportExcel = async () => {
+  if (!date.value) return
+  try {
+    const blob = await request.get('/admin/statistics/revenue/export', {
+      params: {
+        type: statsType.value,
+        date: date.value
+      },
+      responseType: 'blob'
+    })
+    const filename = `revenue_${statsType.value}_${date.value}.xlsx`
+    const url = window.URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = filename
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    window.URL.revokeObjectURL(url)
+  } catch (error) {
+    ElMessage.error(error.msg || '导出失败')
   }
 }
 

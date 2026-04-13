@@ -362,6 +362,39 @@ const searchDrugs = async (query) => {
     })
     const options = []
     ;(res.data || []).forEach(d => {
+      if (d.variant_type === 'retail') {
+        options.push({
+          ...d,
+          option_id: `${d.id}:variant`,
+          option_label: '零散',
+          display_price: d.price,
+          is_scattered: false,
+          maxStock: d.stock
+        })
+        return
+      }
+      if (d.variant_type === 'pack') {
+        options.push({
+          ...d,
+          option_id: `${d.id}:variant`,
+          option_label: '整装',
+          display_price: d.price,
+          is_scattered: false,
+          maxStock: d.stock
+        })
+        return
+      }
+      if (d.variant_type === 'service') {
+        options.push({
+          ...d,
+          option_id: `${d.id}:variant`,
+          option_label: '项目',
+          display_price: d.price,
+          is_scattered: false,
+          maxStock: 999
+        })
+        return
+      }
       options.push({
         ...d,
         option_id: `${d.id}:whole`,
@@ -435,16 +468,53 @@ const resetForm = () => {
   prescriptionItems.value = []
 }
 
-const openSubmitConfirm = () => {
-  if (!visitForm.value.diagnosis) {
+const validatePrescription = () => {
+  if (!visitForm.value.diagnosis || !String(visitForm.value.diagnosis).trim()) {
     ElMessage.warning('请填写诊断信息')
-    return
+    return false
   }
+  if (!Array.isArray(prescriptionItems.value) || prescriptionItems.value.length === 0) {
+    ElMessage.warning('请至少添加一条处方明细')
+    return false
+  }
+  for (let i = 0; i < prescriptionItems.value.length; i++) {
+    const item = prescriptionItems.value[i]
+    const qty = Number(item.quantity)
+    if (!Number.isFinite(qty) || qty <= 0) {
+      ElMessage.warning(`第${i + 1}行数量不合法`)
+      return false
+    }
+    if (item.type === 1) {
+      const required = [
+        { key: 'usage', label: '用法' },
+        { key: 'dosage', label: '用量' },
+        { key: 'frequency', label: '频次' },
+        { key: 'timing', label: '时间' }
+      ]
+      for (const r of required) {
+        if (!String(item[r.key] || '').trim()) {
+          ElMessage.warning(`第${i + 1}行请填写${r.label}`)
+          return false
+        }
+      }
+      const days = Number(item.days)
+      if (!Number.isFinite(days) || days <= 0) {
+        ElMessage.warning(`第${i + 1}行天数不合法`)
+        return false
+      }
+    }
+  }
+  return true
+}
+
+const openSubmitConfirm = () => {
+  if (!validatePrescription()) return
   confirmDialogVisible.value = true
 }
 
 const confirmSubmit = async () => {
   if (!confirmDialogVisible.value) return
+  if (!validatePrescription()) return
   submitting.value = true
   try {
     const payload = {
