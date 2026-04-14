@@ -4,7 +4,7 @@
       <template #header>
         <div class="card-header">
           <span>学生(患者)档案批量导入</span>
-          <el-button type="primary" @click="downloadTemplate">下载 CSV 模板</el-button>
+          <el-button type="primary" @click="downloadTemplate">下载导入模板</el-button>
         </div>
       </template>
       <div class="import-section">
@@ -25,7 +25,7 @@
           </div>
           <template #tip>
             <div class="el-upload__tip">
-              只能上传 csv 文件，且文件内容需严格按照模板格式。对于已存在的学号会进行更新操作。
+              只能上传 csv 文件，且文件内容需严格按照模板格式（学号、姓名、性别、手机号码、年级、学院、专业、班级）。手机号码允许为空；已有学号会更新基础信息（导入为空的手机号码不会覆盖已登记手机号）。
             </div>
           </template>
         </el-upload>

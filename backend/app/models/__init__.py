@@ -43,7 +43,7 @@ class User(db.Model):
 
 class Patient(db.Model):
     id = db.Column(db.Integer, primary_key=True)
-    student_id = db.Column(db.String(20), index=True, nullable=True)
+    student_id = db.Column(db.String(20), index=True, unique=True, nullable=True)
     name = db.Column(db.String(64), index=True)
     name_pinyin = db.Column(db.String(128), index=True, nullable=True)
     name_initials = db.Column(db.String(64), index=True, nullable=True)
@@ -52,7 +52,7 @@ class Patient(db.Model):
     college = db.Column(db.String(100), nullable=True)
     major = db.Column(db.String(100), nullable=True)
     class_name = db.Column(db.String(100), nullable=True)
-    phone = db.Column(db.String(20))
+    phone = db.Column(db.String(20), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     visits = db.relationship('Visit', backref='patient', lazy='dynamic')

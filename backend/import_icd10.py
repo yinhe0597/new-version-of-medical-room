@@ -1,5 +1,6 @@
 import os
 import sys
+import argparse
 import pandas as pd
 from pypinyin import pinyin, Style
 
@@ -23,10 +24,13 @@ def get_pinyin_variants(text):
     
     return f"{initials}|{full}"
 
-def import_data(file_path):
+def import_data(file_path, sheet=None):
     print(f"Reading Excel file: {file_path}...")
     try:
-        df = pd.read_excel(file_path)
+        if sheet is None:
+            df = pd.read_excel(file_path)
+        else:
+            df = pd.read_excel(file_path, sheet_name=sheet)
     except Exception as e:
         print(f"Error reading Excel file: {e}")
         return
@@ -35,45 +39,63 @@ def import_data(file_path):
     
     app = create_app()
     with app.app_context():
-        # Clear existing data if necessary, or just insert new ones
-        count = DiagnosisDict.query.count()
-        if count > 0:
-            print(f"Database already contains {count} records. Clearing table...")
-            db.session.query(DiagnosisDict).delete()
-            db.session.commit()
-            
-        diagnoses = []
+        existing_by_code = {
+            (d.code or ""): d
+            for d in DiagnosisDict.query.filter(DiagnosisDict.code.isnot(None)).all()
+            if (d.code or "").strip()
+        }
+
+        inserted = 0
+        updated = 0
+        processed = 0
+
         for index, row in df.iterrows():
-            code = str(row.get('疾病诊断编码', ''))
-            name = str(row.get('疾病诊断名称', ''))
-            
+            raw_code = row.get('疾病诊断编码', '')
+            raw_name = row.get('疾病诊断名称', '')
+            code = str(raw_code).strip() if raw_code is not None else ""
+            name = str(raw_name).strip() if raw_name is not None else ""
+
             if not code or not name or code == 'nan' or name == 'nan':
                 continue
 
+            processed += 1
             py = get_pinyin_variants(name)
-            
-            diag = DiagnosisDict(
-                code=code.strip(),
-                name=name.strip(),
-                pinyin=py
-            )
-            diagnoses.append(diag)
-            
-            if len(diagnoses) >= 1000:
-                db.session.bulk_save_objects(diagnoses)
+
+            existing = existing_by_code.get(code)
+            if existing is None:
+                db.session.add(DiagnosisDict(code=code, name=name, pinyin=py))
+                existing_by_code[code] = True
+                inserted += 1
+            else:
+                changed = False
+                if (existing.name or "").strip() != name:
+                    existing.name = name
+                    changed = True
+                if (existing.pinyin or "").strip() != py:
+                    existing.pinyin = py
+                    changed = True
+                if changed:
+                    updated += 1
+
+            if processed % 2000 == 0:
                 db.session.commit()
-                diagnoses = []
-                print(f"Inserted {index + 1} records...")
-                
-        if diagnoses:
-            db.session.bulk_save_objects(diagnoses)
-            db.session.commit()
-            
-        print("Import completed successfully!")
+                print(f"Processed {processed} rows, inserted {inserted}, updated {updated}...")
+
+        db.session.commit()
+        print(f"Import completed successfully! processed={processed}, inserted={inserted}, updated={updated}")
 
 if __name__ == '__main__':
-    excel_path = '/workspace/.trae/specs/add-prescription-verification-workflow/国家临床版2.0疾病诊断编码（ICD-10）.xlsx'
+    parser = argparse.ArgumentParser()
+    parser.add_argument("excel_path", nargs="?", default=None)
+    parser.add_argument("--sheet", default=None)
+    args = parser.parse_args()
+
+    excel_path = args.excel_path
+    if not excel_path:
+        excel_path = os.path.join(ROOT_DIR, "国家临床版2.0疾病诊断编码（ICD-10）.xlsx")
+
     if not os.path.exists(excel_path):
         print(f"File not found: {excel_path}")
-    else:
-        import_data(excel_path)
+        sys.exit(1)
+
+    import_data(excel_path, sheet=args.sheet)

@@ -136,6 +136,45 @@ class PrescriptionValidationAndVerifyTestCase(unittest.TestCase):
         vresp = self.client.post(f"/api/nurse/visits/{visit_id}/verify", json={}, headers=self.nurse_headers)
         self.assertEqual(vresp.status_code, 400)
 
+    def test_nurse_verify_checks_stock_when_drug_type_is_null(self):
+        null_type_drug = Drug(
+            name="药品NullType",
+            type=None,
+            specification="10 mg×10粒/盒",
+            unit="盒",
+            price=5.0,
+            purchase_price=4.0,
+            stock=10,
+            status=1,
+        )
+        db.session.add(null_type_drug)
+        db.session.commit()
+
+        payload = {
+            "patient_id": self.patient.id,
+            "diagnosis": "感冒",
+            "items": [
+                {
+                    "drug_id": null_type_drug.id,
+                    "quantity": 1,
+                    "usage": "口服",
+                    "dosage": "1粒",
+                    "frequency": "每日1次",
+                    "timing": "餐后",
+                    "days": 1,
+                }
+            ],
+        }
+        resp = self.client.post("/api/doctor/visits", json=payload, headers=self.doctor_headers)
+        self.assertEqual(resp.status_code, 201)
+        visit_id = resp.get_json()["data"]["visit_id"]
+
+        null_type_drug.stock = 0
+        db.session.commit()
+
+        vresp = self.client.post(f"/api/nurse/visits/{visit_id}/verify", json={}, headers=self.nurse_headers)
+        self.assertEqual(vresp.status_code, 400)
+
     def test_create_visit_success(self):
         payload = {
             "patient_id": self.patient.id,

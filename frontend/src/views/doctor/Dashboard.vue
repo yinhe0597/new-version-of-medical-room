@@ -13,6 +13,10 @@
           <el-icon><User /></el-icon>
           <span>患者接诊</span>
         </el-menu-item>
+        <el-menu-item index="/doctor/direct-purchase">
+          <el-icon><ShoppingCart /></el-icon>
+          <span>单独购药</span>
+        </el-menu-item>
         <el-menu-item index="/doctor/history">
           <el-icon><List /></el-icon>
           <span>历史记录</span>
@@ -39,7 +43,7 @@
 import { computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { User, List } from '@element-plus/icons-vue'
+import { User, List, ShoppingCart } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 const router = useRouter()

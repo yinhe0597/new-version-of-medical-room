@@ -5,7 +5,7 @@
       <div class="search-box">
         <el-autocomplete
           v-model="searchKeyword"
-          placeholder="请输入姓名（前几位即可）"
+          placeholder="请输入姓名 / 学号 / 拼音（前几位即可）"
           class="search-input"
           :fetch-suggestions="handleSearch"
           :trigger-on-focus="false"
@@ -19,8 +19,10 @@
           </template>
           <template #default="{ item }">
             <div class="patient-suggestion">
+              <span class="student-id">{{ item.student_id || '-' }}</span>
               <span class="name">{{ item.name }}</span>
               <span class="gender">{{ item.gender }}</span>
+              <span class="class-name">{{ item.class_name || '-' }}</span>
             </div>
           </template>
           <template #append>
@@ -39,8 +41,13 @@
         </div>
       </template>
       <el-descriptions border>
+        <el-descriptions-item label="学号">{{ patient.student_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ patient.name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="性别">{{ patient.gender || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="年级">{{ patient.grade || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="学院">{{ patient.college || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="专业">{{ patient.major || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="班级">{{ patient.class_name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="电话">{{ patient.phone || '-' }}</el-descriptions-item>
       </el-descriptions>
     </el-card>
@@ -60,7 +67,7 @@
             <el-radio label="女">女</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="联系电话" prop="phone">
+        <el-form-item label="联系电话（可暂空）" prop="phone">
           <el-input v-model="createForm.phone"></el-input>
         </el-form-item>
         <el-form-item>
@@ -85,7 +92,7 @@
       ></el-input>
       <template #footer>
         <span class="dialog-footer">
-          <el-button @click="skipPhoneInput">暂不补充，直接接诊</el-button>
+          <el-button @click="phoneDialogVisible = false">取消</el-button>
           <el-button type="primary" @click="submitPhone" :loading="updatingPhone">
             保存并接诊
           </el-button>
@@ -147,7 +154,7 @@ const handleSearch = async (query, callback) => {
 
       if (res.data && res.data.length > 0) {
         searchResults.value = res.data
-        callback(res.data.map(p => ({ ...p, value: p.name })))
+        callback(res.data.map(p => ({ ...p, value: p.student_id ? `${p.student_id} ${p.name}` : p.name })))
       } else {
         searchResults.value = []
         callback([])
@@ -196,6 +203,7 @@ const handleSearchFromButton = async () => {
 const handleSelect = (item) => {
   patient.value = item
   showCreateForm.value = false
+  searchKeyword.value = item.student_id || item.name || ''
 }
 
 const handleEnter = () => {
@@ -215,7 +223,7 @@ const handleCreate = async () => {
         ElMessage.success('建档成功')
         patient.value = { ...createForm.value, id: res.data.id }
         showCreateForm.value = false
-        startVisit()
+        handleStartVisit()
       } catch (error) {
         ElMessage.error(error.msg || '建档失败')
       } finally {
@@ -254,11 +262,6 @@ const submitPhone = async () => {
   } finally {
     updatingPhone.value = false
   }
-}
-
-const skipPhoneInput = () => {
-  phoneDialogVisible.value = false
-  startVisit()
 }
 
 const startVisit = () => {
