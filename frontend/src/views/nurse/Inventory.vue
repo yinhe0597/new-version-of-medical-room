@@ -29,6 +29,14 @@
           <el-table :data="drugs" stripe style="width: 100%" v-loading="loading">
             <el-table-column prop="name" label="药名" />
             <el-table-column prop="specification" label="规格" width="150" />
+            <el-table-column label="包装" width="90">
+              <template #default="scope">
+                <el-tag v-if="scope.row.variant_type === 'pack'">整装</el-tag>
+                <el-tag v-else-if="scope.row.variant_type === 'retail'" type="warning">零散</el-tag>
+                <el-tag v-else-if="scope.row.has_scattered" type="info">整/散</el-tag>
+                <span v-else>-</span>
+              </template>
+            </el-table-column>
             <el-table-column prop="unit" label="单位" width="100" />
             <el-table-column label="售价" width="100">
               <template #default="scope">
@@ -82,42 +90,88 @@
       </el-tab-pane>
     </el-tabs>
 
-    <!-- 盘点弹窗 -->
-    <el-dialog
-      v-model="dialogVisible"
-      title="库存盘点"
-      width="400px"
-    >
-      <el-form :model="form" :rules="rules" ref="formRef" label-width="100px">
-        <el-form-item label="药品名称">
-          <span>{{ currentDrug?.name }} ({{ currentDrug?.specification }})</span>
-        </el-form-item>
-        <el-form-item label="原库存量">
-          <el-tag type="info">{{ currentDrug?.stock }}</el-tag>
-        </el-form-item>
-        <el-form-item label="实际数量" prop="new_stock">
-          <el-input-number v-model="form.new_stock" :min="0" :step="1" />
-        </el-form-item>
-        <el-form-item label="盘点备注" prop="remark">
-          <el-input
-            v-model="form.remark"
-            type="textarea"
-            :rows="3"
-            placeholder="请填写盘点原因（如：拆盒零卖、损耗等）"
-          />
-        </el-form-item>
-      </el-form>
-      <template #footer>
-        <span class="dialog-footer">
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" @click="submitInventory" :loading="submitting">
-            确认盘点
-          </el-button>
-        </span>
-      </template>
-    </el-dialog>
-  </div>
-</template>
+      <!-- 盘点弹窗 (普通药品) -->
+      <el-dialog
+        v-model="dialogVisible"
+        title="库存盘点"
+        width="400px"
+      >
+        <el-form :model="form" :rules="rules" ref="formRef" label-width="100px">
+          <el-form-item label="药品名称">
+            <span>{{ currentDrug?.name }} ({{ currentDrug?.specification }})</span>
+          </el-form-item>
+          <el-form-item label="原库存量">
+            <el-tag type="info">{{ currentDrug?.stock }}</el-tag>
+          </el-form-item>
+          <el-form-item label="实际数量" prop="new_stock">
+            <el-input-number v-model="form.new_stock" :min="0" :step="1" />
+          </el-form-item>
+          <el-form-item label="盘点备注" prop="remark">
+            <el-input
+              v-model="form.remark"
+              type="textarea"
+              :rows="3"
+              placeholder="请填写盘点原因（如：损耗等）"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="dialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="submitInventory" :loading="submitting">
+              确认盘点
+            </el-button>
+          </span>
+        </template>
+      </el-dialog>
+
+      <!-- 联合盘点弹窗 (整散库存组药品) -->
+      <el-dialog
+        v-model="groupDialogVisible"
+        title="整散联合盘点"
+        width="450px"
+      >
+        <div style="margin-bottom: 20px; font-size: 13px; color: #606266; line-height: 1.5;">
+          该药品为整散共享库存，调整需同时输入<strong>实际物理存在的整盒数</strong>与<strong>实际物理存在的散件数</strong>，系统将自动核算新的库存总量并同步。
+        </div>
+        <el-form :model="groupForm" :rules="groupRules" ref="groupFormRef" label-width="100px">
+          <el-form-item label="药品名称">
+            <span style="font-weight: bold;">{{ currentDrug?.base_name || currentDrug?.name }}</span>
+          </el-form-item>
+          <el-form-item label="包装规格">
+            <span>{{ currentDrug?.unit_amount || '未知' }} 最小单位 / 整件</span>
+          </el-form-item>
+          <el-form-item label="实际整件数" prop="actual_packs">
+            <el-input-number v-model="groupForm.actual_packs" :min="0" :step="1" />
+          </el-form-item>
+          <el-form-item label="实际散件数" prop="actual_retail_units">
+            <el-input-number v-model="groupForm.actual_retail_units" :min="0" :step="1" />
+          </el-form-item>
+          <el-form-item label="盘点后总计">
+            <el-tag type="warning" size="large">
+              {{ groupForm.actual_packs * (currentDrug?.unit_amount || 0) + groupForm.actual_retail_units }} 最小单位
+            </el-tag>
+          </el-form-item>
+          <el-form-item label="盘点备注" prop="remark">
+            <el-input
+              v-model="groupForm.remark"
+              type="textarea"
+              :rows="2"
+              placeholder="请填写盘点原因（如：药片破损、过期清理等）"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <span class="dialog-footer">
+            <el-button @click="groupDialogVisible = false">取消</el-button>
+            <el-button type="primary" @click="submitGroupInventory" :loading="submitting">
+              确认联合盘点
+            </el-button>
+          </span>
+        </template>
+      </el-dialog>
+    </div>
+  </template>
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
@@ -142,9 +196,11 @@ const recordTotal = ref(0)
 
 // Dialog
 const dialogVisible = ref(false)
+const groupDialogVisible = ref(false)
 const submitting = ref(false)
 const currentDrug = ref(null)
 const formRef = ref(null)
+const groupFormRef = ref(null)
 
 const form = ref({
   new_stock: 0,
@@ -153,6 +209,18 @@ const form = ref({
 
 const rules = {
   new_stock: [{ required: true, message: '请输入实际数量', trigger: 'blur' }],
+  remark: [{ required: true, message: '请填写盘点备注', trigger: 'blur' }]
+}
+
+const groupForm = ref({
+  actual_packs: 0,
+  actual_retail_units: 0,
+  remark: ''
+})
+
+const groupRules = {
+  actual_packs: [{ required: true, message: '请输入实际整件数', trigger: 'blur' }],
+  actual_retail_units: [{ required: true, message: '请输入实际散件数', trigger: 'blur' }],
   remark: [{ required: true, message: '请填写盘点备注', trigger: 'blur' }]
 }
 
@@ -190,9 +258,48 @@ const fetchRecords = async () => {
 
 const openInventoryDialog = (drug) => {
   currentDrug.value = drug
-  form.value.new_stock = drug.stock
-  form.value.remark = ''
-  dialogVisible.value = true
+  if (drug && drug.stock_group_code) {
+    // 根据当前库存和换算率，大致推算当前的整散件，方便护士参考
+    const isRetail = drug.variant_type === 'retail'
+    const packs = isRetail ? Math.floor(drug.stock / (drug.unit_amount || 1)) : drug.stock
+    const loose = isRetail ? (drug.stock % (drug.unit_amount || 1)) : 0
+    
+    groupForm.value.actual_packs = packs
+    groupForm.value.actual_retail_units = loose
+    groupForm.value.remark = ''
+    groupDialogVisible.value = true
+  } else {
+    form.value.new_stock = drug.stock
+    form.value.remark = ''
+    dialogVisible.value = true
+  }
+}
+
+const submitGroupInventory = async () => {
+  if (!groupFormRef.value) return
+  await groupFormRef.value.validate(async (valid) => {
+    if (valid) {
+      submitting.value = true
+      try {
+        await request.post('/nurse/inventory/group', {
+          group_code: currentDrug.value.stock_group_code,
+          actual_packs: groupForm.value.actual_packs,
+          actual_retail_units: groupForm.value.actual_retail_units,
+          remark: groupForm.value.remark
+        })
+        ElMessage.success('联合盘点成功')
+        groupDialogVisible.value = false
+        fetchDrugs()
+        if (activeTab.value === 'records') {
+          fetchRecords()
+        }
+      } catch (error) {
+        ElMessage.error(error.msg || '盘点失败')
+      } finally {
+        submitting.value = false
+      }
+    }
+  })
 }
 
 const submitInventory = async () => {

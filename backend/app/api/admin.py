@@ -24,9 +24,9 @@ def _name_pinyin_parts(text):
     full = "".join([x[0] for x in full_list if x]).lower()
     return full, initials
 
-@bp.route('/admin/backup', methods=['GET'])
+@bp.route('/admin/backup/mysql', methods=['GET'])
 @role_required('admin')
-def backup_database():
+def backup_mysql_database():
     try:
         uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
         if not uri.startswith('mysql'):
@@ -88,8 +88,9 @@ def backup_database():
 @bp.route('/admin/patients/template', methods=['GET'])
 @role_required('admin')
 def get_patients_template():
-    csv_content = "student_id,name,gender,grade,college,major,class_name,phone\n"
-    csv_content += "2024001,张三,男,2024级,计算机学院,软件工程,软件一班,13800138000\n"
+    csv_content = "学号,姓名,性别,手机号码,年级,学院,专业,班级\n"
+    csv_content += "2024001,张三,男,,2024级,计算机学院,软件工程,软件一班\n"
+    csv_content += "2024002,李四,女,13912345678,2024级,外国语学院,英语,英语二班\n"
     response = make_response(csv_content.encode('utf-8-sig'))
     response.headers["Content-Disposition"] = "attachment; filename=patients_template.csv"
     response.headers["Content-type"] = "text/csv"
@@ -123,14 +124,21 @@ def import_patients():
         error_count = 0
 
         for row in csv_input:
-            student_id = (row.get('student_id') or '').strip()
-            name = (row.get('name') or '').strip()
-            gender = (row.get('gender') or '').strip()
-            grade = (row.get('grade') or '').strip()
-            college = (row.get('college') or '').strip()
-            major = (row.get('major') or '').strip()
-            class_name = (row.get('class_name') or '').strip()
-            phone = (row.get('phone') or '').strip()
+            def pick(*keys):
+                for k in keys:
+                    if k in row:
+                        return row.get(k)
+                return None
+
+            student_id = (pick('student_id', '学号') or '').strip()
+            name = (pick('name', '姓名') or '').strip()
+            gender = (pick('gender', '性别') or '').strip()
+            phone_raw = (pick('phone', '手机号码', '手机号', '电话') or '').strip()
+            grade = (pick('grade', '年级') or '').strip()
+            college = (pick('college', '学院') or '').strip()
+            major = (pick('major', '专业') or '').strip()
+            class_name = (pick('class_name', '班级') or '').strip()
+            phone = phone_raw or None
 
             # Security Best Practice: Sanitize inputs to prevent CSV injection (if exported later)
             # Remove leading formula characters: = + - @
@@ -142,43 +150,28 @@ def import_patients():
             student_id = sanitize(student_id)
             name = sanitize(name)
 
-            if not name:
+            if not student_id or not name:
                 error_count += 1
                 continue
 
             full_py, initials_py = _name_pinyin_parts(name)
 
             # Insert or update based on student_id if provided
-            if student_id:
-                existing = Patient.query.filter_by(student_id=student_id).first()
-                if existing:
-                    existing.name = name
-                    existing.name_pinyin = full_py
-                    existing.name_initials = initials_py
-                    existing.gender = gender
-                    existing.grade = grade
-                    existing.college = college
-                    existing.major = major
-                    existing.class_name = class_name
+            existing = Patient.query.filter_by(student_id=student_id).first()
+            if existing:
+                existing.name = name
+                existing.name_pinyin = full_py
+                existing.name_initials = initials_py
+                existing.gender = gender
+                existing.grade = grade
+                existing.college = college
+                existing.major = major
+                existing.class_name = class_name
+                if phone is not None:
                     existing.phone = phone
-                else:
-                    new_patient = Patient(
-                        student_id=student_id,
-                        name=name,
-                        name_pinyin=full_py,
-                        name_initials=initials_py,
-                        gender=gender,
-                        grade=grade,
-                        college=college,
-                        major=major,
-                        class_name=class_name,
-                        phone=phone
-                    )
-                    db.session.add(new_patient)
             else:
-                # No student_id, just create new
                 new_patient = Patient(
-                    student_id=None,
+                    student_id=student_id,
                     name=name,
                     name_pinyin=full_py,
                     name_initials=initials_py,
@@ -221,6 +214,7 @@ def get_drugs():
         data.append({
             "id": drug.id,
             "name": drug.name,
+            "base_name": drug.base_name,
             "type": drug.type,
             "specification": drug.specification,
             "unit": drug.unit,
@@ -232,7 +226,10 @@ def get_drugs():
             "stock": drug.stock,
             "status": drug.status,
             "batch_no": drug.batch_no,
-            "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None
+            "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None,
+            "variant_type": drug.variant_type,
+            "stock_group_code": drug.stock_group_code,
+            "unit_amount": drug.unit_amount
         })
 
     return jsonify({
@@ -287,6 +284,12 @@ def update_drug(id):
     drug = Drug.query.get_or_404(id)
     data = request.get_json() or {}
 
+    if drug.stock_group_code:
+        if 'stock' in data:
+            return jsonify({"msg": "Grouped stock item cannot be updated via stock field"}), 400
+        if 'specification' in data or 'unit' in data:
+            return jsonify({"msg": "Grouped stock item cannot change specification/unit"}), 400
+
     if 'name' in data: drug.name = data['name']
     if 'type' in data: drug.type = data['type']
     if 'specification' in data: drug.specification = data['specification']
@@ -308,6 +311,8 @@ def update_drug(id):
 @role_required(['admin', 'nurse'])
 def delete_drug(id):
     drug = Drug.query.get_or_404(id)
+    if drug.stock_group_code:
+        return jsonify({"msg": "整散库存组药品不支持直接删除，请先停用或由管理员做库存组清理"}), 400
     try:
         db.session.delete(drug)
         db.session.commit()

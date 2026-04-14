@@ -306,6 +306,8 @@ def update_inventory():
 
     drug = Drug.query.get_or_404(drug_id)
     user_id = get_jwt_identity()
+    if drug.stock_group_code:
+        return jsonify({"msg": "Grouped stock item cannot be adjusted via inventory endpoint"}), 400
 
     try:
         record = InventoryRecord(
@@ -324,6 +326,81 @@ def update_inventory():
     except Exception as e:
         db.session.rollback()
         return jsonify({"msg": f"Failed to update inventory: {str(e)}"}), 500
+
+@bp.route('/nurse/inventory/group', methods=['POST'])
+@role_required('nurse')
+def update_group_inventory():
+    data = request.get_json() or {}
+    group_code = data.get('group_code')
+    actual_packs = data.get('actual_packs')
+    actual_retail_units = data.get('actual_retail_units')
+    remark = data.get('remark')
+
+    if group_code is None or actual_packs is None or actual_retail_units is None or not remark:
+        return jsonify({"msg": "Missing required fields"}), 400
+
+    try:
+        actual_packs = int(actual_packs)
+        actual_retail_units = int(actual_retail_units)
+    except ValueError:
+        return jsonify({"msg": "Invalid quantity values"}), 400
+
+    if actual_packs < 0 or actual_retail_units < 0:
+        return jsonify({"msg": "Quantity cannot be negative"}), 400
+
+    group = DrugStockGroup.query.filter_by(group_code=group_code).first()
+    if not group:
+        return jsonify({"msg": "Stock group not found"}), 404
+
+    user_id = get_jwt_identity()
+
+    try:
+        retail_amount = group.retail_amount if group.retail_amount is not None else 1
+        new_total_units = actual_packs * group.pack_amount + actual_retail_units * retail_amount
+
+        if new_total_units == group.total_units:
+            return jsonify({"msg": "Inventory is already accurate, no changes made"}), 200
+
+        old_total_units = group.total_units
+        group.total_units = new_total_units
+        stocks = recompute_variant_stocks(group.total_units, group.pack_amount, group.retail_amount)
+        
+        now = datetime.utcnow()
+
+        if group.pack_drug:
+            pack_old = group.pack_drug.stock
+            group.pack_drug.stock = stocks["pack_stock"]
+            db.session.add(
+                InventoryRecord(
+                    drug_id=group.pack_drug.id,
+                    nurse_id=int(user_id),
+                    old_stock=pack_old,
+                    new_stock=group.pack_drug.stock,
+                    remark=f"联合盘点({remark})",
+                    timestamp=now,
+                )
+            )
+
+        if group.retail_drug and stocks.get("retail_stock") is not None:
+            retail_old = group.retail_drug.stock
+            group.retail_drug.stock = stocks["retail_stock"]
+            db.session.add(
+                InventoryRecord(
+                    drug_id=group.retail_drug.id,
+                    nurse_id=int(user_id),
+                    old_stock=retail_old,
+                    new_stock=group.retail_drug.stock,
+                    remark=f"联合盘点(散)({remark})",
+                    timestamp=now,
+                )
+            )
+
+        db.session.commit()
+        return jsonify({"msg": "Group inventory updated successfully"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": f"Failed to update group inventory: {str(e)}"}), 500
 
 @bp.route('/nurse/inventory/records', methods=['GET'])
 @role_required(['nurse', 'admin'])
@@ -436,11 +513,20 @@ def verify_visit(visit_id):
     for item in items:
         if item.drug is None:
             return jsonify({"msg": "Prescription item has no drug"}), 400
-        if item.drug.type != 1:
-            continue
         qty = int(item.quantity or 0)
         if qty <= 0:
             return jsonify({"msg": "Invalid quantity"}), 400
+
+        is_stock_item = item.drug.type == 1 or item.drug.type is None
+        if not is_stock_item:
+            if item.is_scattered:
+                return jsonify({"msg": "Non-drug item cannot be scattered"}), 400
+            stock_val = item.drug.stock
+            if stock_val is None or int(stock_val) < 0:
+                continue
+            if int(stock_val) < qty:
+                return jsonify({"msg": f"Insufficient stock for {item.drug.name}"}), 400
+            continue
 
         if item.drug.stock_group_code:
             code = item.drug.stock_group_code
@@ -603,7 +689,7 @@ def execute_visit(visit_id):
     group_deduct = {}
 
     for item in visit.items:
-        if item.drug.type == 1:
+        if item.drug.type == 1 or item.drug.type is None:
             if item.drug.stock_group_code:
                 code = item.drug.stock_group_code
                 group = group_cache.get(code)
@@ -639,7 +725,7 @@ def execute_visit(visit_id):
                 group.retail_drug.stock = stocks["retail_stock"]
 
         for item in visit.items:
-            if item.drug.type == 1:
+            if item.drug.type == 1 or item.drug.type is None:
                 if item.drug.stock_group_code:
                     continue
                 conv_rate = item.drug.conversion_rate or 1

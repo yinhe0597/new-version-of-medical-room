@@ -33,6 +33,13 @@
             </el-tag>
           </template>
         </el-table-column>
+        <el-table-column label="包装" width="90">
+          <template #default="scope">
+            <el-tag v-if="scope.row.variant_type === 'pack'">整装</el-tag>
+            <el-tag v-else-if="scope.row.variant_type === 'retail'" type="warning">零散</el-tag>
+            <span v-else>-</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="specification" label="规格" />
         <el-table-column prop="unit" label="单位" width="80" />
         <el-table-column prop="purchase_price" label="购进价" width="80">
@@ -115,10 +122,10 @@
           <el-input v-model="form.name" placeholder="如：阿莫西林 或 小换药"></el-input>
         </el-form-item>
         <el-form-item label="规格" prop="specification">
-          <el-input v-model="form.specification" :placeholder="form.type === 2 ? '如：次/项' : ''"></el-input>
+          <el-input v-model="form.specification" :placeholder="form.type === 2 ? '如：次/项' : ''" :disabled="isGroupedStock && form.type === 1"></el-input>
         </el-form-item>
         <el-form-item label="单位" prop="unit">
-          <el-input v-model="form.unit" :placeholder="form.type === 2 ? '如：次' : ''"></el-input>
+          <el-input v-model="form.unit" :placeholder="form.type === 2 ? '如：次' : ''" :disabled="isGroupedStock && form.type === 1"></el-input>
         </el-form-item>
         <el-form-item label="购进价" prop="purchase_price">
           <el-input-number v-model="form.purchase_price" :min="0" :precision="2" :step="0.1" />
@@ -126,17 +133,17 @@
         <el-form-item label="整件价" prop="price">
           <el-input-number v-model="form.price" :min="0" :precision="2" :step="0.1" />
         </el-form-item>
-        <el-form-item label="支持零卖" prop="has_scattered" v-if="form.type === 1">
+        <el-form-item label="支持零卖" prop="has_scattered" v-if="form.type === 1 && !isGroupedStock">
           <el-switch v-model="form.has_scattered" />
         </el-form-item>
-        <el-form-item label="零卖价" prop="scattered_price" v-if="form.has_scattered">
+        <el-form-item label="零卖价" prop="scattered_price" v-if="form.type === 1 && form.has_scattered && !isGroupedStock">
           <el-input-number v-model="form.scattered_price" :min="0" :precision="4" :step="0.01" />
         </el-form-item>
-        <el-form-item label="转换率" prop="conversion_rate" v-if="form.has_scattered">
+        <el-form-item label="转换率" prop="conversion_rate" v-if="form.type === 1 && form.has_scattered && !isGroupedStock">
           <el-input-number v-model="form.conversion_rate" :min="1" :step="1" placeholder="1整件=多少零卖单位" />
         </el-form-item>
         <el-form-item label="初始库存" prop="stock" v-if="form.type === 1">
-          <el-input-number v-model="form.stock" :min="0" :step="1" />
+          <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="isGroupedStock" />
         </el-form-item>
       </el-form>
       <template #footer>
@@ -211,7 +218,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import request from '@/api/request'
 import { Plus, Upload, UploadFilled, Cpu } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
@@ -256,10 +263,22 @@ const form = ref({
   type: 1,
   specification: '',
   unit: '',
+  purchase_price: 0,
   price: 0,
+  has_scattered: false,
+  scattered_price: null,
+  conversion_rate: null,
   stock: 0,
-  status: 1
+  status: 1,
+  batch_no: null,
+  inbound_at: null,
+  variant_type: null,
+  stock_group_code: null,
+  unit_amount: null,
+  base_name: null
 })
+
+const isGroupedStock = computed(() => Boolean(form.value && form.value.stock_group_code))
 
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -283,13 +302,26 @@ const rules = {
 
 const handleTypeChange = (val) => {
   if (val === 2) {
-    form.value.stock = -1; // -1 indicates unlimited/not applicable
+    form.value.stock = -1
+    form.value.has_scattered = false
+    form.value.scattered_price = null
+    form.value.conversion_rate = null
     if (!form.value.specification) form.value.specification = '项';
     if (!form.value.unit) form.value.unit = '次';
   } else {
     form.value.stock = 0;
   }
 }
+
+watch(
+  () => form.value.has_scattered,
+  (val) => {
+    if (!val) {
+      form.value.scattered_price = null
+      form.value.conversion_rate = null
+    }
+  }
+)
 
 const fetchDrugs = async () => {
   loading.value = true
@@ -324,16 +356,38 @@ const openCreateDialog = () => {
     type: 1,
     specification: '',
     unit: '',
+    purchase_price: 0,
     price: 0,
+    has_scattered: false,
+    scattered_price: null,
+    conversion_rate: null,
     stock: 0,
-    status: 1
+    status: 1,
+    batch_no: null,
+    inbound_at: null,
+    variant_type: null,
+    stock_group_code: null,
+    unit_amount: null,
+    base_name: null
   }
   dialogVisible.value = true
 }
 
 const openEditDialog = (row) => {
   isEdit.value = true
-  form.value = { ...row }
+  form.value = {
+    purchase_price: 0,
+    has_scattered: false,
+    scattered_price: null,
+    conversion_rate: null,
+    batch_no: null,
+    inbound_at: null,
+    variant_type: null,
+    stock_group_code: null,
+    unit_amount: null,
+    base_name: null,
+    ...row
+  }
   dialogVisible.value = true
 }
 
@@ -346,6 +400,19 @@ const submitForm = async () => {
         const payload = { ...form.value }
         if (payload.type === 2) {
           payload.stock = -1
+          payload.has_scattered = false
+          payload.scattered_price = null
+          payload.conversion_rate = null
+        }
+        if (!payload.has_scattered) {
+          payload.scattered_price = null
+          payload.conversion_rate = null
+        }
+        if (payload.stock_group_code) {
+          delete payload.stock
+          delete payload.has_scattered
+          delete payload.scattered_price
+          delete payload.conversion_rate
         }
         
         if (isEdit.value) {

@@ -1,6 +1,21 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '@/views/Login.vue'
 
+const safeJsonParse = value => {
+  try {
+    return value ? JSON.parse(value) : null
+  } catch (e) {
+    return null
+  }
+}
+
+const resolveHomeByRole = role => {
+  if (role === 'doctor') return '/doctor'
+  if (role === 'nurse') return '/nurse'
+  if (role === 'admin') return '/admin'
+  return null
+}
+
 const routes = [
   {
     path: '/login',
@@ -16,11 +31,17 @@ const routes = [
     name: 'DoctorDashboard',
     component: () => import('@/views/doctor/Dashboard.vue'),
     meta: { role: 'doctor' },
+    redirect: '/doctor/patient',
     children: [
       {
         path: 'patient',
         name: 'PatientSearch',
         component: () => import('@/views/doctor/PatientSearch.vue')
+      },
+      {
+        path: 'direct-purchase',
+        name: 'DirectPurchase',
+        component: () => import('@/views/doctor/DirectPurchase.vue')
       },
       {
         path: 'visit',
@@ -31,10 +52,6 @@ const routes = [
         path: 'history',
         name: 'PrescriptionHistory',
         component: () => import('@/views/doctor/PrescriptionHistory.vue')
-      },
-      {
-        path: '',
-        redirect: '/doctor/patient'
       }
     ]
   },
@@ -43,6 +60,7 @@ const routes = [
     name: 'NurseDashboard',
     component: () => import('@/views/nurse/Dashboard.vue'),
     meta: { role: 'nurse' },
+    redirect: '/nurse/pending',
     children: [
       {
         path: 'pending',
@@ -68,10 +86,6 @@ const routes = [
         path: 'statistics',
         name: 'NurseStatistics',
         component: () => import('@/views/nurse/Statistics.vue')
-      },
-      {
-        path: '',
-        redirect: '/nurse/pending'
       }
     ]
   },
@@ -80,6 +94,7 @@ const routes = [
     name: 'AdminDashboard',
     component: () => import('@/views/admin/Dashboard.vue'),
     meta: { role: 'admin' },
+    redirect: '/admin/drugs',
     children: [
       {
         path: 'users',
@@ -105,10 +120,6 @@ const routes = [
         path: 'settings',
         name: 'SystemSettings',
         component: () => import('@/views/admin/SystemSettings.vue')
-      },
-      {
-        path: '',
-        redirect: '/admin/drugs'
       }
     ]
   }
@@ -119,32 +130,22 @@ const router = createRouter({
   routes
 })
 
-router.beforeEach((to, from, next) => {
+router.beforeEach(to => {
   const token = localStorage.getItem('token')
-  const user = JSON.parse(localStorage.getItem('user'))
-  
+  const user = safeJsonParse(localStorage.getItem('user')) || {}
+
   if (to.path === '/login') {
     if (token) {
-        // Redirect based on role
-        if (user.role === 'doctor') next('/doctor')
-        else if (user.role === 'nurse') next('/nurse')
-        else if (user.role === 'admin') next('/admin')
-        else next()
-    } else {
-        next()
+      const target = resolveHomeByRole(user.role)
+      if (target) return target
     }
-  } else {
-    if (!token) {
-      next('/login')
-    } else {
-      // Check role
-      if (to.meta.role && to.meta.role !== user.role) {
-        next('/login') // Unauthorized
-      } else {
-        next()
-      }
-    }
+    return true
   }
+
+  if (!token) return '/login'
+  if (to.meta.role && to.meta.role !== user.role) return '/login'
+
+  return true
 })
 
 export default router

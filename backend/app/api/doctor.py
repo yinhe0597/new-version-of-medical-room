@@ -7,6 +7,7 @@ from backend.app.utils.decorators import role_required
 from datetime import datetime
 import math
 import time
+import re
 from sqlalchemy import or_, case
 from pypinyin import pinyin, Style
 
@@ -19,6 +20,85 @@ def _name_pinyin_parts(text):
     full_list = pinyin(text, style=Style.NORMAL, strict=False)
     full = "".join([x[0] for x in full_list if x]).lower()
     return full, initials
+
+def _diagnosis_pinyin(text):
+    full, initials = _name_pinyin_parts(text)
+    if not full and not initials:
+        return ""
+    return f"{initials}|{full}"
+
+_DIAG_LINE_CODE_RE = re.compile(r"^(?P<name>.*?)[（(](?P<code>[^）)]+)[）)]\s*$")
+
+def _extract_diagnosis_entries(diagnosis_text):
+    if not isinstance(diagnosis_text, str):
+        return []
+    raw_lines = re.split(r"[\r\n]+", diagnosis_text)
+    entries = []
+    for line in raw_lines:
+        for part in re.split(r"[;；]+", line):
+            token = (part or "").strip()
+            if not token:
+                continue
+            m = _DIAG_LINE_CODE_RE.match(token)
+            if m:
+                name = (m.group("name") or "").strip()
+                code = (m.group("code") or "").strip()
+                if name:
+                    entries.append((name, code))
+                continue
+            entries.append((token, ""))
+    return entries
+
+def _upsert_diagnosis_dict_from_text(diagnosis_text):
+    entries = _extract_diagnosis_entries(diagnosis_text)
+    if not entries:
+        return
+
+    codes = sorted({code for _, code in entries if code})
+    names = sorted({name for name, _ in entries if name})
+
+    existing_by_code = {}
+    if codes:
+        for d in DiagnosisDict.query.filter(DiagnosisDict.code.in_(codes)).all():
+            if d.code:
+                existing_by_code[d.code] = d
+
+    existing_by_name = {}
+    if names:
+        for d in DiagnosisDict.query.filter(DiagnosisDict.name.in_(names)).all():
+            if d.name:
+                existing_by_name[d.name] = d
+
+    for name, code in entries:
+        name = (name or "").strip()
+        code = (code or "").strip()
+        if not name:
+            continue
+
+        target = None
+        if code:
+            target = existing_by_code.get(code)
+        if target is None:
+            target = existing_by_name.get(name)
+
+        py = _diagnosis_pinyin(name)
+
+        if target is None:
+            target = DiagnosisDict(code=code or "", name=name, pinyin=py)
+            db.session.add(target)
+            if code:
+                existing_by_code[code] = target
+            existing_by_name[name] = target
+            continue
+
+        if code and (target.code or "") == "":
+            target.code = code
+            existing_by_code[code] = target
+        if (target.name or "").strip() != name:
+            target.name = name
+            existing_by_name[name] = target
+        if py and (target.pinyin or "").strip() != py:
+            target.pinyin = py
 
 @bp.route('/doctor/patient/search', methods=['GET'])
 @role_required('doctor')
@@ -94,19 +174,34 @@ def search_patient():
 @role_required('doctor')
 def create_patient():
     data = request.get_json() or {}
-    required_fields = ['name', 'gender', 'phone']
+    required_fields = ['name', 'gender']
 
     for field in required_fields:
         if field not in data:
             return jsonify({"msg": f"Missing required field: {field}"}), 400
 
-    full_py, initials_py = _name_pinyin_parts(data['name'])
+    student_id = (data.get("student_id") or "").strip() or None
+    if student_id:
+        existing = Patient.query.filter_by(student_id=student_id).first()
+        if existing:
+            return jsonify({"data": {"id": existing.id}}), 200
+
+    name = (data.get("name") or "").strip()
+    gender = (data.get("gender") or "").strip()
+    phone = (data.get("phone") or "").strip() or None
+
+    full_py, initials_py = _name_pinyin_parts(name)
     patient = Patient(
-        name=data['name'],
+        student_id=student_id,
+        name=name,
         name_pinyin=full_py,
         name_initials=initials_py,
-        gender=data['gender'],
-        phone=data['phone']
+        gender=gender,
+        grade=(data.get("grade") or "").strip() or None,
+        college=(data.get("college") or "").strip() or None,
+        major=(data.get("major") or "").strip() or None,
+        class_name=(data.get("class_name") or "").strip() or None,
+        phone=phone
     )
     db.session.add(patient)
     db.session.commit()
@@ -156,7 +251,7 @@ def search_drugs():
     drugs = query.limit(20).all()
     data = []
     for drug in drugs:
-        if drug.type == 1 and (drug.stock or 0) <= 0:
+        if (drug.type == 1 or drug.type is None) and (drug.stock or 0) <= 0:
             if drug.variant_type in ["retail", "pack"] or drug.has_scattered:
                 continue
         data.append({
@@ -211,10 +306,11 @@ def search_diagnoses():
         # 4. Pinyin contains keyword exactly like gm (in gmpy)
         # 5. Other contains
         def sort_key(x):
-            if x.code.lower() == keyword: return 0
-            if x.code.lower().startswith(keyword): return 1
+            code = (x.code or "").lower()
+            if code == keyword: return 0
+            if code.startswith(keyword): return 1
             
-            pinyin_parts = x.pinyin.split('|')
+            pinyin_parts = (x.pinyin or "").split('|')
             initials = pinyin_parts[0] if len(pinyin_parts) > 0 else ""
             full_pinyin = pinyin_parts[1] if len(pinyin_parts) > 1 else ""
             
@@ -303,13 +399,13 @@ def create_visit():
         if days <= 0:
             return jsonify({"msg": "Invalid days", "field": "days", "item_index": idx}), 400
 
-        if drug.type == 1:
+        if drug.type == 1 or drug.type is None:
             for f in ["usage", "dosage", "frequency", "timing"]:
                 val = (item.get(f) or "").strip()
                 if not val:
                     return jsonify({"msg": f"Missing {f}", "field": f, "item_index": idx}), 400
 
-        if drug.type == 1 and drug.stock_group_code:
+        if (drug.type == 1 or drug.type is None) and drug.stock_group_code:
             group = DrugStockGroup.query.filter_by(group_code=drug.stock_group_code).first()
             if group is None:
                 return jsonify({"msg": "Stock group not found"}), 400
@@ -348,7 +444,7 @@ def create_visit():
             })
             continue
 
-        is_scattered = bool(item.get('is_scattered', False)) if drug.type == 1 else False
+        is_scattered = bool(item.get('is_scattered', False)) if (drug.type == 1 or drug.type is None) else False
         
         if is_scattered and not drug.has_scattered:
             return jsonify({"msg": f"Drug {drug.name} does not support scattered sale"}), 400
@@ -364,8 +460,7 @@ def create_visit():
             purchase_cost = (drug.purchase_price or 0.0) * quantity
             stock_needed = quantity
 
-        # Only check stock for actual drugs (type == 1)
-        if drug.type == 1 and drug.stock < math.ceil(stock_needed):
+        if (drug.type == 1 or drug.type is None) and drug.stock < math.ceil(stock_needed):
             return jsonify({"msg": f"Insufficient stock for {drug.name}"}), 400
 
         item_amount = quantity * unit_price
@@ -402,6 +497,8 @@ def create_visit():
     )
     db.session.add(visit)
     db.session.flush() # get visit.id
+
+    _upsert_diagnosis_dict_from_text(diagnosis)
 
     # Create Prescription Items
     for item in drug_items:
