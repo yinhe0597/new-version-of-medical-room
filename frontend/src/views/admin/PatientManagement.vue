@@ -25,7 +25,7 @@
           </div>
           <template #tip>
             <div class="el-upload__tip">
-              只能上传 csv 文件，且文件内容需严格按照模板格式（学号、姓名、性别、手机号码、年级、学院、专业、班级）。手机号码允许为空；已有学号会更新基础信息（导入为空的手机号码不会覆盖已登记手机号）。
+              只能上传 csv 文件，且文件内容需严格按照模板格式（学号、姓名、性别、手机号码、年级、学院、专业、班级、年龄、辅导员姓名）。必填：学号、姓名、班级、辅导员姓名；其余可空。已有学号会更新基础信息（导入为空的手机号码不会覆盖已登记手机号）。
             </div>
           </template>
         </el-upload>
@@ -55,7 +55,8 @@ const headers = computed(() => {
 const downloadTemplate = async () => {
   try {
     const res = await request.get('/admin/patients/template', { responseType: 'blob' })
-    const url = window.URL.createObjectURL(new Blob([res.data]))
+    const blob = res instanceof Blob ? res : new Blob([res])
+    const url = window.URL.createObjectURL(blob)
     const link = document.createElement('a')
     link.href = url
     link.setAttribute('download', 'patients_template.csv')

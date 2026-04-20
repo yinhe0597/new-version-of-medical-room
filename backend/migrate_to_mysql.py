@@ -11,13 +11,13 @@ from app import create_app, db
 from config import Config
 
 # MySQL Connection config
-MYSQL_USER = 'root'
-MYSQL_PASSWORD = '123456'
-MYSQL_HOST = '127.0.0.1'
-MYSQL_PORT = 3306
-MYSQL_DB = 'infirmary_db'
+MYSQL_USER = os.environ.get("MYSQL_USER") or "root"
+MYSQL_PASSWORD = os.environ.get("MYSQL_PASSWORD") or "123456"
+MYSQL_HOST = os.environ.get("MYSQL_HOST") or "127.0.0.1"
+MYSQL_PORT = int(os.environ.get("MYSQL_PORT") or 3306)
+MYSQL_DB = os.environ.get("MYSQL_DB") or "medical_db"
 
-MYSQL_URI_NO_DB = f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/"
+MYSQL_URI_NO_DB = f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/?charset=utf8mb4"
 MYSQL_URI = f"mysql+pymysql://{MYSQL_USER}:{MYSQL_PASSWORD}@{MYSQL_HOST}:{MYSQL_PORT}/{MYSQL_DB}?charset=utf8mb4"
 
 SQLITE_URI = 'sqlite:///' + os.path.join(os.path.abspath(os.path.dirname(__file__)), 'app.db')
@@ -25,9 +25,16 @@ SQLITE_URI = 'sqlite:///' + os.path.join(os.path.abspath(os.path.dirname(__file_
 def create_database():
     print("Connecting to MySQL to create database...")
     try:
-        conn = pymysql.connect(host=MYSQL_HOST, user=MYSQL_USER, password=MYSQL_PASSWORD, port=MYSQL_PORT)
+        conn = pymysql.connect(
+            host=MYSQL_HOST,
+            user=MYSQL_USER,
+            password=MYSQL_PASSWORD,
+            port=MYSQL_PORT,
+            charset="utf8mb4",
+        )
         cursor = conn.cursor()
         cursor.execute(f"CREATE DATABASE IF NOT EXISTS {MYSQL_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
+        cursor.execute(f"ALTER DATABASE {MYSQL_DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;")
         conn.commit()
         cursor.close()
         conn.close()
@@ -35,6 +42,30 @@ def create_database():
     except Exception as e:
         print(f"Error creating database: {e}")
         sys.exit(1)
+
+def repair_database_charset(mysql_engine):
+    with mysql_engine.connect() as conn:
+        conn.execute(db.text(f"ALTER DATABASE `{MYSQL_DB}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"))
+        conn.commit()
+
+        rows = conn.execute(
+            db.text(
+                """
+                SELECT table_name
+                FROM information_schema.tables
+                WHERE table_schema = :db
+                  AND table_type = 'BASE TABLE'
+                """
+            ),
+            {"db": MYSQL_DB},
+        ).fetchall()
+        for (table_name,) in rows:
+            conn.execute(
+                db.text(
+                    f"ALTER TABLE `{MYSQL_DB}`.`{table_name}` CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+                )
+            )
+        conn.commit()
 
 def migrate_data():
     # 1. Create a Flask app configured with the new MySQL URI
@@ -48,6 +79,8 @@ def migrate_data():
         print("Creating tables in MySQL...")
         db.create_all()
         print("Tables created.")
+        print("Ensuring MySQL charset/collation is utf8mb4...")
+        repair_database_charset(db.engine)
 
         print("Setting up engines for data migration...")
         # Engine for SQLite (source)

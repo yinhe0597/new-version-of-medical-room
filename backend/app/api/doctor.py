@@ -4,7 +4,7 @@ from backend.app import db
 from backend.app.api import bp
 from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, VISIT_STATUS_PENDING
 from backend.app.utils.decorators import role_required
-from datetime import datetime
+from datetime import datetime, timezone
 import math
 import time
 import re
@@ -28,6 +28,40 @@ def _diagnosis_pinyin(text):
     return f"{initials}|{full}"
 
 _DIAG_LINE_CODE_RE = re.compile(r"^(?P<name>.*?)[（(](?P<code>[^）)]+)[）)]\s*$")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_GARBLED_Q_RE = re.compile(r"\?{2,}")
+
+_ID_CARD_RE = re.compile(r"^\d{17}[\dXx]$")
+
+def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
+    if dt is None:
+        return None
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime(fmt)
+
+def _is_valid_cn_id_card(id_card: str) -> bool:
+    if not isinstance(id_card, str):
+        return False
+    s = id_card.strip()
+    if not s:
+        return False
+    if not _ID_CARD_RE.match(s):
+        return False
+
+    birth = s[6:14]
+    try:
+        datetime.strptime(birth, "%Y%m%d")
+    except Exception:
+        return False
+
+    weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+    mapping = ["1", "0", "X", "9", "8", "7", "6", "5", "4", "3", "2"]
+    total = 0
+    for i in range(17):
+        total += int(s[i]) * weights[i]
+    check = mapping[total % 11]
+    return s[-1].upper() == check
 
 def _extract_diagnosis_entries(diagnosis_text):
     if not isinstance(diagnosis_text, str):
@@ -48,6 +82,91 @@ def _extract_diagnosis_entries(diagnosis_text):
                 continue
             entries.append((token, ""))
     return entries
+
+def _looks_garbled_name(name: str) -> bool:
+    if not isinstance(name, str):
+        return False
+    s = name.strip()
+    if not s:
+        return False
+    if _CJK_RE.search(s):
+        return False
+    return _GARBLED_Q_RE.search(s) is not None
+
+def _normalize_diagnosis_text_for_output(diagnosis_text):
+    if not isinstance(diagnosis_text, str) or not diagnosis_text:
+        return diagnosis_text
+
+    codes_to_fix = set()
+    raw_lines = re.split(r"[\r\n]+", diagnosis_text)
+    for line in raw_lines:
+        parts = re.split(r"[;；]+", line or "")
+        for token in parts:
+            t = (token or "").strip()
+            if not t:
+                continue
+            m = _DIAG_LINE_CODE_RE.match(t)
+            if not m:
+                continue
+            name = (m.group("name") or "").strip()
+            code = (m.group("code") or "").strip()
+            if code and _looks_garbled_name(name):
+                codes_to_fix.add(code)
+
+    if not codes_to_fix:
+        return diagnosis_text
+
+    rows = DiagnosisDict.query.filter(DiagnosisDict.code.in_(sorted(codes_to_fix))).all()
+    names_by_code = {}
+    for row in rows:
+        code = (row.code or "").strip()
+        name = (row.name or "").strip()
+        if not code or not name:
+            continue
+        names_by_code.setdefault(code, []).append(name)
+
+    def pick_name(code: str):
+        candidates = names_by_code.get(code) or []
+        good = [x for x in candidates if not _looks_garbled_name(x)]
+        good = [x for x in good if _CJK_RE.search(x) or re.search(r"[A-Za-z]", x)]
+        good.sort(key=lambda x: (len(x), x))
+        return good[0] if good else None
+
+    fixed_lines = []
+    for line in raw_lines:
+        segs = re.split(r"([;；]+)", line or "")
+        out = []
+        for seg in segs:
+            if seg is None:
+                continue
+            if re.fullmatch(r"[;；]+", seg):
+                out.append(seg)
+                continue
+            token = (seg or "").strip()
+            if not token:
+                out.append(seg)
+                continue
+            m = _DIAG_LINE_CODE_RE.match(token)
+            if not m:
+                out.append(seg)
+                continue
+            name = (m.group("name") or "").strip()
+            code = (m.group("code") or "").strip()
+            if not code or not _looks_garbled_name(name):
+                out.append(seg)
+                continue
+            best = pick_name(code)
+            if not best:
+                out.append(seg)
+                continue
+            use_fullwidth = "（" in token or "）" in token
+            if use_fullwidth:
+                out.append(f"{best}（{code}）")
+            else:
+                out.append(f"{best} ({code})")
+        fixed_lines.append("".join(out))
+
+    return "\n".join(fixed_lines)
 
 def _upsert_diagnosis_dict_from_text(diagnosis_text):
     entries = _extract_diagnosis_entries(diagnosis_text)
@@ -120,14 +239,16 @@ def search_patient():
         return jsonify({"msg": "Too many requests"}), 429
     bucket.append(now_ts)
 
-    filters = [Patient.name.contains(keyword), Patient.student_id.contains(keyword)]
+    filters = [Patient.name.contains(keyword), Patient.student_id.contains(keyword), Patient.phone.contains(keyword)]
     if not any('\u4e00' <= ch <= '\u9fff' for ch in keyword):
         filters.append(Patient.name_pinyin.contains(kw_lower))
         filters.append(Patient.name_initials.contains(kw_lower))
 
     rank = case(
-        (Patient.student_id == keyword, -2),
-        (Patient.student_id.like(f"{keyword}%"), -1),
+        (Patient.student_id == keyword, -4),
+        (Patient.student_id.like(f"{keyword}%"), -3),
+        (Patient.phone == keyword, -2),
+        (Patient.phone.like(f"{keyword}%"), -1),
         (Patient.name == keyword, 0),
         (Patient.name.like(f"{keyword}%"), 1),
         (Patient.name.like(f"%{keyword}%"), 2),
@@ -162,7 +283,10 @@ def search_patient():
             "college": patient.college,
             "major": patient.major,
             "class_name": patient.class_name,
-            "phone": patient.phone
+            "phone": patient.phone,
+            "counselor_name": getattr(patient, "counselor_name", None),
+            "is_temporary": bool(getattr(patient, "is_temporary", False)),
+            "age": patient.age
         })
 
     db.session.commit()
@@ -180,7 +304,12 @@ def create_patient():
         if field not in data:
             return jsonify({"msg": f"Missing required field: {field}"}), 400
 
+    is_temporary = bool(data.get("is_temporary", False))
+
     student_id = (data.get("student_id") or "").strip() or None
+    if is_temporary:
+        student_id = None
+
     if student_id:
         existing = Patient.query.filter_by(student_id=student_id).first()
         if existing:
@@ -189,6 +318,31 @@ def create_patient():
     name = (data.get("name") or "").strip()
     gender = (data.get("gender") or "").strip()
     phone = (data.get("phone") or "").strip() or None
+    age_val = data.get("age")
+    id_card = (data.get("id_card") or "").strip() or None
+
+    if is_temporary:
+        if not phone:
+            return jsonify({"msg": "Missing required field: phone", "field": "phone"}), 400
+        try:
+            age = int(age_val)
+        except Exception:
+            return jsonify({"msg": "Invalid age", "field": "age"}), 400
+        if age <= 0 or age > 150:
+            return jsonify({"msg": "Invalid age", "field": "age"}), 400
+        if id_card and not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "Invalid id_card", "field": "id_card"}), 400
+    else:
+        age = None
+        if age_val not in (None, ""):
+            try:
+                age = int(age_val)
+            except Exception:
+                return jsonify({"msg": "Invalid age", "field": "age"}), 400
+            if age <= 0 or age > 150:
+                return jsonify({"msg": "Invalid age", "field": "age"}), 400
+        if id_card and not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "Invalid id_card", "field": "id_card"}), 400
 
     full_py, initials_py = _name_pinyin_parts(name)
     patient = Patient(
@@ -201,7 +355,11 @@ def create_patient():
         college=(data.get("college") or "").strip() or None,
         major=(data.get("major") or "").strip() or None,
         class_name=(data.get("class_name") or "").strip() or None,
-        phone=phone
+        phone=phone,
+        counselor_name=(data.get("counselor_name") or "").strip() or None,
+        is_temporary=is_temporary,
+        age=age,
+        id_card=id_card
     )
     db.session.add(patient)
     db.session.commit()
@@ -216,6 +374,21 @@ def update_patient(id):
     
     if 'phone' in data:
         patient.phone = data['phone']
+
+    if 'age' in data:
+        try:
+            age = int(data.get("age"))
+        except Exception:
+            return jsonify({"msg": "Invalid age", "field": "age"}), 400
+        if age <= 0 or age > 150:
+            return jsonify({"msg": "Invalid age", "field": "age"}), 400
+        patient.age = age
+
+    if 'id_card' in data:
+        id_card = (data.get("id_card") or "").strip() or None
+        if id_card and not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "Invalid id_card", "field": "id_card"}), 400
+        patient.id_card = id_card
         
     db.session.commit()
     return jsonify({"msg": "Patient updated successfully"}), 200
@@ -550,8 +723,8 @@ def get_visit_history():
         data.append({
             "id": visit.id,
             "patient_name": visit.patient.name,
-            "date": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
-            "diagnosis": visit.diagnosis,
+            "date": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
+            "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis),
             "status": visit.status,
             "total_amount": visit.total_amount
         })
@@ -573,7 +746,6 @@ def get_doctor_visit_detail(visit_id):
     # Preload patient, items and drug information to avoid N+1 queries
     visit = Visit.query.options(
         db.joinedload(Visit.patient),
-        db.joinedload(Visit.items).joinedload(PrescriptionItem.drug),
         db.joinedload(Visit.verifier),
         db.joinedload(Visit.rejector),
     ).get_or_404(visit_id)
@@ -582,8 +754,13 @@ def get_doctor_visit_detail(visit_id):
     if visit.doctor_id != int(user_id):
         return jsonify({"msg": "Unauthorized to view this visit"}), 403
 
+    items_query = visit.items
+    if hasattr(items_query, "options"):
+        items_query = items_query.options(db.joinedload(PrescriptionItem.drug))
+    items_list = items_query.all() if hasattr(items_query, "all") else list(items_query or [])
+
     items = []
-    for item in visit.items:
+    for item in items_list:
         items.append({
             "drug_name": item.drug.name,
             "specification": item.drug.specification,
@@ -610,12 +787,12 @@ def get_doctor_visit_detail(visit_id):
                 "class_name": visit.patient.class_name,
                 "phone": visit.patient.phone
             },
-            "created_at": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "created_at": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
             "chief_complaint": visit.chief_complaint,
             "present_illness": visit.present_illness,
             "past_history": visit.past_history,
             "physical_exam": visit.physical_exam,
-            "diagnosis": visit.diagnosis,
+            "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis),
             "doctor_advice": visit.doctor_advice,
             "consultation_fee": visit.consultation_fee,
             "total_amount": visit.total_amount,
@@ -623,10 +800,10 @@ def get_doctor_visit_detail(visit_id):
             "reject_reason": visit.reject_reason,
             "verified_by": visit.verified_by,
             "verified_by_name": visit.verifier.real_name if visit.verifier else None,
-            "verified_at": visit.verified_at.strftime('%Y-%m-%d %H:%M:%S') if visit.verified_at else None,
+            "verified_at": _format_local_dt(visit.verified_at, "%Y-%m-%d %H:%M:%S") if visit.verified_at else None,
             "rejected_by": visit.rejected_by,
             "rejected_by_name": visit.rejector.real_name if visit.rejector else None,
-            "rejected_at": visit.rejected_at.strftime('%Y-%m-%d %H:%M:%S') if visit.rejected_at else None,
+            "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
             "items": items
         }
     }), 200

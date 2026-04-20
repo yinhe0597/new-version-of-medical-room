@@ -5,6 +5,7 @@
 
 -- 1. 创建数据库
 CREATE DATABASE IF NOT EXISTS `medical_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+ALTER DATABASE `medical_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 -- 2. 创建医务室专用账号
 -- 注意：如果是在 MySQL 8.0 及以上，默认密码策略可能要求密码满足复杂性要求

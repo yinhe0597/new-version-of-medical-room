@@ -50,7 +50,12 @@ service.interceptors.response.use(
         }
         return Promise.reject({ msg: payload || 'Request failed', code: error.response.status })
     }
-    return Promise.reject(error)
+    const rawMessage = (error && error.message) ? String(error.message) : ''
+    const isTimeout = rawMessage.toLowerCase().includes('timeout')
+    const msg = isTimeout
+      ? '请求超时，请稍后重试'
+      : '无法连接后端服务，请确认后端已启动（http://127.0.0.1:5000）'
+    return Promise.reject({ msg, code: 0, detail: rawMessage })
   }
 )
 

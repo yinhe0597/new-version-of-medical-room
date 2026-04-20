@@ -56,3 +56,6 @@ logs
 *.log
 
 .trae/skills/**/upstream/
+
+# Local data files (do not commit)
+studentINF.xlsx
