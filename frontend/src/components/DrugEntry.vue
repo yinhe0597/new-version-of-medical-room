@@ -41,8 +41,49 @@
       </el-form-item>
 
       <template v-if="form.type === 1">
-        <el-form-item label="整份规格" prop="pack_specification">
-          <el-input v-model="form.pack_specification" placeholder="示例：20 mg×100粒/瓶" @blur="handlePackSpecBlur" />
+        <el-form-item label="整份规格">
+          <el-row :gutter="12" style="width: 100%">
+            <el-col :span="12">
+              <el-form-item label="含量" prop="dosage_value" label-position="top" style="margin-bottom: 0">
+                <el-input-number v-model="form.dosage_value" :min="0" :precision="4" :step="0.1" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="含量单位" prop="dosage_unit" label-position="top" style="margin-bottom: 0">
+                <el-select v-model="form.dosage_unit" filterable allow-create default-first-option style="width: 100%" placeholder="mg/IU等">
+                  <el-option v-for="u in dosageUnitOptions" :key="u" :label="u" :value="u" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12" style="width: 100%; margin-top: 12px">
+            <el-col :span="12">
+              <el-form-item label="每整件数量" prop="pack_amount" label-position="top" style="margin-bottom: 0">
+                <el-input-number v-model="form.pack_amount" :min="1" :step="1" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="最小单位" prop="unit_name" label-position="top" style="margin-bottom: 0">
+                <el-select v-model="form.unit_name" filterable allow-create default-first-option style="width: 100%" placeholder="片/粒等">
+                  <el-option v-for="u in unitNameOptions" :key="u" :label="u" :value="u" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <el-row :gutter="12" style="width: 100%; margin-top: 12px">
+            <el-col :span="12">
+              <el-form-item label="整件单位" prop="pack_unit" label-position="top" style="margin-bottom: 0">
+                <el-select v-model="form.pack_unit" filterable allow-create default-first-option style="width: 100%" placeholder="瓶/板/袋等">
+                  <el-option v-for="u in packUnitOptions" :key="u" :label="u" :value="u" />
+                </el-select>
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="生成规格" label-position="top" style="margin-bottom: 0">
+                <el-input :model-value="packSpecText" disabled />
+              </el-form-item>
+            </el-col>
+          </el-row>
           <div v-if="packMeta" class="hint">
             解析：包装量 {{ packMeta.packAmount }}{{ packMeta.unitName }} / {{ packMeta.packUnit }}
           </div>
@@ -133,6 +174,11 @@ const form = ref({
   name: '',
   batch_no: '',
   pack_specification: '',
+  dosage_value: null,
+  dosage_unit: '',
+  pack_amount: null,
+  unit_name: '',
+  pack_unit: '',
   pack_price: null,
   inbound_quantity: 1,
   retail_enabled: false,
@@ -150,7 +196,9 @@ const rules = computed(() => {
     batch_no: [{ required: true, message: '请输入批次号', trigger: 'blur' }]
   }
   if (form.value.type === 1) {
-    base.pack_specification = [{ required: true, message: '请输入整份规格', trigger: 'blur' }]
+    base.pack_amount = [{ required: true, message: '请输入每整件数量', trigger: 'blur' }]
+    base.unit_name = [{ required: true, message: '请输入最小单位', trigger: 'change' }]
+    base.pack_unit = [{ required: true, message: '请输入整件单位', trigger: 'change' }]
     base.pack_price = [{ required: true, message: '请输入整份单价', trigger: 'blur' }]
     base.inbound_quantity = [{ required: true, message: '请输入入库数量', trigger: 'blur' }]
     base.min_sale_unit = [{
@@ -201,23 +249,31 @@ const searchNames = (q) => {
   }, 180)
 }
 
-const packMeta = ref(null)
-const parsePackSpec = (text) => {
-  const s = String(text || '').trim()
-  const ok = /^\s*.+[xX×]\s*\d+\s*[^\d/]+\s*\/\s*\S+\s*$/.test(s)
-  if (!ok) return null
-  const m = s.match(/[xX×]\s*(\d+)\s*([^\d/\s]+)\s*\/\s*(\S+)\s*$/)
-  if (!m) return null
-  const packAmount = Number(m[1])
-  const unitName = String(m[2] || '').trim()
-  const packUnit = String(m[3] || '').trim()
+const dosageUnitOptions = ['mg', 'g', 'μg', 'IU', 'mL', 'U', '%']
+const unitNameOptions = ['片', '粒', '支', '袋', '包', '贴', '喷', '丸', '滴', '盒']
+const packUnitOptions = ['盒', '瓶', '板', '袋', '支', '包', '箱']
+
+const packSpecText = computed(() => {
+  const packAmount = Number(form.value.pack_amount)
+  const unitName = String(form.value.unit_name || '').trim()
+  const packUnit = String(form.value.pack_unit || '').trim()
+  const dv = Number(form.value.dosage_value)
+  const du = String(form.value.dosage_unit || '').trim()
+
+  if (!Number.isFinite(packAmount) || packAmount <= 0 || !unitName || !packUnit) return ''
+  if (Number.isFinite(dv) && dv > 0 && du) {
+    return `${dv}${du}×${packAmount}${unitName}/${packUnit}`
+  }
+  return `${packAmount}${unitName}/${packUnit}`
+})
+
+const packMeta = computed(() => {
+  const packAmount = Number(form.value.pack_amount)
+  const unitName = String(form.value.unit_name || '').trim()
+  const packUnit = String(form.value.pack_unit || '').trim()
   if (!Number.isFinite(packAmount) || packAmount <= 0 || !unitName || !packUnit) return null
   return { packAmount, unitName, packUnit }
-}
-
-const handlePackSpecBlur = () => {
-  packMeta.value = parsePackSpec(form.value.pack_specification)
-}
+})
 
 const handleRetailToggle = (checked) => {
   if (!checked) {
@@ -228,7 +284,7 @@ const handleRetailToggle = (checked) => {
 
 const computeThreshold = () => {
   if (!form.value.retail_enabled) return null
-  const meta = packMeta.value || parsePackSpec(form.value.pack_specification)
+  const meta = packMeta.value
   if (!meta) return null
   const packPrice = Number(form.value.pack_price)
   if (!Number.isFinite(packPrice) || packPrice <= 0) return null
@@ -245,7 +301,7 @@ const computeThreshold = () => {
 
 const thresholdHint = computed(() => {
   if (!form.value.retail_enabled) return null
-  const meta = packMeta.value || parsePackSpec(form.value.pack_specification)
+  const meta = packMeta.value
   if (!meta) return { level: 'info', text: '请按示例填写规格以计算阈值' }
   const t = computeThreshold()
   if (t == null) return { level: 'info', text: '请填写最小销售单位以计算阈值（需能整除包装量）' }
@@ -269,6 +325,11 @@ const resetForm = () => {
     name: '',
     batch_no: '',
     pack_specification: '',
+    dosage_value: null,
+    dosage_unit: '',
+    pack_amount: null,
+    unit_name: '',
+    pack_unit: '',
     pack_price: null,
     inbound_quantity: 1,
     retail_enabled: false,
@@ -278,7 +339,6 @@ const resetForm = () => {
     unit: '',
     price: null
   }
-  packMeta.value = null
   nameOptions.value = []
 }
 
@@ -288,7 +348,7 @@ const submit = async () => {
     if (!valid) return
     submitting.value = true
     try {
-      const payload = { ...form.value }
+        const payload = { ...form.value, pack_specification: packSpecText.value }
       const res = await request.post('/nurse/inbound', payload)
       ElMessage.success('入库成功')
       resetForm()

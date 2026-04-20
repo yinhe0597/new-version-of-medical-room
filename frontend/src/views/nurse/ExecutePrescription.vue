@@ -9,7 +9,9 @@
           <el-descriptions-item label="学号">{{ visitDetail.patient.student_id }}</el-descriptions-item>
           <el-descriptions-item label="开方医生">{{ visitDetail.doctor_name }}</el-descriptions-item>
           <el-descriptions-item label="开方时间">{{ visitDetail.created_at }}</el-descriptions-item>
-          <el-descriptions-item label="诊断">{{ visitDetail.diagnosis || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="诊断">
+            <div style="white-space: pre-line;">{{ visitDetail.diagnosis || '无' }}</div>
+          </el-descriptions-item>
           <el-descriptions-item label="处方状态">
             <el-tag :type="getStatusTagType(visitDetail.status)">
               {{ getStatusText(visitDetail.status) }}
@@ -26,7 +28,7 @@
           <el-table-column label="用法" width="200">
             <template #default="scope">
               <span v-if="scope.row.type === 1">
-                {{ scope.row.usage }} / {{ scope.row.dosage }} / {{ scope.row.frequency }} / {{ scope.row.timing }}
+                {{ formatUsageLine(scope.row) }}
               </span>
               <span v-else style="color: #909399">-</span>
             </template>
@@ -119,7 +121,7 @@
           <div v-for="item in visitDetail?.items" :key="item.item_id" class="item-line">
             - {{ item.drug_name }} ({{ item.specification }}) x{{ item.quantity }}
             <br v-if="item.type === 1"/>
-            <span v-if="item.type === 1">&nbsp;&nbsp;用法: {{ item.usage }} / {{ item.dosage }} / {{ item.frequency }} / {{ item.timing }}</span>
+            <span v-if="item.type === 1">&nbsp;&nbsp;用法: {{ formatUsageLine(item) }}</span>
           </div>
         </div>
 
@@ -236,6 +238,23 @@ const getStockNeeded = (item) => {
   return Math.ceil(qty / rate)
 }
 
+const isGarbledText = (val) => {
+  if (typeof val !== 'string') return false
+  return val.includes('?')
+}
+
+const safeText = (val) => {
+  const s = String(val == null ? '' : val).trim()
+  if (!s) return '-'
+  if (isGarbledText(s)) return '-'
+  return s
+}
+
+const formatUsageLine = (row) => {
+  if (!row) return '-'
+  return `${safeText(row.usage)} / ${safeText(row.dosage)} / ${safeText(row.frequency)} / ${safeText(row.timing)}`
+}
+
 const stockSufficient = computed(() => {
   if (!visitDetail.value) return false
   return visitDetail.value.items.every(item => item.type === 2 || item.stock >= getStockNeeded(item))
@@ -269,7 +288,7 @@ const fetchDetail = async () => {
     const res = await request.get(`/nurse/visits/${visitId}`)
     visitDetail.value = res.data
   } catch (error) {
-    ElMessage.error('获取处方详情失败')
+    ElMessage.error(error.msg || '获取处方详情失败')
   } finally {
     loading.value = false
   }

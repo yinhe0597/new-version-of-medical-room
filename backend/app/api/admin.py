@@ -88,9 +88,9 @@ def backup_mysql_database():
 @bp.route('/admin/patients/template', methods=['GET'])
 @role_required('admin')
 def get_patients_template():
-    csv_content = "学号,姓名,性别,手机号码,年级,学院,专业,班级\n"
-    csv_content += "2024001,张三,男,,2024级,计算机学院,软件工程,软件一班\n"
-    csv_content += "2024002,李四,女,13912345678,2024级,外国语学院,英语,英语二班\n"
+    csv_content = "学号,姓名,性别,手机号码,年级,学院,专业,班级,年龄,辅导员姓名\n"
+    csv_content += "2024001,张三,男,,2024级,计算机学院,软件工程,软件一班,19,王老师\n"
+    csv_content += "2024002,李四,女,13912345678,2024级,外国语学院,英语,英语二班,20,赵老师\n"
     response = make_response(csv_content.encode('utf-8-sig'))
     response.headers["Content-Disposition"] = "attachment; filename=patients_template.csv"
     response.headers["Content-type"] = "text/csv"
@@ -138,6 +138,8 @@ def import_patients():
             college = (pick('college', '学院') or '').strip()
             major = (pick('major', '专业') or '').strip()
             class_name = (pick('class_name', '班级') or '').strip()
+            age_raw = (pick('age', '年龄') or '').strip()
+            counselor_name = (pick('counselor_name', '辅导员姓名', '辅导员') or '').strip()
             phone = phone_raw or None
 
             # Security Best Practice: Sanitize inputs to prevent CSV injection (if exported later)
@@ -149,8 +151,19 @@ def import_patients():
 
             student_id = sanitize(student_id)
             name = sanitize(name)
+            counselor_name = sanitize(counselor_name)
 
-            if not student_id or not name:
+            missing = []
+            if not student_id:
+                missing.append("student_id")
+            if not name:
+                missing.append("name")
+            if not class_name:
+                missing.append("class_name")
+            if not counselor_name:
+                missing.append("counselor_name")
+
+            if missing:
                 error_count += 1
                 continue
 
@@ -162,25 +175,45 @@ def import_patients():
                 existing.name = name
                 existing.name_pinyin = full_py
                 existing.name_initials = initials_py
-                existing.gender = gender
-                existing.grade = grade
-                existing.college = college
-                existing.major = major
+                if gender:
+                    existing.gender = gender
+                if grade:
+                    existing.grade = grade
+                if college:
+                    existing.college = college
+                if major:
+                    existing.major = major
                 existing.class_name = class_name
+                existing.counselor_name = counselor_name
+                if age_raw:
+                    try:
+                        existing.age = int(age_raw)
+                    except ValueError:
+                        error_count += 1
+                        continue
                 if phone is not None:
                     existing.phone = phone
             else:
+                age_val = None
+                if age_raw:
+                    try:
+                        age_val = int(age_raw)
+                    except ValueError:
+                        error_count += 1
+                        continue
                 new_patient = Patient(
                     student_id=student_id,
                     name=name,
                     name_pinyin=full_py,
                     name_initials=initials_py,
-                    gender=gender,
-                    grade=grade,
-                    college=college,
-                    major=major,
+                    gender=gender or None,
+                    grade=grade or None,
+                    college=college or None,
+                    major=major or None,
                     class_name=class_name,
-                    phone=phone
+                    phone=phone,
+                    age=age_val,
+                    counselor_name=counselor_name
                 )
                 db.session.add(new_patient)
 
@@ -713,7 +746,6 @@ def export_revenue_stats():
     payments = query.options(
         db.joinedload(Payment.visit).joinedload(Visit.patient),
         db.joinedload(Payment.visit).joinedload(Visit.doctor),
-        db.joinedload(Payment.visit).joinedload(Visit.items),
         db.joinedload(Payment.nurse),
     ).all()
 
@@ -753,7 +785,9 @@ def export_revenue_stats():
         amount = float(p.amount or 0.0)
         drug_amt = float(v.total_amount or 0.0) - consult
         cost = 0.0
-        for it in v.items:
+        items_query = v.items
+        items_list = items_query.all() if hasattr(items_query, "all") else list(items_query or [])
+        for it in items_list:
             cost += float(it.purchase_cost or 0.0)
         profit = amount - cost
 

@@ -6,6 +6,7 @@ from backend.app.models import (
     Drug,
     DrugStockGroup,
     InventoryRecord,
+    DiagnosisDict,
     Payment,
     PrescriptionItem,
     User,
@@ -27,8 +28,105 @@ from backend.app.services.drug_stock import (
     validate_pack_spec,
     validate_prices,
 )
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import or_
+import re
+
+_DIAG_LINE_CODE_RE = re.compile(r"^(?P<name>.*?)[（(](?P<code>[^）)]+)[）)]\s*$")
+_CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_GARBLED_Q_RE = re.compile(r"\?{2,}")
+
+def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
+    if dt is None:
+        return None
+    if getattr(dt, "tzinfo", None) is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone().strftime(fmt)
+
+def _looks_garbled_name(name: str) -> bool:
+    if not isinstance(name, str):
+        return False
+    s = name.strip()
+    if not s:
+        return False
+    if _CJK_RE.search(s):
+        return False
+    return _GARBLED_Q_RE.search(s) is not None
+
+def _normalize_diagnosis_text_for_output(diagnosis_text):
+    if not isinstance(diagnosis_text, str) or not diagnosis_text:
+        return diagnosis_text
+
+    codes_to_fix = set()
+    raw_lines = re.split(r"[\r\n]+", diagnosis_text)
+    for line in raw_lines:
+        parts = re.split(r"[;；]+", line or "")
+        for token in parts:
+            t = (token or "").strip()
+            if not t:
+                continue
+            m = _DIAG_LINE_CODE_RE.match(t)
+            if not m:
+                continue
+            name = (m.group("name") or "").strip()
+            code = (m.group("code") or "").strip()
+            if code and _looks_garbled_name(name):
+                codes_to_fix.add(code)
+
+    if not codes_to_fix:
+        return diagnosis_text
+
+    rows = DiagnosisDict.query.filter(DiagnosisDict.code.in_(sorted(codes_to_fix))).all()
+    names_by_code = {}
+    for row in rows:
+        code = (row.code or "").strip()
+        name = (row.name or "").strip()
+        if not code or not name:
+            continue
+        names_by_code.setdefault(code, []).append(name)
+
+    def pick_name(code: str):
+        candidates = names_by_code.get(code) or []
+        good = [x for x in candidates if not _looks_garbled_name(x)]
+        good = [x for x in good if _CJK_RE.search(x) or re.search(r"[A-Za-z]", x)]
+        good.sort(key=lambda x: (len(x), x))
+        return good[0] if good else None
+
+    fixed_lines = []
+    for line in raw_lines:
+        segs = re.split(r"([;；]+)", line or "")
+        out = []
+        for seg in segs:
+            if seg is None:
+                continue
+            if re.fullmatch(r"[;；]+", seg):
+                out.append(seg)
+                continue
+            token = (seg or "").strip()
+            if not token:
+                out.append(seg)
+                continue
+            m = _DIAG_LINE_CODE_RE.match(token)
+            if not m:
+                out.append(seg)
+                continue
+            name = (m.group("name") or "").strip()
+            code = (m.group("code") or "").strip()
+            if not code or not _looks_garbled_name(name):
+                out.append(seg)
+                continue
+            best = pick_name(code)
+            if not best:
+                out.append(seg)
+                continue
+            use_fullwidth = "（" in token or "）" in token
+            if use_fullwidth:
+                out.append(f"{best}（{code}）")
+            else:
+                out.append(f"{best} ({code})")
+        fixed_lines.append("".join(out))
+
+    return "\n".join(fixed_lines)
 
 def _recompute_visit_total(visit):
     items_sum = 0.0
@@ -53,7 +151,7 @@ def get_pending_visits():
             "visit_id": visit.id,
             "patient_name": visit.patient.name,
             "student_id": visit.patient.student_id,
-            "created_at": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "created_at": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
             "total_amount": visit.total_amount,
             "status": visit.status,
         })
@@ -439,12 +537,18 @@ def get_visit_detail(visit_id):
     visit = Visit.query.options(
         db.joinedload(Visit.patient),
         db.joinedload(Visit.doctor),
-        db.joinedload(Visit.items).joinedload(PrescriptionItem.drug),
-        db.joinedload(Visit.items).joinedload(PrescriptionItem.modifier),
     ).get_or_404(visit_id)
 
+    items_query = visit.items
+    if hasattr(items_query, "options"):
+        items_query = items_query.options(
+            db.joinedload(PrescriptionItem.drug),
+            db.joinedload(PrescriptionItem.modifier),
+        )
+    items_list = items_query.all() if hasattr(items_query, "all") else list(items_query or [])
+
     items = []
-    for item in visit.items:
+    for item in items_list:
         unit_price = item.new_price if item.new_price is not None else item.price_at_visit
         amount = item.new_amount if item.new_amount is not None else item.amount
         items.append({
@@ -480,8 +584,8 @@ def get_visit_detail(visit_id):
                 "student_id": visit.patient.student_id,
             },
             "doctor_name": visit.doctor.real_name if visit.doctor else "Unknown",
-            "created_at": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
-            "diagnosis": visit.diagnosis,
+            "created_at": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
+            "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis),
             "consultation_fee": visit.consultation_fee,
             "doctor_advice": visit.doctor_advice,
             "items": items,
@@ -489,9 +593,9 @@ def get_visit_detail(visit_id):
             "status": visit.status,
             "reject_reason": visit.reject_reason,
             "verified_by": visit.verified_by,
-            "verified_at": visit.verified_at.strftime('%Y-%m-%d %H:%M:%S') if visit.verified_at else None,
+            "verified_at": _format_local_dt(visit.verified_at, "%Y-%m-%d %H:%M:%S") if visit.verified_at else None,
             "rejected_by": visit.rejected_by,
-            "rejected_at": visit.rejected_at.strftime('%Y-%m-%d %H:%M:%S') if visit.rejected_at else None,
+            "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
         }
     }), 200
 

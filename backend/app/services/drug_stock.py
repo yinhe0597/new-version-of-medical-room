@@ -3,8 +3,10 @@ import re
 import uuid
 
 
-PACK_SPEC_RE = re.compile(r"^\s*.+[xX×]\s*\d+\s*[^\d/]+\s*/\s*\S+\s*$")
-PACK_AMOUNT_RE = re.compile(r"[xX×]\s*(?P<count>\d+)\s*(?P<unit>[^\d/\s]+)\s*/\s*(?P<pack_unit>\S+)\s*$")
+PACK_SPEC_RE = re.compile(r"^\s*(?:.*?[xX×*＊]\s*)?\d+\s*[^\d/\s]+(?:\s*/\s*\S+)?\s*$")
+PACK_AMOUNT_RE = re.compile(r"[xX×*＊]\s*(?P<count>\d+)\s*(?P<unit>[^\d/\s]+)\s*/\s*(?P<pack_unit>\S+)\s*$")
+PACK_SIMPLE_RE = re.compile(r"^\s*(?P<count>\d+)\s*(?P<unit>[^\d/\s]+)\s*/\s*(?P<pack_unit>\S+)\s*$")
+PACK_NOSLASH_RE = re.compile(r"^\s*(?:.*?[xX×*＊]\s*)?(?P<count>\d+)\s*(?P<unit>[^\d/\s]+)\s*$")
 MIN_UNIT_RE = re.compile(r"^\s*(?P<count>\d+)\s*(?P<unit>[^\d\s]+)\s*$")
 
 
@@ -19,16 +21,27 @@ class ValidationError(Exception):
 def validate_pack_spec(spec_text):
     if not spec_text or not str(spec_text).strip():
         raise ValidationError("Missing pack_specification", field="pack_specification")
-    if not PACK_SPEC_RE.match(str(spec_text).strip()):
-        raise ValidationError("Invalid pack_specification format", field="pack_specification")
+    s = str(spec_text).strip()
+    if not PACK_SPEC_RE.match(s):
+        raise ValidationError(
+            "整份规格格式不正确（示例：20mg×100粒/瓶 或 100粒/瓶 或 100粒）",
+            field="pack_specification",
+        )
 
-    m = PACK_AMOUNT_RE.search(str(spec_text).strip())
+    m = PACK_AMOUNT_RE.search(s)
     if not m:
-        raise ValidationError("Cannot parse pack_specification amount", field="pack_specification")
+        m = PACK_SIMPLE_RE.match(s)
+    if not m:
+        m = PACK_NOSLASH_RE.match(s)
+        if not m:
+            raise ValidationError(
+                "无法解析整份规格中的包装量（示例：20mg×100粒/瓶 或 100粒/瓶 或 100粒）",
+                field="pack_specification",
+            )
 
     pack_amount = int(m.group("count"))
     unit_name = str(m.group("unit")).strip()
-    pack_unit = str(m.group("pack_unit")).strip()
+    pack_unit = str(m.groupdict().get("pack_unit") or "").strip() or "盒"
 
     if pack_amount <= 0:
         raise ValidationError("Invalid pack amount", field="pack_specification")

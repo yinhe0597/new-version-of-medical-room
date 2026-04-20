@@ -10,15 +10,23 @@ from backend.app.models import User, Drug, Patient
 from werkzeug.security import generate_password_hash
 import sqlalchemy
 
+def _mysql_no_db_uri(uri: str) -> str:
+    base, sep, query = uri.partition("?")
+    prefix = base.rsplit("/", 1)[0] + "/"
+    if sep and query:
+        return prefix + "?" + query
+    return prefix
+
 def create_database_if_not_exists(app):
     uri = app.config['SQLALCHEMY_DATABASE_URI']
     if uri.startswith('mysql'):
-        # Parse the URI
-        engine = sqlalchemy.create_engine(uri.rsplit('/', 1)[0])
-        db_name = uri.rsplit('/', 1)[1].split('?')[0]
+        base = uri.split("?", 1)[0]
+        db_name = base.rsplit("/", 1)[1]
+        engine = sqlalchemy.create_engine(_mysql_no_db_uri(uri))
         try:
             with engine.connect() as conn:
                 conn.execute(sqlalchemy.text(f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"))
+                conn.execute(sqlalchemy.text(f"ALTER DATABASE `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"))
                 print(f"Ensured database '{db_name}' exists.")
         except Exception as e:
             print(f"Failed to create database '{db_name}': {e}")

@@ -53,6 +53,10 @@ class Patient(db.Model):
     major = db.Column(db.String(100), nullable=True)
     class_name = db.Column(db.String(100), nullable=True)
     phone = db.Column(db.String(20), nullable=True)
+    counselor_name = db.Column(db.String(64), nullable=True)
+    is_temporary = db.Column(db.Boolean, default=False, index=True)
+    age = db.Column(db.Integer, nullable=True)
+    id_card = db.Column(db.String(20), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     visits = db.relationship('Visit', backref='patient', lazy='dynamic')

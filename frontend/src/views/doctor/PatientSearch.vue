@@ -5,7 +5,7 @@
       <div class="search-box">
         <el-autocomplete
           v-model="searchKeyword"
-          placeholder="请输入姓名 / 学号 / 拼音（前几位即可）"
+          placeholder="请输入姓名 / 学号 / 手机号 / 拼音（前几位即可）"
           class="search-input"
           :fetch-suggestions="handleSearch"
           :trigger-on-focus="false"
@@ -23,6 +23,7 @@
               <span class="name">{{ item.name }}</span>
               <span class="gender">{{ item.gender }}</span>
               <span class="class-name">{{ item.class_name || '-' }}</span>
+              <span class="phone">{{ item.phone || '-' }}</span>
             </div>
           </template>
           <template #append>
@@ -44,6 +45,7 @@
         <el-descriptions-item label="学号">{{ patient.student_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ patient.name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="性别">{{ patient.gender || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="年龄">{{ patient.age || '-' }}</el-descriptions-item>
         <el-descriptions-item label="年级">{{ patient.grade || '-' }}</el-descriptions-item>
         <el-descriptions-item label="学院">{{ patient.college || '-' }}</el-descriptions-item>
         <el-descriptions-item label="专业">{{ patient.major || '-' }}</el-descriptions-item>
@@ -52,12 +54,18 @@
       </el-descriptions>
     </el-card>
 
-    <!-- 新建患者表单 -->
+    <!-- 新人首诊登记 -->
     <el-card v-else-if="showCreateForm" class="create-card">
       <template #header>
-        <span>未找到患者，请新建档案</span>
+        <span>未找到人员，请进行新人首诊登记</span>
       </template>
       <el-form :model="createForm" :rules="rules" ref="formRef" label-width="100px">
+        <el-form-item>
+          <el-switch v-model="createForm.is_temporary" active-text="临时人员" inactive-text="在校学生" />
+        </el-form-item>
+        <el-form-item v-if="!createForm.is_temporary" label="学号" prop="student_id">
+          <el-input v-model="createForm.student_id"></el-input>
+        </el-form-item>
         <el-form-item label="姓名" prop="name">
           <el-input v-model="createForm.name"></el-input>
         </el-form-item>
@@ -67,8 +75,29 @@
             <el-radio label="女">女</el-radio>
           </el-radio-group>
         </el-form-item>
-        <el-form-item label="联系电话（可暂空）" prop="phone">
+        <el-form-item v-if="!createForm.is_temporary" label="班级" prop="class_name">
+          <el-input v-model="createForm.class_name"></el-input>
+        </el-form-item>
+        <el-form-item v-if="!createForm.is_temporary" label="辅导员姓名" prop="counselor_name">
+          <el-input v-model="createForm.counselor_name"></el-input>
+        </el-form-item>
+        <el-form-item v-if="!createForm.is_temporary" label="年级" prop="grade">
+          <el-input v-model="createForm.grade"></el-input>
+        </el-form-item>
+        <el-form-item v-if="!createForm.is_temporary" label="学院" prop="college">
+          <el-input v-model="createForm.college"></el-input>
+        </el-form-item>
+        <el-form-item v-if="!createForm.is_temporary" label="专业" prop="major">
+          <el-input v-model="createForm.major"></el-input>
+        </el-form-item>
+        <el-form-item label="年龄" prop="age">
+          <el-input-number v-model="createForm.age" :min="1" :max="150" />
+        </el-form-item>
+        <el-form-item :label="createForm.is_temporary ? '联系电话' : '手机号码（选填）'" prop="phone">
           <el-input v-model="createForm.phone"></el-input>
+        </el-form-item>
+        <el-form-item label="身份证号（选填）" prop="id_card">
+          <el-input v-model="createForm.id_card" maxlength="18" show-word-limit></el-input>
         </el-form-item>
         <el-form-item>
           <el-button type="primary" @click="handleCreate" :loading="creating">保存并接诊</el-button>
@@ -93,6 +122,7 @@
       <template #footer>
         <span class="dialog-footer">
           <el-button @click="phoneDialogVisible = false">取消</el-button>
+          <el-button @click="skipPhoneInput">暂不补充，直接接诊</el-button>
           <el-button type="primary" @click="submitPhone" :loading="updatingPhone">
             保存并接诊
           </el-button>
@@ -103,7 +133,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import request from '@/api/request'
@@ -123,15 +153,63 @@ const tempPhone = ref('')
 const updatingPhone = ref(false)
 
 const createForm = ref({
+  is_temporary: false,
+  student_id: '',
   name: '',
   gender: '男',
-  phone: ''
+  age: null,
+  phone: '',
+  id_card: '',
+  grade: '',
+  college: '',
+  major: '',
+  class_name: '',
+  counselor_name: ''
 })
 
-const rules = {
-  name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
-  gender: [{ required: true, message: '请选择性别', trigger: 'change' }]
-}
+const rules = computed(() => {
+  const base = {
+    name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
+    gender: [{ required: true, message: '请选择性别', trigger: 'change' }],
+    age: [{ required: true, message: '请输入年龄', trigger: 'change' }],
+    phone: [
+      {
+        validator: (rule, value, callback) => {
+          const v = (value || '').trim()
+          if (createForm.value.is_temporary) {
+            if (!v) return callback(new Error('请输入手机号码'))
+            if (!/^1\d{10}$/.test(v)) return callback(new Error('手机号码格式不正确'))
+            return callback()
+          }
+          if (!v) return callback()
+          if (!/^1\d{10}$/.test(v)) return callback(new Error('手机号码格式不正确'))
+          return callback()
+        },
+        trigger: 'blur'
+      }
+    ],
+    id_card: [
+      {
+        validator: (rule, value, callback) => {
+          const v = (value || '').trim()
+          if (!v) return callback()
+          if (!/^\d{17}[\dXx]$/.test(v)) return callback(new Error('身份证号格式不正确'))
+          callback()
+        },
+        trigger: 'blur'
+      }
+    ]
+  }
+
+  if (!createForm.value.is_temporary) {
+    base.student_id = [{ required: true, message: '请输入学号', trigger: 'blur' }]
+    base.class_name = [{ required: true, message: '请输入班级', trigger: 'blur' }]
+    base.counselor_name = [{ required: true, message: '请输入辅导员姓名', trigger: 'blur' }]
+    base.age = [{ required: false, trigger: 'change' }]
+  }
+
+  return base
+})
 
 let searchTimer = null
 
@@ -188,13 +266,19 @@ const handleSearchFromButton = async () => {
         ElMessage.info(`找到 ${res.data.length} 个匹配结果，请从下拉列表中选择`)
       }
     } else {
-      ElMessage.info('未找到该患者，请新建档案')
-      showCreateForm.value = true
-      createForm.value.name = ''
-      createForm.value.phone = ''
+      openCreateForm(searchKeyword.value)
     }
   } catch (error) {
-    ElMessage.error('查询失败')
+    const code = error && typeof error === 'object' ? error.code : undefined
+    if (code === 404) {
+      openCreateForm(searchKeyword.value)
+      return
+    }
+    if (code === 429) {
+      ElMessage.warning('查询过于频繁，请稍后重试')
+      return
+    }
+    ElMessage.error(error.msg || '查询失败')
   } finally {
     loading.value = false
   }
@@ -219,7 +303,8 @@ const handleCreate = async () => {
     if (valid) {
       creating.value = true
       try {
-        const res = await request.post('/doctor/patient', createForm.value)
+        const payload = { ...createForm.value }
+        const res = await request.post('/doctor/patient', payload)
         ElMessage.success('建档成功')
         patient.value = { ...createForm.value, id: res.data.id }
         showCreateForm.value = false
@@ -234,6 +319,10 @@ const handleCreate = async () => {
 }
 
 const handleStartVisit = () => {
+  if (patient.value && patient.value.is_temporary && !patient.value.phone) {
+    ElMessage.warning('临时人员必须填写手机号码')
+    return
+  }
   if (!patient.value.phone) {
     tempPhone.value = ''
     phoneDialogVisible.value = true
@@ -264,6 +353,11 @@ const submitPhone = async () => {
   }
 }
 
+const skipPhoneInput = () => {
+  phoneDialogVisible.value = false
+  startVisit()
+}
+
 const startVisit = () => {
   router.push({
     path: '/doctor/visit',
@@ -272,6 +366,30 @@ const startVisit = () => {
         patient_name: patient.value.name
     }
   })
+}
+
+const openCreateForm = (keyword) => {
+  showCreateForm.value = true
+  const kw = (keyword || '').trim()
+  createForm.value.is_temporary = false
+  createForm.value.student_id = ''
+  createForm.value.name = ''
+  createForm.value.gender = '男'
+  createForm.value.age = null
+  createForm.value.phone = ''
+  createForm.value.id_card = ''
+  createForm.value.grade = ''
+  createForm.value.college = ''
+  createForm.value.major = ''
+  createForm.value.class_name = ''
+  createForm.value.counselor_name = ''
+  if (/^1\d{10}$/.test(kw)) {
+    createForm.value.phone = kw
+  } else if (/^\d{4,}$/.test(kw)) {
+    createForm.value.student_id = kw
+  } else if (/[\u4e00-\u9fff]/.test(kw)) {
+    createForm.value.name = kw
+  }
 }
 </script>
 
@@ -307,6 +425,10 @@ const startVisit = () => {
 }
 .patient-suggestion .name {
   flex: 1;
+}
+.patient-suggestion .phone {
+  color: #909399;
+  font-size: 12px;
 }
 .patient-suggestion .class-name {
   color: #909399;
