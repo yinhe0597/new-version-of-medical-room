@@ -636,72 +636,175 @@ def smart_inventory():
 @bp.route('/admin/statistics/revenue', methods=['GET'])
 @role_required(['admin', 'nurse'])
 def get_revenue_stats():
-    stats_type = request.args.get('type', 'daily')
-    target_date_str = request.args.get('date', datetime.now().strftime('%Y-%m-%d'))
+    def parse_dt(value, is_end=False):
+        if not value:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
+        for fmt in fmts:
+            try:
+                dt = datetime.strptime(s, fmt)
+                if fmt == "%Y-%m-%d":
+                    if is_end:
+                        return dt + timedelta(days=1)
+                    return dt
+                if is_end:
+                    return dt + timedelta(seconds=1)
+                return dt
+            except Exception:
+                continue
+        raise ValueError("Invalid date format")
+
+    stats_type = request.args.get("type", "daily")
+    target_date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    start_time_str = request.args.get("start_time") or request.args.get("start_date")
+    end_time_str = request.args.get("end_time") or request.args.get("end_date")
+
+    doctor_id = request.args.get("doctor_id", type=int)
+    nurse_id = request.args.get("nurse_id", type=int)
 
     try:
-        if stats_type == 'daily':
-            target_date = datetime.strptime(target_date_str, '%Y-%m-%d').date()
-            start = datetime.combine(target_date, datetime.min.time())
-            end = start + timedelta(days=1)
-        elif stats_type == 'monthly':
-            target_year, target_month = map(int, target_date_str.split('-')[:2])
-            start = datetime(target_year, target_month, 1)
-            if target_month == 12:
-                end = datetime(target_year + 1, 1, 1)
-            else:
-                end = datetime(target_year, target_month + 1, 1)
+        if start_time_str or end_time_str:
+            start = parse_dt(start_time_str, is_end=False) if start_time_str else None
+            end = parse_dt(end_time_str, is_end=True) if end_time_str else None
+            if start is None and end is None:
+                raise ValueError("Invalid date format")
+            if start is None:
+                start = end - timedelta(days=1)
+            if end is None:
+                end = start + timedelta(days=1)
         else:
-            target_year = int(target_date_str.split('-')[0])
-            start = datetime(target_year, 1, 1)
-            end = datetime(target_year + 1, 1, 1)
+            if stats_type == "daily":
+                target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+                start = datetime.combine(target_date, datetime.min.time())
+                end = start + timedelta(days=1)
+            elif stats_type == "monthly":
+                target_year, target_month = map(int, target_date_str.split("-")[:2])
+                start = datetime(target_year, target_month, 1)
+                if target_month == 12:
+                    end = datetime(target_year + 1, 1, 1)
+                else:
+                    end = datetime(target_year, target_month + 1, 1)
+            else:
+                target_year = int(target_date_str.split("-")[0])
+                start = datetime(target_year, 1, 1)
+                end = datetime(target_year + 1, 1, 1)
 
-        query = Payment.query.filter(
+        query = Payment.query.join(Visit).filter(
             Payment.payment_date >= start,
             Payment.payment_date < end
         )
+        if doctor_id:
+            query = query.filter(Visit.doctor_id == doctor_id)
+        if nurse_id:
+            query = query.filter(Payment.nurse_id == nurse_id)
 
-        payments = query.options(db.joinedload(Payment.visit)).all()
-        total_revenue = sum(p.amount for p in payments)
+        payments = query.options(
+            db.joinedload(Payment.visit).joinedload(Visit.patient),
+            db.joinedload(Payment.visit).joinedload(Visit.doctor),
+            db.joinedload(Payment.nurse),
+        ).all()
 
+        visit_ids = [p.visit_id for p in payments if p.visit_id]
+        items_by_visit = {}
+        if visit_ids:
+            items = PrescriptionItem.query.options(
+                db.joinedload(PrescriptionItem.drug)
+            ).filter(
+                PrescriptionItem.visit_id.in_(visit_ids)
+            ).all()
+            for it in items:
+                items_by_visit.setdefault(it.visit_id, []).append(it)
+
+        total_revenue = 0.0
         drug_revenue = 0.0
+        service_revenue = 0.0
         consultation_revenue = 0.0
+        total_cost = 0.0
         total_profit = 0.0
 
         details = []
         for p in payments:
-            visit = p.visit
-            if visit:
-                consultation_revenue += visit.consultation_fee
-                drug_revenue += (visit.total_amount - visit.consultation_fee)
-                
-                # Calculate cost from items
-                visit_cost = 0.0
-                for item in visit.items:
-                    visit_cost += (item.purchase_cost or 0.0)
-                
-                visit_profit = p.amount - visit_cost
-                total_profit += visit_profit
+            v = p.visit
+            if v is None:
+                continue
 
-                details.append({
-                    "date": p.payment_date.strftime('%Y-%m-%d %H:%M'),
-                    "amount": p.amount,
-                    "profit": visit_profit,
-                    "visit_id": p.visit_id
-                })
+            consult = float(v.consultation_fee or 0.0)
+            drug_amt = 0.0
+            service_amt = 0.0
+            cost = 0.0
+            for it in items_by_visit.get(v.id, []):
+                amount_val = it.new_amount if it.new_amount is not None else it.amount
+                amount_val = float(amount_val or 0.0)
+                d = getattr(it, "drug", None)
+                if d is not None and int(getattr(d, "type", 1) or 1) == 1:
+                    drug_amt += amount_val
+                else:
+                    service_amt += amount_val
+                cost += float(it.purchase_cost or 0.0)
+
+            amount = float(p.amount or 0.0)
+            profit = amount - cost
+
+            total_revenue += amount
+            drug_revenue += drug_amt
+            service_revenue += service_amt
+            consultation_revenue += consult
+            total_cost += cost
+            total_profit += profit
+
+            details.append({
+                "date": p.payment_date.strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else "",
+                "visit_id": p.visit_id,
+                "patient_name": v.patient.name if v.patient else "",
+                "student_id": v.patient.student_id if v.patient else "",
+                "doctor_name": v.doctor.real_name if getattr(v, "doctor", None) else "",
+                "nurse_name": p.nurse.real_name if getattr(p, "nurse", None) else "",
+                "diagnosis": v.diagnosis or "",
+                "chief_complaint": v.chief_complaint or "",
+                "drug_amount": drug_amt,
+                "service_amount": service_amt,
+                "consultation_fee": consult,
+                "amount": amount,
+                "cost": cost,
+                "profit": profit,
+            })
 
         return jsonify({
             "data": {
                 "total_revenue": total_revenue,
                 "drug_revenue": drug_revenue,
+                "service_revenue": service_revenue,
                 "consultation_revenue": consultation_revenue,
+                "total_cost": total_cost,
                 "total_profit": total_profit,
-                "details": details
+                "details": details,
+                "range": {
+                    "start": start.strftime("%Y-%m-%d %H:%M:%S"),
+                    "end": (end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
+                }
             }
         }), 200
 
     except ValueError:
         return jsonify({"msg": "Invalid date format"}), 400
+
+
+@bp.route('/admin/statistics/revenue/users', methods=['GET'])
+@role_required(['admin', 'nurse'])
+def get_revenue_stats_users():
+    users = User.query.filter(User.role.in_(["doctor", "nurse"])).order_by(User.role.asc(), User.real_name.asc()).all()
+    doctors = []
+    nurses = []
+    for u in users:
+        item = {"id": u.id, "real_name": u.real_name}
+        if u.role == "doctor":
+            doctors.append(item)
+        elif u.role == "nurse":
+            nurses.append(item)
+    return jsonify({"data": {"doctors": doctors, "nurses": nurses}}), 200
 
 
 @bp.route("/admin/statistics/revenue/export", methods=["GET"])
@@ -711,28 +814,65 @@ def export_revenue_stats():
 
     stats_type = request.args.get("type", "daily")
     target_date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    start_time_str = request.args.get("start_time") or request.args.get("start_date")
+    end_time_str = request.args.get("end_time") or request.args.get("end_date")
+
+    doctor_id = request.args.get("doctor_id", type=int)
+    nurse_id = request.args.get("nurse_id", type=int)
 
     try:
-        if stats_type == "daily":
-            target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-            start = datetime.combine(target_date, datetime.min.time())
-            end = start + timedelta(days=1)
-            date_label = target_date_str
-        elif stats_type == "monthly":
-            target_year, target_month = map(int, target_date_str.split("-")[:2])
-            start = datetime(target_year, target_month, 1)
-            if target_month == 12:
-                end = datetime(target_year + 1, 1, 1)
-            else:
-                end = datetime(target_year, target_month + 1, 1)
-            date_label = f"{target_year:04d}-{target_month:02d}"
-        elif stats_type == "yearly":
-            target_year = int(target_date_str.split("-")[0])
-            start = datetime(target_year, 1, 1)
-            end = datetime(target_year + 1, 1, 1)
-            date_label = f"{target_year:04d}"
+        def parse_dt(value, is_end=False):
+            if not value:
+                return None
+            s = str(value).strip()
+            if not s:
+                return None
+            fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
+            for fmt in fmts:
+                try:
+                    dt = datetime.strptime(s, fmt)
+                    if fmt == "%Y-%m-%d":
+                        if is_end:
+                            return dt + timedelta(days=1)
+                        return dt
+                    if is_end:
+                        return dt + timedelta(seconds=1)
+                    return dt
+                except Exception:
+                    continue
+            raise ValueError("Invalid date format")
+
+        if start_time_str or end_time_str:
+            start = parse_dt(start_time_str, is_end=False) if start_time_str else None
+            end = parse_dt(end_time_str, is_end=True) if end_time_str else None
+            if start is None and end is None:
+                raise ValueError("Invalid date format")
+            if start is None:
+                start = end - timedelta(days=1)
+            if end is None:
+                end = start + timedelta(days=1)
+            date_label = f"{start.strftime('%Y%m%d_%H%M')}-{(end - timedelta(seconds=1)).strftime('%Y%m%d_%H%M')}"
         else:
-            return jsonify({"msg": "Invalid type"}), 400
+            if stats_type == "daily":
+                target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
+                start = datetime.combine(target_date, datetime.min.time())
+                end = start + timedelta(days=1)
+                date_label = target_date_str
+            elif stats_type == "monthly":
+                target_year, target_month = map(int, target_date_str.split("-")[:2])
+                start = datetime(target_year, target_month, 1)
+                if target_month == 12:
+                    end = datetime(target_year + 1, 1, 1)
+                else:
+                    end = datetime(target_year, target_month + 1, 1)
+                date_label = f"{target_year:04d}-{target_month:02d}"
+            elif stats_type == "yearly":
+                target_year = int(target_date_str.split("-")[0])
+                start = datetime(target_year, 1, 1)
+                end = datetime(target_year + 1, 1, 1)
+                date_label = f"{target_year:04d}"
+            else:
+                return jsonify({"msg": "Invalid type"}), 400
     except Exception:
         return jsonify({"msg": "Invalid date format"}), 400
 
@@ -742,12 +882,27 @@ def export_revenue_stats():
             return "'" + s
         return s
 
-    query = Payment.query.filter(Payment.payment_date >= start, Payment.payment_date < end)
+    query = Payment.query.join(Visit).filter(Payment.payment_date >= start, Payment.payment_date < end)
+    if doctor_id:
+        query = query.filter(Visit.doctor_id == doctor_id)
+    if nurse_id:
+        query = query.filter(Payment.nurse_id == nurse_id)
     payments = query.options(
         db.joinedload(Payment.visit).joinedload(Visit.patient),
         db.joinedload(Payment.visit).joinedload(Visit.doctor),
         db.joinedload(Payment.nurse),
     ).all()
+
+    visit_ids = [p.visit_id for p in payments if p.visit_id]
+    items_by_visit = {}
+    if visit_ids:
+        items = PrescriptionItem.query.options(
+            db.joinedload(PrescriptionItem.drug)
+        ).filter(
+            PrescriptionItem.visit_id.in_(visit_ids)
+        ).all()
+        for it in items:
+            items_by_visit.setdefault(it.visit_id, []).append(it)
 
     wb = Workbook()
     ws = wb.active
@@ -764,16 +919,19 @@ def export_revenue_stats():
             "支付方式",
             "诊察费",
             "药品金额",
+            "诊疗项目金额",
             "总金额",
             "成本",
             "利润",
             "诊断",
+            "主诉",
         ]
     )
 
     total_revenue = 0.0
     consultation_revenue = 0.0
     drug_revenue = 0.0
+    service_revenue = 0.0
     total_cost = 0.0
     total_profit = 0.0
 
@@ -783,17 +941,24 @@ def export_revenue_stats():
             continue
         consult = float(v.consultation_fee or 0.0)
         amount = float(p.amount or 0.0)
-        drug_amt = float(v.total_amount or 0.0) - consult
         cost = 0.0
-        items_query = v.items
-        items_list = items_query.all() if hasattr(items_query, "all") else list(items_query or [])
-        for it in items_list:
+        drug_amt = 0.0
+        service_amt = 0.0
+        for it in items_by_visit.get(v.id, []):
+            amount_val = it.new_amount if it.new_amount is not None else it.amount
+            amount_val = float(amount_val or 0.0)
+            d = getattr(it, "drug", None)
+            if d is not None and int(getattr(d, "type", 1) or 1) == 1:
+                drug_amt += amount_val
+            else:
+                service_amt += amount_val
             cost += float(it.purchase_cost or 0.0)
         profit = amount - cost
 
         total_revenue += amount
         consultation_revenue += consult
         drug_revenue += drug_amt
+        service_revenue += service_amt
         total_cost += cost
         total_profit += profit
 
@@ -808,18 +973,25 @@ def export_revenue_stats():
                 safe_text(p.payment_method or ""),
                 round(consult, 2),
                 round(drug_amt, 2),
+                round(service_amt, 2),
                 round(amount, 2),
                 round(cost, 2),
                 round(profit, 2),
                 safe_text(v.diagnosis or ""),
+                safe_text(v.chief_complaint or ""),
             ]
         )
 
     ws2 = wb.create_sheet("summary")
     ws2.append(["维度", safe_text(stats_type)])
     ws2.append(["日期", safe_text(date_label)])
+    ws2.append(["开始时间", safe_text(start.strftime("%Y-%m-%d %H:%M:%S"))])
+    ws2.append(["结束时间", safe_text((end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"))])
+    ws2.append(["doctor_id", safe_text(doctor_id if doctor_id else "")])
+    ws2.append(["nurse_id", safe_text(nurse_id if nurse_id else "")])
     ws2.append(["总收入", round(total_revenue, 2)])
     ws2.append(["药品收入", round(drug_revenue, 2)])
+    ws2.append(["诊疗项目收入", round(service_revenue, 2)])
     ws2.append(["诊察费收入", round(consultation_revenue, 2)])
     ws2.append(["总成本", round(total_cost, 2)])
     ws2.append(["总利润", round(total_profit, 2)])
@@ -833,6 +1005,7 @@ def export_revenue_stats():
     resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     resp.headers["Content-Disposition"] = f"attachment; filename={filename}"
     return resp
+        
 
 @bp.route('/admin/users', methods=['GET'])
 @role_required('admin')
