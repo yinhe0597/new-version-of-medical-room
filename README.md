@@ -1,10 +1,81 @@
 # 校医务室诊疗管理系统 (Medical Room Management System)
 
-本项目为一套专为学校医务室设计的全栈诊疗与库存管理系统。支持医生开方（结合 ICD-10 诊断库）、护士处方审核与改价、药品进销存、学生批量导入以及管理员营收统计等核心功能。
+当前版本：**V2.0.0**
 
-数据库支持 SQLite 与 MySQL（通过环境变量配置连接），后端使用 Flask (Python) 提供 API 服务，前端基于 Vue 3 + Element Plus 构建。
+![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
+![Flask](https://img.shields.io/badge/Backend-Flask-black)
+![Vue](https://img.shields.io/badge/Frontend-Vue%203-42b883)
+![ElementPlus](https://img.shields.io/badge/UI-Element%20Plus-409EFF)
+![License](https://img.shields.io/badge/License-MIT-green)
+
+本项目是一套面向高校/中小学医务室场景的全栈诊疗与药品管理系统，覆盖“接诊开方 -> 护士审核 -> 发药结算 -> 库存与营收统计”的完整业务闭环。
+
+## 项目亮点
+
+- 贴合校医务室流程：医生开方、护士审核、库存扣减、营收统计一体化
+- 处方安全兜底：处方提交与护士审核均有后端强校验，避免绕过业务规则
+- 库存模型实用：支持“整包装 + 拆零”联动入库与扣减，适配真实发药场景
+- 角色边界清晰：Admin / Doctor / Nurse 按职责拆分能力与接口
+- 易部署易迁移：支持 SQLite 与 MySQL，环境变量切换数据库连接
+
+## 功能总览
+
+| 模块 | 核心能力 |
+| --- | --- |
+| 医生端 | ICD-10 辅助诊断、开方、处方提交校验 |
+| 护士端 | 处方审核与改价、结算执行、药品管理（CRUD/导入/模板/盘库） |
+| 库存管理 | 采购入库、拆零管理、库存联动扣减 |
+| 学生管理 | 学生信息批量导入与维护 |
+| 管理员统计 | 营收报表、Excel 导出 |
+
+## 技术架构
+
+- 后端：Flask（Python），提供 REST API
+- 前端：Vue 3 + Element Plus
+- 数据库：SQLite / MySQL（通过环境变量配置）
+- 迁移工具：Alembic
+
+## 系统流程（简版）
+
+`接诊` -> `医生开方` -> `护士审核` -> `发药结算` -> `库存扣减` -> `营收统计`
+
+## 体验与账号
+
+- 前端：`http://localhost:5888/`
+- 后端：`http://127.0.0.1:5000/`（API 前缀 `/api`）
+- 默认账号（执行 `backend/init_db.py` 后生成）：
+  - 管理员：`admin / 123456`
+  - 医生：`doctor / 123456`
+  - 护士：`nurse / 123456`
+
+## 页面截图（占位）
+
+> 建议将截图放在 `docs/images/` 目录，并替换下列占位链接。
+
+### 登录与首页
+
+![登录页](docs/images/login.png)
+![首页看板](docs/images/dashboard.png)
+
+### 医生开方与护士审核
+
+![医生开方](docs/images/doctor-prescription.png)
+![护士审核](docs/images/nurse-verify.png)
+
+### 药品管理与营收报表
+
+![药品管理](docs/images/medicine-management.png)
+![营收报表](docs/images/revenue-report.png)
 
 ## 更新日志
+
+### V2.0.0（2026-04-21）
+
+- 医生端：接诊前二次确认；被驳回处方支持“重新开方”闭环
+- 医生端：主诉/体格检查/医生贴士模板管理与 `##` 快捷填入
+- 医生端：诊查费默认值调整为 8 元；用量下拉计数单位补全到 6
+- 后端：新增模板 CRUD 接口；就诊历史/详情补充字段支持重新开方
+- 详情见：[更新日志-V2.0.0.md](docs/更新日志-V2.0.0.md)
 
 ### V1.10（2026-04-13）
 
@@ -68,3 +139,8 @@ npm run dev
 ```
 
 *（注：更详细的环境要求和 MySQL 前置操作请务必参考 `部署与维护说明.md`。）*
+
+## V2.0.0 关键用法速记（医生端）
+
+- **模板快捷填入**：在接诊页“主诉/体格检查/医生贴士”输入框末尾输入 `##`，弹出模板列表，点选即可插入。
+- **重新开方**：在“历史就诊记录”中，状态为“已驳回”的记录，操作列点击“重新开方”，会载入原处方草稿供修改并重新提交给护士审核。

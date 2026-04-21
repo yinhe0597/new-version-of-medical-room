@@ -39,6 +39,24 @@ const routes = [
         component: () => import('@/views/doctor/PatientSearch.vue')
       },
       {
+        path: 'templates/chief-complaint',
+        name: 'ChiefComplaintTemplates',
+        component: () => import('@/views/doctor/TextTemplates.vue'),
+        meta: { templateCategory: 'chief_complaint', templateTitle: '主诉模板' }
+      },
+      {
+        path: 'templates/physical-exam',
+        name: 'PhysicalExamTemplates',
+        component: () => import('@/views/doctor/TextTemplates.vue'),
+        meta: { templateCategory: 'physical_exam', templateTitle: '体格检查模板' }
+      },
+      {
+        path: 'templates/doctor-advice',
+        name: 'DoctorAdviceTemplates',
+        component: () => import('@/views/doctor/TextTemplates.vue'),
+        meta: { templateCategory: 'doctor_advice', templateTitle: '医生贴士模板' }
+      },
+      {
         path: 'direct-purchase',
         name: 'DirectPurchase',
         component: () => import('@/views/doctor/DirectPurchase.vue')

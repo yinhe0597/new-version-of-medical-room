@@ -152,6 +152,15 @@ const phoneDialogVisible = ref(false)
 const tempPhone = ref('')
 const updatingPhone = ref(false)
 
+const escapeHtml = (value) => {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 const createForm = ref({
   is_temporary: false,
   student_id: '',
@@ -327,7 +336,39 @@ const handleStartVisit = () => {
     tempPhone.value = ''
     phoneDialogVisible.value = true
   } else {
+    confirmStartVisit()
+  }
+}
+
+const confirmStartVisit = async () => {
+  if (!patient.value) return
+
+  const p = patient.value
+  const html = `
+    <div style="line-height: 1.8;">
+      <div style="margin-bottom: 10px;">请再次确认患者基本信息无误：</div>
+      <div><b>学号：</b>${escapeHtml(p.student_id || '-')}</div>
+      <div><b>姓名：</b>${escapeHtml(p.name || '-')}</div>
+      <div><b>性别：</b>${escapeHtml(p.gender || '-')}</div>
+      <div><b>年龄：</b>${escapeHtml(p.age || '-')}</div>
+      <div><b>班级：</b>${escapeHtml(p.class_name || '-')}</div>
+      <div><b>电话：</b>${escapeHtml(p.phone || '-')}</div>
+      <div><b>人员类型：</b>${p.is_temporary ? '临时人员' : '在校学生'}</div>
+    </div>
+  `
+
+  try {
+    await ElMessageBox.confirm(html, '确认接诊信息', {
+      dangerouslyUseHTMLString: true,
+      confirmButtonText: '确认并开始接诊',
+      cancelButtonText: '返回检查',
+      type: 'warning',
+      closeOnClickModal: false,
+      closeOnPressEscape: false,
+    })
     startVisit()
+  } catch (e) {
+    return
   }
 }
 
@@ -345,7 +386,7 @@ const submitPhone = async () => {
     patient.value.phone = tempPhone.value
     phoneDialogVisible.value = false
     ElMessage.success('信息已更新')
-    startVisit()
+    confirmStartVisit()
   } catch (error) {
     ElMessage.error('更新失败')
   } finally {
@@ -355,7 +396,7 @@ const submitPhone = async () => {
 
 const skipPhoneInput = () => {
   phoneDialogVisible.value = false
-  startVisit()
+  confirmStartVisit()
 }
 
 const startVisit = () => {

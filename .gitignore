@@ -60,4 +60,7 @@ logs
 # Local data files (do not commit)
 studentINF.xlsx
 
+# Local scratch files
+diff.txt
+
 .tools/
