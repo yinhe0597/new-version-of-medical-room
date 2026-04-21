@@ -6,6 +6,7 @@ from backend.app.models import User, Drug, Payment, Visit, PrescriptionItem, Pat
 from backend.app.utils.decorators import role_required
 from datetime import datetime, date, timedelta
 from sqlalchemy import func
+from sqlalchemy.orm import aliased
 import os
 import shutil
 import csv
@@ -1005,7 +1006,317 @@ def export_revenue_stats():
     resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     resp.headers["Content-Disposition"] = f"attachment; filename={filename}"
     return resp
-        
+
+
+@bp.route("/admin/statistics/drug-outbound", methods=["GET"])
+@role_required(["admin", "nurse"])
+def get_drug_outbound_records():
+    def parse_dt(value, is_end=False):
+        if not value:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
+        for fmt in fmts:
+            try:
+                dt = datetime.strptime(s, fmt)
+                if fmt == "%Y-%m-%d":
+                    if is_end:
+                        return dt + timedelta(days=1)
+                    return dt
+                if is_end:
+                    return dt + timedelta(seconds=1)
+                return dt
+            except Exception:
+                continue
+        raise ValueError("Invalid date format")
+
+    start_time_str = request.args.get("start_time") or request.args.get("start_date")
+    end_time_str = request.args.get("end_time") or request.args.get("end_date")
+    if not start_time_str and not end_time_str:
+        today = datetime.now().strftime("%Y-%m-%d")
+        start_time_str = f"{today} 00:00:00"
+        end_time_str = f"{today} 23:59:59"
+
+    doctor_id = request.args.get("doctor_id", type=int)
+    nurse_id = request.args.get("nurse_id", type=int)
+    keyword = (request.args.get("keyword") or "").strip()
+    page = request.args.get("page", 1, type=int)
+    size = request.args.get("size", 50, type=int)
+    if page <= 0:
+        page = 1
+    if size <= 0:
+        size = 50
+    if size > 200:
+        size = 200
+
+    try:
+        start = parse_dt(start_time_str, is_end=False) if start_time_str else None
+        end = parse_dt(end_time_str, is_end=True) if end_time_str else None
+        if start is None and end is None:
+            raise ValueError("Invalid date format")
+        if start is None:
+            start = end - timedelta(days=1)
+        if end is None:
+            end = start + timedelta(days=1)
+    except Exception:
+        return jsonify({"msg": "Invalid date format"}), 400
+
+    Doctor = aliased(User)
+    Nurse = aliased(User)
+
+    amount_expr = func.coalesce(PrescriptionItem.new_amount, PrescriptionItem.amount)
+    q = (
+        db.session.query(
+            Payment.payment_date,
+            Payment.payment_method,
+            Visit.id.label("visit_id"),
+            Patient.name.label("patient_name"),
+            Patient.student_id.label("student_id"),
+            Doctor.real_name.label("doctor_name"),
+            Nurse.real_name.label("nurse_name"),
+            Drug.id.label("drug_id"),
+            Drug.name.label("drug_name"),
+            Drug.specification.label("specification"),
+            Drug.unit.label("unit"),
+            PrescriptionItem.is_scattered.label("is_scattered"),
+            PrescriptionItem.quantity.label("quantity"),
+            PrescriptionItem.price_at_visit.label("price_at_visit"),
+            amount_expr.label("amount"),
+        )
+        .join(Visit, Payment.visit_id == Visit.id)
+        .join(Patient, Visit.patient_id == Patient.id)
+        .join(Doctor, Visit.doctor_id == Doctor.id)
+        .join(Nurse, Payment.nurse_id == Nurse.id)
+        .join(PrescriptionItem, PrescriptionItem.visit_id == Visit.id)
+        .join(Drug, PrescriptionItem.drug_id == Drug.id)
+        .filter(Payment.payment_date >= start, Payment.payment_date < end)
+        .filter(Drug.type == 1)
+    )
+
+    if doctor_id:
+        q = q.filter(Visit.doctor_id == doctor_id)
+    if nurse_id:
+        q = q.filter(Payment.nurse_id == nurse_id)
+    if keyword:
+        q = q.filter(func.lower(Drug.name).contains(keyword.lower()) | func.lower(Drug.specification).contains(keyword.lower()))
+
+    total_records = q.count()
+    agg = q.with_entities(
+        func.coalesce(func.sum(amount_expr), 0.0),
+        func.coalesce(func.sum(PrescriptionItem.quantity), 0),
+    ).first()
+    total_amount = float(agg[0] or 0.0) if agg else 0.0
+    total_quantity = int(agg[1] or 0) if agg else 0
+
+    rows = (
+        q.order_by(Payment.payment_date.desc(), Visit.id.desc())
+        .offset((page - 1) * size)
+        .limit(size)
+        .all()
+    )
+
+    details = []
+    for r in rows:
+        details.append({
+            "date": r.payment_date.strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else "",
+            "visit_id": r.visit_id,
+            "patient_name": r.patient_name,
+            "student_id": r.student_id,
+            "doctor_name": r.doctor_name,
+            "nurse_name": r.nurse_name,
+            "payment_method": r.payment_method,
+            "drug_id": r.drug_id,
+            "drug_name": r.drug_name,
+            "specification": r.specification,
+            "unit": r.unit,
+            "is_scattered": bool(r.is_scattered),
+            "quantity": int(r.quantity or 0),
+            "price_at_visit": float(r.price_at_visit or 0.0),
+            "amount": float(r.amount or 0.0),
+        })
+
+    pages = int((total_records + size - 1) / size) if size else 1
+
+    return jsonify({
+        "data": {
+            "summary": {
+                "total_records": total_records,
+                "total_quantity": total_quantity,
+                "total_amount": total_amount,
+            },
+            "details": details,
+            "meta": {
+                "page": page,
+                "per_page": size,
+                "total": total_records,
+                "pages": pages,
+            },
+            "range": {
+                "start": start.strftime("%Y-%m-%d %H:%M:%S"),
+                "end": (end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
+            }
+        }
+    }), 200
+
+
+@bp.route("/admin/statistics/drug-outbound/export", methods=["GET"])
+@role_required(["admin", "nurse"])
+def export_drug_outbound_records():
+    from openpyxl import Workbook
+
+    def parse_dt(value, is_end=False):
+        if not value:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
+        for fmt in fmts:
+            try:
+                dt = datetime.strptime(s, fmt)
+                if fmt == "%Y-%m-%d":
+                    if is_end:
+                        return dt + timedelta(days=1)
+                    return dt
+                if is_end:
+                    return dt + timedelta(seconds=1)
+                return dt
+            except Exception:
+                continue
+        raise ValueError("Invalid date format")
+
+    def safe_text(val):
+        s = "" if val is None else str(val)
+        if s.startswith(("=", "+", "-", "@")):
+            return "'" + s
+        return s
+
+    start_time_str = request.args.get("start_time") or request.args.get("start_date")
+    end_time_str = request.args.get("end_time") or request.args.get("end_date")
+    if not start_time_str and not end_time_str:
+        today = datetime.now().strftime("%Y-%m-%d")
+        start_time_str = f"{today} 00:00:00"
+        end_time_str = f"{today} 23:59:59"
+
+    doctor_id = request.args.get("doctor_id", type=int)
+    nurse_id = request.args.get("nurse_id", type=int)
+    keyword = (request.args.get("keyword") or "").strip()
+
+    try:
+        start = parse_dt(start_time_str, is_end=False) if start_time_str else None
+        end = parse_dt(end_time_str, is_end=True) if end_time_str else None
+        if start is None and end is None:
+            raise ValueError("Invalid date format")
+        if start is None:
+            start = end - timedelta(days=1)
+        if end is None:
+            end = start + timedelta(days=1)
+    except Exception:
+        return jsonify({"msg": "Invalid date format"}), 400
+
+    Doctor = aliased(User)
+    Nurse = aliased(User)
+    amount_expr = func.coalesce(PrescriptionItem.new_amount, PrescriptionItem.amount)
+    q = (
+        db.session.query(
+            Payment.payment_date,
+            Payment.payment_method,
+            Visit.id.label("visit_id"),
+            Patient.name.label("patient_name"),
+            Patient.student_id.label("student_id"),
+            Doctor.real_name.label("doctor_name"),
+            Nurse.real_name.label("nurse_name"),
+            Drug.name.label("drug_name"),
+            Drug.specification.label("specification"),
+            Drug.unit.label("unit"),
+            PrescriptionItem.is_scattered.label("is_scattered"),
+            PrescriptionItem.quantity.label("quantity"),
+            PrescriptionItem.price_at_visit.label("price_at_visit"),
+            amount_expr.label("amount"),
+        )
+        .join(Visit, Payment.visit_id == Visit.id)
+        .join(Patient, Visit.patient_id == Patient.id)
+        .join(Doctor, Visit.doctor_id == Doctor.id)
+        .join(Nurse, Payment.nurse_id == Nurse.id)
+        .join(PrescriptionItem, PrescriptionItem.visit_id == Visit.id)
+        .join(Drug, PrescriptionItem.drug_id == Drug.id)
+        .filter(Payment.payment_date >= start, Payment.payment_date < end)
+        .filter(Drug.type == 1)
+    )
+    if doctor_id:
+        q = q.filter(Visit.doctor_id == doctor_id)
+    if nurse_id:
+        q = q.filter(Payment.nurse_id == nurse_id)
+    if keyword:
+        q = q.filter(func.lower(Drug.name).contains(keyword.lower()) | func.lower(Drug.specification).contains(keyword.lower()))
+
+    rows = q.order_by(Payment.payment_date.asc(), Visit.id.asc()).all()
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "outbound"
+    ws.append([
+        "出库时间",
+        "visit_id",
+        "患者姓名",
+        "学号",
+        "接诊医生",
+        "开药护士",
+        "支付方式",
+        "药品名称",
+        "规格",
+        "单位",
+        "是否零散",
+        "数量",
+        "单价",
+        "金额",
+    ])
+
+    total_amount = 0.0
+    total_quantity = 0
+    for r in rows:
+        qty = int(r.quantity or 0)
+        amt = float(r.amount or 0.0)
+        total_quantity += qty
+        total_amount += amt
+        ws.append([
+            safe_text(r.payment_date.strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else ""),
+            r.visit_id,
+            safe_text(r.patient_name),
+            safe_text(r.student_id),
+            safe_text(r.doctor_name),
+            safe_text(r.nurse_name),
+            safe_text(r.payment_method),
+            safe_text(r.drug_name),
+            safe_text(r.specification),
+            safe_text(r.unit),
+            "是" if bool(r.is_scattered) else "否",
+            qty,
+            round(float(r.price_at_visit or 0.0), 4),
+            round(amt, 2),
+        ])
+
+    ws2 = wb.create_sheet("summary")
+    ws2.append(["开始时间", safe_text(start.strftime("%Y-%m-%d %H:%M:%S"))])
+    ws2.append(["结束时间", safe_text((end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"))])
+    ws2.append(["doctor_id", safe_text(doctor_id if doctor_id else "")])
+    ws2.append(["nurse_id", safe_text(nurse_id if nurse_id else "")])
+    ws2.append(["keyword", safe_text(keyword)])
+    ws2.append(["记录数", len(rows)])
+    ws2.append(["合计数量", total_quantity])
+    ws2.append(["合计金额", round(total_amount, 2)])
+
+    stream = io.BytesIO()
+    wb.save(stream)
+    payload = stream.getvalue()
+
+    filename = f"drug_outbound_{start.strftime('%Y%m%d_%H%M')}_{(end - timedelta(seconds=1)).strftime('%Y%m%d_%H%M')}.xlsx"
+    resp = make_response(payload)
+    resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    resp.headers["Content-Disposition"] = f"attachment; filename={filename}"
+    return resp
 
 @bp.route('/admin/users', methods=['GET'])
 @role_required('admin')

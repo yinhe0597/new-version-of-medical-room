@@ -104,6 +104,11 @@ const routes = [
         path: 'statistics',
         name: 'NurseStatistics',
         component: () => import('@/views/nurse/Statistics.vue')
+      },
+      {
+        path: 'drug-outbound-report',
+        name: 'NurseDrugOutboundReport',
+        component: () => import('@/views/nurse/DrugOutboundReport.vue')
       }
     ]
   },
@@ -133,6 +138,11 @@ const routes = [
         path: 'statistics',
         name: 'Statistics',
         component: () => import('@/views/admin/Statistics.vue')
+      },
+      {
+        path: 'drug-outbound-report',
+        name: 'AdminDrugOutboundReport',
+        component: () => import('@/views/admin/DrugOutboundReport.vue')
       },
       {
         path: 'settings',
