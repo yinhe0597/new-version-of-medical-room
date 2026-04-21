@@ -4,6 +4,24 @@
 
 ## 医生端
 
+### 文本模板（主诉/体格检查/医生贴士）
+- 路径：`GET /doctor/templates`
+- 参数：
+  - `category`（必填）：`chief_complaint` | `physical_exam` | `doctor_advice`
+  - `q`（可选）：关键字，匹配 title/content
+- 响应：`{ "data": [{ "id": number, "category": string, "title": string, "content": string, "created_at": string, "updated_at": string }] }`
+
+- 路径：`POST /doctor/templates`
+- Body：`{ category, title, content }`
+- 响应：`{ "data": { "id": number } }`
+
+- 路径：`PUT /doctor/templates/<id>`
+- Body：`{ title, content }`
+- 响应：`{ "msg": "Template updated successfully" }`
+
+- 路径：`DELETE /doctor/templates/<id>`
+- 响应：`{ "msg": "Template deleted successfully" }`
+
 ### 诊断搜索
 - 路径：`GET /doctor/diagnoses/search`
 - 参数：
@@ -25,6 +43,18 @@
   - 响应头：`X-Response-Time-ms`（毫秒）
 - 限流：
   - 同一用户 10 秒内最多 30 次请求；超过返回 `429`
+
+### 医生就诊历史/详情（用于“病例复盘/重新开方”）
+- 路径：`GET /doctor/visits/history`
+- 参数（均可选）：
+  - `page`（默认 1）
+  - `size`（默认 20）
+  - `start_date`（格式 `YYYY-MM-DD`）
+- 响应：`{ data: [{ id, patient_id, patient_name, student_id, date, diagnosis, status, total_amount }], meta: { page, per_page, total, pages } }`
+
+- 路径：`GET /doctor/visits/<visit_id>`
+- 响应（节选）：
+  - `data.items[]` 包含 `drug_id/drug_type/drug_name/specification/usage/dosage/frequency/timing/days/quantity/price_at_visit/amount/is_scattered`
 
 ## 护士端
 
@@ -58,4 +88,3 @@
 - 说明：
   - 按 `序号` 分组
   - 若存在列 `库存/批号/入库时间` 会写入对应字段
-

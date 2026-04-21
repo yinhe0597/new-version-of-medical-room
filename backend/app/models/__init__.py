@@ -37,6 +37,7 @@ class User(db.Model):
 
     visits = db.relationship('Visit', backref='doctor', foreign_keys='Visit.doctor_id', lazy='dynamic')
     payments = db.relationship('Payment', backref='nurse', foreign_keys='Payment.nurse_id', lazy='dynamic')
+    text_templates = db.relationship('TextTemplate', backref='doctor', foreign_keys='TextTemplate.doctor_id', lazy='dynamic')
 
     def __repr__(self):
         return f'<User {self.username}>'
@@ -174,6 +175,18 @@ class DiagnosisDict(db.Model):
 
     def __repr__(self):
         return f'<DiagnosisDict {self.code} - {self.name}>'
+
+class TextTemplate(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    doctor_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True, nullable=False)
+    category = db.Column(db.String(50), index=True, nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    def __repr__(self):
+        return f'<TextTemplate {self.id}>'
 
 class Payment(db.Model):
     id = db.Column(db.Integer, primary_key=True)

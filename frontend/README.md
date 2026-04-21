@@ -1,5 +1,20 @@
-# Vue 3 + Vite
+# 前端（Vue 3 + Vite）
 
-This template should help get you started developing with Vue 3 in Vite. The template uses Vue 3 `<script setup>` SFCs, check out the [script setup docs](https://v3.vuejs.org/api/sfc-script-setup.html#sfc-script-setup) to learn more.
+## 环境要求
+- Node.js 18+
 
-Learn more about IDE Support for Vue in the [Vue Docs Scaling up Guide](https://vuejs.org/guide/scaling-up/tooling.html#ide-support).
+## 启动
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+## 端口与代理
+- 本地开发地址：`http://localhost:5888/`
+- API 前缀：`/api`
+- 本地开发代理：`/api` -> `http://127.0.0.1:5000`（见 `vite.config.js`）
+
+## 关键功能提示（医生端）
+- 历史就诊记录中，若状态为“已驳回”，操作列提供“重新开方”，可载入原处方草稿并重新提交。
+- 接诊页主诉/体格检查/医生贴士输入框末尾输入 `##` 可触发模板选择并快速插入。

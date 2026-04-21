@@ -9,10 +9,24 @@
         <div class="logo">
           <h3>医生工作站</h3>
         </div>
-        <el-menu-item index="/doctor/patient">
-          <el-icon><User /></el-icon>
-          <span>患者接诊</span>
-        </el-menu-item>
+        <el-sub-menu index="patient-reception">
+          <template #title>
+            <el-icon><User /></el-icon>
+            <span>患者接诊</span>
+          </template>
+          <el-menu-item index="/doctor/patient">
+            <span>接诊</span>
+          </el-menu-item>
+          <el-menu-item index="/doctor/templates/chief-complaint">
+            <span>主诉模板</span>
+          </el-menu-item>
+          <el-menu-item index="/doctor/templates/physical-exam">
+            <span>体格检查模板</span>
+          </el-menu-item>
+          <el-menu-item index="/doctor/templates/doctor-advice">
+            <span>医生贴士模板</span>
+          </el-menu-item>
+        </el-sub-menu>
         <el-menu-item index="/doctor/direct-purchase">
           <el-icon><ShoppingCart /></el-icon>
           <span>单独购药</span>

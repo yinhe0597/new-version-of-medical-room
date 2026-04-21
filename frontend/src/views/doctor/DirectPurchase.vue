@@ -375,7 +375,24 @@ const checkContraindications = ref(false)
 const consultationFee = ref(0.00) // 单独购药默认诊察费为0
 
 const usageOptions = ref(['口服', '外用', '静脉注射', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
-const dosageOptions = ref(['1片', '2片', '1粒', '2粒', '1支', '2支', '10ml', '20ml', '5g', '10g', '适量'])
+const buildDosageOptions = () => {
+  const out = []
+  const push = (v) => {
+    if (!v) return
+    if (!out.includes(v)) out.push(v)
+  }
+
+  const countUnits = ['片', '粒', '支']
+  countUnits.forEach(u => {
+    for (let i = 1; i <= 6; i++) push(`${i}${u}`)
+  })
+  ;['10ml', '20ml'].forEach(push)
+  ;['5g', '10g'].forEach(push)
+  push('适量')
+  return out
+}
+
+const dosageOptions = ref(buildDosageOptions())
 const frequencyOptions = ref(['每日1次', '每日2次', '每日3次', '每日4次', '每4小时1次', '每6小时1次', '每8小时1次', '每12小时1次', '必要时', '睡前'])
 
 const submitting = ref(false)

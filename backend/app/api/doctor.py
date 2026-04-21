@@ -2,7 +2,7 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, VISIT_STATUS_PENDING
+from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, VISIT_STATUS_PENDING
 from backend.app.utils.decorators import role_required
 from datetime import datetime, timezone
 import math
@@ -722,7 +722,9 @@ def get_visit_history():
     for visit in pagination.items:
         data.append({
             "id": visit.id,
+            "patient_id": visit.patient_id,
             "patient_name": visit.patient.name,
+            "student_id": visit.patient.student_id,
             "date": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
             "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis),
             "status": visit.status,
@@ -762,7 +764,9 @@ def get_doctor_visit_detail(visit_id):
     items = []
     for item in items_list:
         items.append({
+            "drug_id": item.drug_id,
             "drug_name": item.drug.name,
+            "drug_type": item.drug.type,
             "specification": item.drug.specification,
             "usage": item.usage,
             "dosage": item.dosage,
@@ -770,6 +774,7 @@ def get_doctor_visit_detail(visit_id):
             "timing": item.timing,
             "days": item.days,
             "quantity": item.quantity,
+            "price_at_visit": item.price_at_visit,
             "amount": item.amount,
             "is_scattered": item.is_scattered
         })
@@ -807,3 +812,115 @@ def get_doctor_visit_detail(visit_id):
             "items": items
         }
     }), 200
+
+_TEXT_TEMPLATE_CATEGORIES = {"chief_complaint", "physical_exam", "doctor_advice"}
+
+@bp.route('/doctor/templates', methods=['GET'])
+@jwt_required()
+@role_required('doctor')
+def list_text_templates():
+    user_id = get_jwt_identity()
+    try:
+        doctor_id = int(user_id)
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    category = (request.args.get('category') or '').strip()
+    if category not in _TEXT_TEMPLATE_CATEGORIES:
+        return jsonify({"msg": "Invalid category"}), 400
+
+    q = (request.args.get('q') or '').strip()
+    query = TextTemplate.query.filter_by(doctor_id=doctor_id, category=category)
+    if q:
+        like = f"%{q}%"
+        query = query.filter(or_(TextTemplate.title.ilike(like), TextTemplate.content.ilike(like)))
+
+    rows = query.order_by(TextTemplate.updated_at.desc(), TextTemplate.id.desc()).all()
+    data = []
+    for row in rows:
+        data.append({
+            "id": row.id,
+            "category": row.category,
+            "title": row.title,
+            "content": row.content,
+            "updated_at": _format_local_dt(row.updated_at, "%Y-%m-%d %H:%M:%S"),
+            "created_at": _format_local_dt(row.created_at, "%Y-%m-%d %H:%M:%S"),
+        })
+    return jsonify({"data": data}), 200
+
+@bp.route('/doctor/templates', methods=['POST'])
+@jwt_required()
+@role_required('doctor')
+def create_text_template():
+    user_id = get_jwt_identity()
+    try:
+        doctor_id = int(user_id)
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    data = request.get_json(silent=True) or {}
+    category = (data.get('category') or '').strip()
+    if category not in _TEXT_TEMPLATE_CATEGORIES:
+        return jsonify({"msg": "Invalid category"}), 400
+
+    title = (data.get('title') or '').strip()
+    content = (data.get('content') or '').strip()
+    if not title:
+        return jsonify({"msg": "Missing required field: title", "field": "title"}), 400
+    if not content:
+        return jsonify({"msg": "Missing required field: content", "field": "content"}), 400
+
+    tpl = TextTemplate(
+        doctor_id=doctor_id,
+        category=category,
+        title=title,
+        content=content,
+    )
+    db.session.add(tpl)
+    db.session.commit()
+    return jsonify({"data": {"id": tpl.id}}), 201
+
+@bp.route('/doctor/templates/<int:template_id>', methods=['PUT'])
+@jwt_required()
+@role_required('doctor')
+def update_text_template(template_id):
+    user_id = get_jwt_identity()
+    try:
+        doctor_id = int(user_id)
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    tpl = TextTemplate.query.filter_by(id=template_id, doctor_id=doctor_id).first()
+    if not tpl:
+        return jsonify({"msg": "Template not found"}), 404
+
+    data = request.get_json(silent=True) or {}
+    title = (data.get('title') or '').strip()
+    content = (data.get('content') or '').strip()
+    if not title:
+        return jsonify({"msg": "Missing required field: title", "field": "title"}), 400
+    if not content:
+        return jsonify({"msg": "Missing required field: content", "field": "content"}), 400
+
+    tpl.title = title
+    tpl.content = content
+    db.session.commit()
+    return jsonify({"msg": "Template updated successfully"}), 200
+
+@bp.route('/doctor/templates/<int:template_id>', methods=['DELETE'])
+@jwt_required()
+@role_required('doctor')
+def delete_text_template(template_id):
+    user_id = get_jwt_identity()
+    try:
+        doctor_id = int(user_id)
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    tpl = TextTemplate.query.filter_by(id=template_id, doctor_id=doctor_id).first()
+    if not tpl:
+        return jsonify({"msg": "Template not found"}), 404
+
+    db.session.delete(tpl)
+    db.session.commit()
+    return jsonify({"msg": "Template deleted successfully"}), 200

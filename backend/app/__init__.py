@@ -54,4 +54,12 @@ def create_app(config_class=None):
 
     from backend.app import models
 
+    try:
+        uri = app.config.get("SQLALCHEMY_DATABASE_URI") or ""
+        if isinstance(uri, str) and uri.startswith("sqlite"):
+            with app.app_context():
+                db.create_all()
+    except Exception:
+        pass
+
     return app
