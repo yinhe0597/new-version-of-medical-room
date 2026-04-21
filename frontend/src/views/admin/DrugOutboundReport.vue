@@ -52,6 +52,14 @@
         </div>
       </template>
 
+      <el-alert
+        type="info"
+        show-icon
+        :closable="false"
+        style="margin-bottom: 12px;"
+        title="说明：本报表按已结算的就诊记录统计（已生成 Payment）。仅统计护士执行发药/收款后产生的药品出库；未结算/未执行的处方不计入。"
+      />
+
       <el-row :gutter="20" class="summary-cards">
         <el-col :span="8">
           <el-card shadow="hover" class="bg-blue">
@@ -267,4 +275,3 @@ onMounted(() => {
   justify-content: flex-end;
 }
 </style>
-
