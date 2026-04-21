@@ -25,6 +25,10 @@
           <el-icon><DataLine /></el-icon>
           <span>统计报表</span>
         </el-menu-item>
+        <el-menu-item index="/admin/drug-outbound-report">
+          <el-icon><DataLine /></el-icon>
+          <span>药品出库报表</span>
+        </el-menu-item>
         <el-menu-item index="/admin/settings">
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>
