@@ -1,8 +1,11 @@
-from flask import Flask
+from flask import Flask, send_from_directory
 from flask_sqlalchemy import SQLAlchemy
 from flask_migrate import Migrate
 from flask_jwt_extended import JWTManager
+from flask_cors import CORS
 import sqlalchemy
+import os
+import sys
 
 db = SQLAlchemy()
 migrate = Migrate()
@@ -40,6 +43,9 @@ def create_app(config_class=None):
     app = Flask(__name__)
     app.config.from_object(config_class)
 
+    # 初始化CORS
+    CORS(app)
+
     db.init_app(app)
     migrate.init_app(app, db)
     jwt.init_app(app)
@@ -61,5 +67,23 @@ def create_app(config_class=None):
                 db.create_all()
     except Exception:
         pass
+
+    # 静态文件和前端文件支持
+    @app.route('/static/<path:path>')
+    def serve_static(path):
+        if hasattr(sys, '_MEIPASS'):
+            static_dir = os.path.join(sys._MEIPASS, 'frontend', 'dist', 'assets')
+        else:
+            static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist', 'assets')
+        return send_from_directory(static_dir, path)
+
+    @app.route('/')
+    @app.route('/<path:path>')
+    def serve_frontend(path='index.html'):
+        if hasattr(sys, '_MEIPASS'):
+            dist_dir = os.path.join(sys._MEIPASS, 'frontend', 'dist')
+        else:
+            dist_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist')
+        return send_from_directory(dist_dir, path)
 
     return app

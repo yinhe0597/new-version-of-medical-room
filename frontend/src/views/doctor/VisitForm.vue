@@ -92,6 +92,12 @@
             <el-table :data="prescriptionItems" style="width: 100%; margin-top: 20px" border size="small">
               <el-table-column prop="name" label="药品名称" min-width="120" />
               <el-table-column prop="specification" label="规格" width="100" />
+              <el-table-column label="零散用药" width="80">
+                <template #default="scope">
+                  <el-checkbox v-model="scope.row.is_scattered" v-if="scope.row.type === 1" />
+                  <span v-else style="color: #909399; font-size: 12px;">-</span>
+                </template>
+              </el-table-column>
               <el-table-column label="用法/用量" min-width="180">
                 <template #default="scope">
                   <div class="usage-inputs" v-if="scope.row.type === 1">
@@ -152,6 +158,20 @@
                     </div>
                   </template>
                 </el-table-column>
+              <el-table-column label="天数" width="80">
+                <template #default="scope">
+                  <el-select 
+                    v-model="scope.row.days" 
+                    placeholder="天数" 
+                    size="small" 
+                    style="width: 100%"
+                    v-if="scope.row.type === 1"
+                  >
+                    <el-option v-for="day in 7" :key="day" :label="day + '天'" :value="day" />
+                  </el-select>
+                  <span v-else style="color: #909399; font-size: 12px;">-</span>
+                </template>
+              </el-table-column>
               <el-table-column label="数量" width="120">
                 <template #default="scope">
                   <el-input-number 
@@ -279,7 +299,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import request from '@/api/request'
 import { ElMessage } from 'element-plus'
@@ -601,6 +621,47 @@ const handleDrugSelect = (val) => {
 const removeDrug = (index) => {
   prescriptionItems.value.splice(index, 1)
 }
+
+// 监听处方项目变化，自动计算零散药物数量
+watch(
+  prescriptionItems,
+  (newItems) => {
+    newItems.forEach(item => {
+      if (item.type === 1 && item.is_scattered) {
+        // 解析用量
+        let dosageAmount = 0
+        if (item.dosage.includes('半')) {
+          dosageAmount = 0.5
+        } else {
+          const dosageMatch = item.dosage.match(/(\d+)([片粒袋包支瓶贴喷丸次滴])/)
+          if (!dosageMatch) return
+          dosageAmount = parseFloat(dosageMatch[1])
+          if (!dosageAmount) return
+        }
+        
+        // 解析频次
+        let frequencyAmount = 1
+        const frequencyMatch = item.frequency.match(/每日(\d+)次/)
+        if (frequencyMatch) {
+          frequencyAmount = parseFloat(frequencyMatch[1])
+        } else if (item.frequency.includes('每4小时')) {
+          frequencyAmount = 6
+        } else if (item.frequency.includes('每6小时')) {
+          frequencyAmount = 4
+        } else if (item.frequency.includes('每8小时')) {
+          frequencyAmount = 3
+        } else if (item.frequency.includes('每12小时')) {
+          frequencyAmount = 2
+        }
+        
+        // 计算总数量
+        const days = item.days || 1
+        item.quantity = Math.round(dosageAmount * frequencyAmount * days)
+      }
+    })
+  },
+  { deep: true }
+)
 
 const resetForm = () => {
   visitForm.value = {
