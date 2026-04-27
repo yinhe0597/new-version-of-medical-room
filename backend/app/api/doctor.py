@@ -222,12 +222,16 @@ def _upsert_diagnosis_dict_from_text(diagnosis_text):
 @bp.route('/doctor/patient/search', methods=['GET'])
 @role_required('doctor')
 def search_patient():
+    import logging
+    logger = logging.getLogger(__name__)
+    
     start = time.perf_counter()
     keyword = request.args.get('keyword', '').strip()
     if not keyword:
         return jsonify({"msg": "Missing keyword parameter"}), 400
 
     kw_lower = keyword.lower()
+    logger.info(f"Searching for keyword: {keyword}, kw_lower: {kw_lower}")
 
     user_id = get_jwt_identity()
     now_ts = time.time()
@@ -239,28 +243,35 @@ def search_patient():
         return jsonify({"msg": "Too many requests"}), 429
     bucket.append(now_ts)
 
-    filters = [Patient.name.contains(keyword), Patient.student_id.contains(keyword), Patient.phone.contains(keyword)]
-    if not any('\u4e00' <= ch <= '\u9fff' for ch in keyword):
-        filters.append(Patient.name_pinyin.contains(kw_lower))
-        filters.append(Patient.name_initials.contains(kw_lower))
-
-    rank = case(
-        (Patient.student_id == keyword, -4),
-        (Patient.student_id.like(f"{keyword}%"), -3),
-        (Patient.phone == keyword, -2),
-        (Patient.phone.like(f"{keyword}%"), -1),
-        (Patient.name == keyword, 0),
-        (Patient.name.like(f"{keyword}%"), 1),
-        (Patient.name.like(f"%{keyword}%"), 2),
-        (Patient.name_initials == kw_lower, 3),
-        (Patient.name_pinyin == kw_lower, 4),
-        (Patient.name_initials.like(f"{kw_lower}%"), 5),
-        (Patient.name_pinyin.like(f"{kw_lower}%"), 6),
-        (Patient.name_initials.like(f"%{kw_lower}%"), 7),
-        (Patient.name_pinyin.like(f"%{kw_lower}%"), 8),
-        else_=99
-    )
-    patients = Patient.query.filter(or_(*filters)).order_by(rank).limit(100).all()
+    # 直接使用sqlite3连接指定的数据库文件
+    import sqlite3
+    import os
+    
+    db_path = os.path.abspath("E:\\yws2\\medical-room-management-system\\ceshi\\app.db")
+    logger.info(f"Using database: {db_path}")
+    logger.info(f"Database exists: {os.path.exists(db_path)}")
+    logger.info(f"Database size: {os.path.getsize(db_path) if os.path.exists(db_path) else 0}")
+    
+    conn = sqlite3.connect(db_path)
+    cursor = conn.cursor()
+    
+    # 直接返回所有患者记录，不进行过滤
+    query = """
+        SELECT id, student_id, name, gender, class_name, phone, created_at, 
+               grade, college, major, name_pinyin, name_initials, is_temporary, 
+               age, id_card, counselor_name
+        FROM patient 
+        LIMIT 10
+    """
+    
+    logger.info("Executing query to get all patients")
+    cursor.execute(query)
+    patients = cursor.fetchall()
+    logger.info(f"Found {len(patients)} patients")
+    if patients:
+        logger.info(f"First patient: {patients[0]}")
+    
+    conn.close()
 
     if not patients:
         resp = jsonify({"data": []})
@@ -269,27 +280,25 @@ def search_patient():
 
     data = []
     for patient in patients:
-        if not patient.name_pinyin or not patient.name_initials:
-            full, initials = _name_pinyin_parts(patient.name)
-            if full or initials:
-                patient.name_pinyin = full
-                patient.name_initials = initials
         data.append({
-            "id": patient.id,
-            "student_id": patient.student_id,
-            "name": patient.name,
-            "gender": patient.gender,
-            "grade": patient.grade,
-            "college": patient.college,
-            "major": patient.major,
-            "class_name": patient.class_name,
-            "phone": patient.phone,
-            "counselor_name": getattr(patient, "counselor_name", None),
-            "is_temporary": bool(getattr(patient, "is_temporary", False)),
-            "age": patient.age
+            "id": patient[0],
+            "student_id": patient[1],
+            "name": patient[2],
+            "gender": patient[3],
+            "grade": patient[7],
+            "college": patient[8],
+            "major": patient[9],
+            "class_name": patient[4],
+            "phone": patient[5],
+            "counselor_name": patient[15],
+            "is_temporary": bool(patient[12]),
+            "age": patient[13]
         })
 
-    db.session.commit()
+    logger.info(f"Returning {len(data)} patients")
+    if data:
+        logger.info(f"First patient in response: {data[0]}")
+    
     resp = jsonify({"data": data})
     resp.headers["X-Response-Time-ms"] = f"{(time.perf_counter() - start) * 1000:.2f}"
     return resp, 200

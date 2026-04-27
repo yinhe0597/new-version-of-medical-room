@@ -128,6 +128,9 @@ python -m venv .venv
 # 激活虚拟环境 (Windows: .venv\Scripts\activate | Linux/Mac: source .venv/bin/activate)
 pip install -r requirements.txt
 
+# 安装CORS扩展（新增）
+pip install flask-cors
+
 # 初始化数据库结构与基础账号
 python init_db.py
 

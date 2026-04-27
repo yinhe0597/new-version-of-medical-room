@@ -63,8 +63,11 @@ def create_app(config_class=None):
     try:
         uri = app.config.get("SQLALCHEMY_DATABASE_URI") or ""
         if isinstance(uri, str) and uri.startswith("sqlite"):
-            with app.app_context():
-                db.create_all()
+            # 检查SQLite数据库文件是否存在
+            db_path = uri.replace("sqlite:///", "")
+            if not os.path.exists(db_path):
+                with app.app_context():
+                    db.create_all()
     except Exception:
         pass
 
