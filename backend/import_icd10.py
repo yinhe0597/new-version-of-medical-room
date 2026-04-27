@@ -37,13 +37,25 @@ def import_data(file_path, sheet=None):
 
     print("Data loaded. Processing...")
     
+    # 创建一个应用实例，但是使用应用运行时的数据库文件
+    import os
+    import sys
+    
+    # 设置环境变量，指定数据库文件路径
+    db_path = r'E:\yws2\medical-room-management-system\backend\dist\medical_room_system_new\_internal\var\backend.app-instance\app.db'
+    os.environ['SQLALCHEMY_DATABASE_URI'] = f'sqlite:///{db_path}'
+    
     app = create_app()
     with app.app_context():
-        existing_by_code = {
-            (d.code or ""): d
-            for d in DiagnosisDict.query.filter(DiagnosisDict.code.isnot(None)).all()
-            if (d.code or "").strip()
-        }
+        # 确保诊断表存在
+        from backend.app.models import DiagnosisDict
+        db.create_all()
+        
+        existing_by_code = {}
+        # 先清空表，然后重新导入所有数据
+        DiagnosisDict.query.delete()
+        db.session.commit()
+        print("Table cleared. Starting fresh import...")
 
         inserted = 0
         updated = 0
@@ -61,21 +73,9 @@ def import_data(file_path, sheet=None):
             processed += 1
             py = get_pinyin_variants(name)
 
-            existing = existing_by_code.get(code)
-            if existing is None:
-                db.session.add(DiagnosisDict(code=code, name=name, pinyin=py))
-                existing_by_code[code] = True
-                inserted += 1
-            else:
-                changed = False
-                if (existing.name or "").strip() != name:
-                    existing.name = name
-                    changed = True
-                if (existing.pinyin or "").strip() != py:
-                    existing.pinyin = py
-                    changed = True
-                if changed:
-                    updated += 1
+            # 直接插入新记录
+            db.session.add(DiagnosisDict(code=code, name=name, pinyin=py))
+            inserted += 1
 
             if processed % 2000 == 0:
                 db.session.commit()

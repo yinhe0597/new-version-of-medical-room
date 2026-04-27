@@ -39,9 +39,16 @@ service.interceptors.response.use(
             const isLoginRequest = requestUrl.includes('/auth/login')
             const isOnLoginPage = window.location.pathname === '/login'
             if (!isLoginRequest && !isOnLoginPage) {
-                localStorage.removeItem('token')
-                localStorage.removeItem('user')
-                window.location.href = '/login'
+                // 只在确认是认证失败时才清除token
+                const errorData = error.response.data
+                if (errorData && (errorData.msg === 'Bad username or password' || errorData.msg === 'Token has expired')) {
+                    localStorage.removeItem('token')
+                    localStorage.removeItem('user')
+                    window.location.href = '/login'
+                } else {
+                    // 其他401错误可能是权限问题，不清除token
+                    return Promise.reject({ msg: '权限不足', code: 401 })
+                }
             }
         }
         const payload = error.response.data
@@ -50,6 +57,7 @@ service.interceptors.response.use(
         }
         return Promise.reject({ msg: payload || 'Request failed', code: error.response.status })
     }
+    // 网络错误处理，不清除token
     const rawMessage = (error && error.message) ? String(error.message) : ''
     const isTimeout = rawMessage.toLowerCase().includes('timeout')
     const msg = isTimeout
