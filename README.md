@@ -1,6 +1,6 @@
 # 校医务室诊疗管理系统 (Medical Room Management System)
 
-当前版本：**V2.0.0**
+当前版本：**v4.27.14.42**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black)
@@ -68,6 +68,13 @@
 ![营收报表](docs/images/revenue-report.png)
 
 ## 更新日志
+
+### v4.27.14.42（2026-04-27）
+
+- 医生端：新增“零散用药”选项，勾选后自动计算药物数量
+- 医生端：增加用药天数选择（1-7天），支持自动计算总用量
+- 医生端：支持半片、半粒等用量选项，自动将系数设置为0.5
+- 后端：添加CORS支持，解决前后端跨域问题
 
 ### V2.0.0（2026-04-21）
 
