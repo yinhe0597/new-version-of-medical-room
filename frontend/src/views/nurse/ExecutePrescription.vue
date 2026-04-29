@@ -22,24 +22,69 @@
           </el-descriptions-item>
         </el-descriptions>
 
-        <el-table :data="visitDetail.items" border stripe class="mb-20">
-          <el-table-column prop="drug_name" label="名称" />
+        <el-card v-if="hasServiceItems && canModify" class="mb-20">
+          <div style="margin-bottom: 15px;">
+            <span style="font-weight: bold; margin-right: 10px;">诊疗项目管理</span>
+            <el-button size="small" type="primary" @click="openAddServiceDialog">
+              + 添加诊疗项目
+            </el-button>
+          </div>
+          
+          <el-table :data="serviceItems" border stripe>
+            <el-table-column prop="drug_name" label="项目名称" />
+            <el-table-column prop="specification" label="规格" />
+            <el-table-column prop="quantity" label="数量" width="100">
+              <template #default="scope">
+                <el-input-number 
+                  v-if="canModify"
+                  v-model="scope.row.quantity" 
+                  :min="1" 
+                  :max="99"
+                  :disabled="!canModify"
+                  @change="handleServiceQuantityChange(scope.row)"
+                />
+                <span v-else>{{ scope.row.quantity }}</span>
+              </template>
+            </el-table-column>
+            <el-table-column label="单价" width="120">
+              <template #default="scope">¥ {{ scope.row.unit_price.toFixed(2) }}</template>
+            </el-table-column>
+            <el-table-column label="金额" width="120">
+              <template #default="scope">¥ {{ scope.row.amount.toFixed(2) }}</template>
+            </el-table-column>
+            <el-table-column label="操作" width="100">
+              <template #default="scope">
+                <el-button 
+                  size="small" 
+                  type="danger" 
+                  @click="handleDeleteService(scope.row)"
+                  :disabled="!canModify"
+                >
+                  删除
+                </el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+          
+          <div v-if="serviceItems.length === 0 && hasServiceItems" style="text-align: center; color: #909399; padding: 20px;">
+            暂无诊疗项目
+          </div>
+        </el-card>
+
+        <el-table :data="drugItems" border stripe class="mb-20">
+          <el-table-column prop="drug_name" label="药品名称" />
           <el-table-column prop="specification" label="规格" />
           <el-table-column label="用法" width="200">
             <template #default="scope">
-              <span v-if="scope.row.type === 1">
-                {{ formatUsageLine(scope.row) }}
-              </span>
-              <span v-else style="color: #909399">-</span>
+              <span>{{ formatUsageLine(scope.row) }}</span>
             </template>
           </el-table-column>
           <el-table-column prop="quantity" label="数量" width="100" />
           <el-table-column label="库存状态" width="120">
             <template #default="scope">
-              <el-tag v-if="scope.row.type === 1" :type="scope.row.stock >= getStockNeeded(scope.row) ? 'success' : 'danger'">
+              <el-tag :type="scope.row.stock >= getStockNeeded(scope.row) ? 'success' : 'danger'">
                 {{ scope.row.stock >= getStockNeeded(scope.row) ? '充足' : '不足' }}
               </el-tag>
-              <el-tag v-else type="info">不限</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="单价" width="120">
@@ -175,6 +220,39 @@
         </el-button>
       </template>
     </el-dialog>
+
+    <el-dialog v-model="showAddService" title="添加诊疗项目" width="500px">
+      <el-form :model="addServiceForm" label-width="90px">
+        <el-form-item label="选择项目">
+          <el-select
+            v-model="addServiceForm.drug_id"
+            filterable
+            remote
+            reserve-keyword
+            placeholder="输入诊疗项目名称搜索"
+            :remote-method="searchServices"
+            :loading="loadingServices"
+            style="width: 100%"
+          >
+            <el-option
+              v-for="item in serviceOptions"
+              :key="item.id"
+              :label="`${item.name} [${item.specification}] - ¥${item.price.toFixed(2)}`"
+              :value="item.id"
+            />
+          </el-select>
+        </el-form-item>
+        <el-form-item label="数量">
+          <el-input-number v-model="addServiceForm.quantity" :min="1" :max="99" :step="1" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="showAddService = false">取消</el-button>
+        <el-button type="primary" :loading="addingService" @click="submitAddService" :disabled="!canSubmitAddService">
+          添加
+        </el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -207,6 +285,15 @@ const modifyForm = reactive({
   current_price: 0,
   new_price: null,
   modify_reason: ''
+})
+
+const showAddService = ref(false)
+const addingService = ref(false)
+const loadingServices = ref(false)
+const serviceOptions = ref([])
+const addServiceForm = reactive({
+  drug_id: null,
+  quantity: 1
 })
 
 const getStatusText = (status) => {
@@ -262,6 +349,20 @@ const stockSufficient = computed(() => {
 
 const canModify = computed(() => {
   return Boolean(visitDetail.value && visitDetail.value.status === 'nurse_verified')
+})
+
+const serviceItems = computed(() => {
+  if (!visitDetail.value) return []
+  return visitDetail.value.items.filter(item => item.type === 2)
+})
+
+const drugItems = computed(() => {
+  if (!visitDetail.value) return []
+  return visitDetail.value.items.filter(item => item.type !== 2)
+})
+
+const hasServiceItems = computed(() => {
+  return serviceItems.value.length > 0 || canModify.value
 })
 
 const canExecute = computed(() => {
@@ -404,6 +505,77 @@ const goBack = () => {
 const getPaymentMethodText = (val) => {
   const map = { 'cash': '现金', 'card': '一卡通', 'other': '其他' }
   return map[val]
+}
+
+const openAddServiceDialog = () => {
+  addServiceForm.drug_id = null
+  addServiceForm.quantity = 1
+  serviceOptions.value = []
+  showAddService.value = true
+}
+
+const searchServices = async (keyword) => {
+  if (!keyword.trim()) return
+  loadingServices.value = true
+  try {
+    const res = await request.get(`/nurse/services/search?keyword=${encodeURIComponent(keyword)}`)
+    serviceOptions.value = res.data || []
+  } catch (error) {
+    ElMessage.error(error.msg || '搜索失败')
+  } finally {
+    loadingServices.value = false
+  }
+}
+
+const canSubmitAddService = computed(() => {
+  return addServiceForm.drug_id && addServiceForm.quantity > 0
+})
+
+const submitAddService = async () => {
+  if (!canSubmitAddService.value) return
+  addingService.value = true
+  try {
+    await request.post(`/nurse/visits/${visitId}/service-items`, {
+      drug_id: addServiceForm.drug_id,
+      quantity: addServiceForm.quantity
+    })
+    ElMessage.success('添加成功')
+    showAddService.value = false
+    await fetchDetail()
+  } catch (error) {
+    ElMessage.error(error.msg || '添加失败')
+  } finally {
+    addingService.value = false
+  }
+}
+
+const handleServiceQuantityChange = async (item) => {
+  if (!item.item_id) return
+  try {
+    await request.put(`/nurse/visits/${visitId}/service-items/${item.item_id}`, {
+      quantity: item.quantity
+    })
+    await fetchDetail()
+  } catch (error) {
+    ElMessage.error(error.msg || '修改失败')
+    await fetchDetail()
+  }
+}
+
+const handleDeleteService = async (item) => {
+  if (!item.item_id) return
+  await ElMessage.confirm('确定要删除这个诊疗项目吗？', '提示', {
+    confirmButtonText: '确定',
+    cancelButtonText: '取消',
+    type: 'warning'
+  })
+  try {
+    await request.delete(`/nurse/visits/${visitId}/service-items/${item.item_id}`)
+    ElMessage.success('删除成功')
+    await fetchDetail()
+  } catch (error) {
+    ElMessage.error(error.msg || '删除失败')
+  }
 }
 
 onMounted(() => {

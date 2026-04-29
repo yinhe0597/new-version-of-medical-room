@@ -772,6 +772,177 @@ def modify_prescription_item(visit_id, item_id):
         }
     }), 200
 
+
+@bp.route('/nurse/visits/<int:visit_id>/service-items', methods=['POST'])
+@role_required('nurse')
+def add_service_item(visit_id):
+    visit = Visit.query.options(db.joinedload(Visit.payment)).get_or_404(visit_id)
+
+    if visit.status != VISIT_STATUS_NURSE_VERIFIED:
+        return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} to add service items"}), 400
+
+    if visit.payment is not None or Payment.query.filter_by(visit_id=visit.id).first() is not None:
+        return jsonify({"msg": "Visit already has payment, cannot add service items"}), 400
+
+    data = request.get_json() or {}
+    drug_id = data.get('drug_id')
+    quantity = data.get('quantity')
+
+    if drug_id is None:
+        return jsonify({"msg": "Missing drug_id"}), 400
+
+    try:
+        quantity = int(quantity) if quantity is not None else 1
+    except Exception:
+        return jsonify({"msg": "Invalid quantity"}), 400
+
+    if quantity <= 0:
+        return jsonify({"msg": "Quantity must be > 0"}), 400
+
+    drug = Drug.query.get_or_404(drug_id)
+    if drug.type != 2:
+        return jsonify({"msg": "Only service items (type=2) can be added by nurse"}), 400
+
+    user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    amount = float(drug.price or 0) * quantity
+    item = PrescriptionItem(
+        visit_id=visit.id,
+        drug_id=drug.id,
+        quantity=quantity,
+        price_at_visit=float(drug.price or 0),
+        amount=amount,
+        modified_by=int(user_id),
+        modified_at=now,
+        modify_reason="护士新增诊疗项目"
+    )
+    db.session.add(item)
+
+    visit.total_amount = _recompute_visit_total(visit)
+    db.session.commit()
+
+    return jsonify({
+        "data": {
+            "visit_id": visit.id,
+            "item_id": item.id,
+            "drug_name": drug.name,
+            "type": drug.type,
+            "specification": drug.specification,
+            "quantity": item.quantity,
+            "unit_price": item.price_at_visit,
+            "amount": item.amount,
+            "total_amount": visit.total_amount,
+        }
+    }), 201
+
+
+@bp.route('/nurse/visits/<int:visit_id>/service-items/<int:item_id>', methods=['PUT'])
+@role_required('nurse')
+def update_service_item(visit_id, item_id):
+    visit = Visit.query.options(db.joinedload(Visit.payment)).get_or_404(visit_id)
+
+    if visit.status != VISIT_STATUS_NURSE_VERIFIED:
+        return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} to update service items"}), 400
+
+    if visit.payment is not None or Payment.query.filter_by(visit_id=visit.id).first() is not None:
+        return jsonify({"msg": "Visit already has payment, cannot update service items"}), 400
+
+    item = PrescriptionItem.query.filter_by(id=item_id, visit_id=visit.id).first()
+    if item is None:
+        return jsonify({"msg": "Prescription item not found"}), 404
+
+    if item.drug.type != 2:
+        return jsonify({"msg": "Only service items (type=2) can be modified by nurse"}), 400
+
+    data = request.get_json() or {}
+    quantity = data.get('quantity')
+
+    if quantity is None:
+        return jsonify({"msg": "Missing quantity"}), 400
+
+    try:
+        quantity = int(quantity)
+    except Exception:
+        return jsonify({"msg": "Invalid quantity"}), 400
+
+    if quantity <= 0:
+        return jsonify({"msg": "Quantity must be > 0"}), 400
+
+    user_id = get_jwt_identity()
+    now = datetime.utcnow()
+
+    item.quantity = quantity
+    item.amount = float(item.price_at_visit or 0) * quantity
+    item.modified_by = int(user_id)
+    item.modified_at = now
+    item.modify_reason = "护士修改诊疗项目数量"
+
+    visit.total_amount = _recompute_visit_total(visit)
+    db.session.commit()
+
+    return jsonify({
+        "data": {
+            "visit_id": visit.id,
+            "item_id": item.id,
+            "quantity": item.quantity,
+            "amount": item.amount,
+            "total_amount": visit.total_amount,
+        }
+    }), 200
+
+
+@bp.route('/nurse/visits/<int:visit_id>/service-items/<int:item_id>', methods=['DELETE'])
+@role_required('nurse')
+def delete_service_item(visit_id, item_id):
+    visit = Visit.query.options(db.joinedload(Visit.payment)).get_or_404(visit_id)
+
+    if visit.status != VISIT_STATUS_NURSE_VERIFIED:
+        return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} to delete service items"}), 400
+
+    if visit.payment is not None or Payment.query.filter_by(visit_id=visit.id).first() is not None:
+        return jsonify({"msg": "Visit already has payment, cannot delete service items"}), 400
+
+    item = PrescriptionItem.query.filter_by(id=item_id, visit_id=visit.id).first()
+    if item is None:
+        return jsonify({"msg": "Prescription item not found"}), 404
+
+    if item.drug.type != 2:
+        return jsonify({"msg": "Only service items (type=2) can be deleted by nurse"}), 400
+
+    db.session.delete(item)
+    visit.total_amount = _recompute_visit_total(visit)
+    db.session.commit()
+
+    return jsonify({
+        "data": {
+            "visit_id": visit.id,
+            "total_amount": visit.total_amount,
+        }
+    }), 200
+
+
+@bp.route('/nurse/services/search', methods=['GET'])
+@role_required('nurse')
+def search_services():
+    keyword = (request.args.get('keyword') or "").strip()
+    query = Drug.query.filter(Drug.type == 2, Drug.status == 1)
+    if keyword:
+        query = query.filter(or_(Drug.name.contains(keyword), Drug.specification.contains(keyword)))
+    services = query.limit(50).all()
+
+    data = []
+    for service in services:
+        data.append({
+            "id": service.id,
+            "name": service.name,
+            "specification": service.specification,
+            "price": service.price,
+            "unit": service.unit,
+        })
+
+    return jsonify({"data": data}), 200
+
 @bp.route('/nurse/visits/<int:visit_id>/execute', methods=['POST'])
 @role_required('nurse')
 def execute_visit(visit_id):
