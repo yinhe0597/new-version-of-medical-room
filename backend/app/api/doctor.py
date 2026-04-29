@@ -250,26 +250,37 @@ def search_patient():
     db_path = os.path.abspath("E:\\yws2\\medical-room-management-system\\ceshi\\app.db")
     logger.info(f"Using database: {db_path}")
     logger.info(f"Database exists: {os.path.exists(db_path)}")
-    logger.info(f"Database size: {os.path.getsize(db_path) if os.path.exists(db_path) else 0}")
     
     conn = sqlite3.connect(db_path)
     cursor = conn.cursor()
     
-    # 直接返回所有患者记录，不进行过滤
+    # 添加完整的搜索过滤逻辑
     query = """
         SELECT id, student_id, name, gender, class_name, phone, created_at, 
                grade, college, major, name_pinyin, name_initials, is_temporary, 
                age, id_card, counselor_name
         FROM patient 
-        LIMIT 10
+        WHERE (name LIKE ? OR 
+               student_id LIKE ? OR 
+               phone LIKE ? OR 
+               name_pinyin LIKE ? OR 
+               name_initials LIKE ?)
+        LIMIT 50
     """
     
-    logger.info("Executing query to get all patients")
-    cursor.execute(query)
+    # 构建搜索参数
+    search_params = [
+        f"%{keyword}%",  # 姓名
+        f"%{keyword}%",  # 学号
+        f"%{keyword}%",  # 电话
+        f"%{kw_lower}%",  # 拼音全称
+        f"%{kw_lower}%"   # 拼音首字母
+    ]
+    
+    logger.info(f"Executing search query with params: {search_params}")
+    cursor.execute(query, search_params)
     patients = cursor.fetchall()
-    logger.info(f"Found {len(patients)} patients")
-    if patients:
-        logger.info(f"First patient: {patients[0]}")
+    logger.info(f"Found {len(patients)} patients matching keyword")
     
     conn.close()
 
@@ -296,8 +307,6 @@ def search_patient():
         })
 
     logger.info(f"Returning {len(data)} patients")
-    if data:
-        logger.info(f"First patient in response: {data[0]}")
     
     resp = jsonify({"data": data})
     resp.headers["X-Response-Time-ms"] = f"{(time.perf_counter() - start) * 1000:.2f}"
