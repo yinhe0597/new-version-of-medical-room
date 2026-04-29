@@ -637,8 +637,9 @@ def create_visit():
 
         is_scattered = bool(item.get('is_scattered', False)) if (drug.type == 1 or drug.type is None) else False
         
+        # 不支持散装的药品，自动降级为普通售卖
         if is_scattered and not drug.has_scattered:
-            return jsonify({"msg": f"Drug {drug.name} does not support scattered sale"}), 400
+            is_scattered = False
 
         # Calculate prices and costs
         if is_scattered:
@@ -746,7 +747,12 @@ def get_visit_history():
             "date": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
             "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis),
             "status": visit.status,
-            "total_amount": visit.total_amount
+            "total_amount": visit.total_amount,
+            "medical_record_incomplete": (
+                not (visit.chief_complaint or '').strip()
+                and not (visit.present_illness or '').strip()
+                and not (visit.physical_exam or '').strip()
+            )
         })
 
     return jsonify({
@@ -830,6 +836,34 @@ def get_doctor_visit_detail(visit_id):
             "items": items
         }
     }), 200
+
+@bp.route('/doctor/visits/<int:visit_id>/medical-record', methods=['PUT'])
+@jwt_required()
+@role_required('doctor')
+def update_visit_medical_record(visit_id):
+    user_id = get_jwt_identity()
+    visit = Visit.query.get_or_404(visit_id)
+
+    if visit.doctor_id != int(user_id):
+        return jsonify({"msg": "Unauthorized to update this visit"}), 403
+
+    if visit.status == 'rejected':
+        return jsonify({"msg": "Visit status does not allow modification"}), 400
+
+    data = request.get_json(silent=True) or {}
+    allowed_fields = ['chief_complaint', 'present_illness', 'past_history', 'physical_exam', 'doctor_advice']
+    updated = False
+    for field in allowed_fields:
+        value = (data.get(field) or '').strip()
+        if value:
+            setattr(visit, field, value)
+            updated = True
+
+    if not updated:
+        return jsonify({"msg": "No valid fields to update"}), 400
+
+    db.session.commit()
+    return jsonify({"msg": "Medical record updated successfully"}), 200
 
 _TEXT_TEMPLATE_CATEGORIES = {"chief_complaint", "physical_exam", "doctor_advice"}
 
