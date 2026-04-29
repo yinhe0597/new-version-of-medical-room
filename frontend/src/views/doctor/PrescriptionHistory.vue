@@ -32,10 +32,19 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="200" fixed="right">
+        <el-table-column label="操作" width="220" fixed="right">
           <template #default="scope">
             <el-button size="small" type="primary" link @click="openCaseReview(scope.row.id)">
               病例复盘
+            </el-button>
+            <el-button
+              v-if="scope.row.medical_record_incomplete && scope.row.status !== 'rejected'"
+              size="small"
+              type="success"
+              link
+              @click="openSupplementDialog(scope.row)"
+            >
+              补充病历
             </el-button>
             <el-button
               v-if="scope.row.status === 'rejected'"
@@ -111,6 +120,31 @@
         <el-button @click="dialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 补充病历弹窗 -->
+    <el-dialog v-model="supplementDialogVisible" title="补充病历" width="700px">
+      <el-form :model="supplementForm" label-position="top">
+        <el-form-item label="主诉">
+          <el-input v-model="supplementForm.chief_complaint" type="textarea" :rows="2" placeholder="请填写主诉"></el-input>
+        </el-form-item>
+        <el-form-item label="现病史">
+          <el-input v-model="supplementForm.present_illness" type="textarea" :rows="3" placeholder="请填写现病史"></el-input>
+        </el-form-item>
+        <el-form-item label="既往史（过敏史）">
+          <el-input v-model="supplementForm.past_history" type="textarea" :rows="2" placeholder="请填写既往史"></el-input>
+        </el-form-item>
+        <el-form-item label="体格检查">
+          <el-input v-model="supplementForm.physical_exam" type="textarea" :rows="2" placeholder="请填写体格检查"></el-input>
+        </el-form-item>
+        <el-form-item label="医生留言/小贴士">
+          <el-input v-model="supplementForm.doctor_advice" type="textarea" :rows="2" placeholder="给患者的自定义建议..."></el-input>
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="supplementDialogVisible = false" :disabled="supplementSubmitting">取消</el-button>
+        <el-button type="primary" @click="submitSupplement" :loading="supplementSubmitting">保存</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -132,6 +166,18 @@ const dialogVisible = ref(false)
 const detailLoading = ref(false)
 const visitDetail = ref(null)
 const printRef = ref(null)
+
+// 补充病历状态
+const supplementDialogVisible = ref(false)
+const supplementSubmitting = ref(false)
+const supplementVisitId = ref(null)
+const supplementForm = ref({
+  chief_complaint: '',
+  present_illness: '',
+  past_history: '',
+  physical_exam: '',
+  doctor_advice: ''
+})
 
 const fetchHistory = async () => {
   loading.value = true
@@ -248,6 +294,58 @@ const exportCaseReviewPdf = async () => {
   win.document.open()
   win.document.write(html)
   win.document.close()
+}
+
+const openSupplementDialog = async (row) => {
+  supplementVisitId.value = row.id
+  supplementForm.value = {
+    chief_complaint: '',
+    present_illness: '',
+    past_history: '',
+    physical_exam: '',
+    doctor_advice: ''
+  }
+  try {
+    const res = await request.get(`/doctor/visits/${row.id}`)
+    const detail = res.data || {}
+    supplementForm.value.chief_complaint = detail.chief_complaint || ''
+    supplementForm.value.present_illness = detail.present_illness || ''
+    supplementForm.value.past_history = detail.past_history || ''
+    supplementForm.value.physical_exam = detail.physical_exam || ''
+    supplementForm.value.doctor_advice = detail.doctor_advice || ''
+  } catch (error) {
+    ElMessage.error(error.msg || '获取就诊详情失败')
+    return
+  }
+  supplementDialogVisible.value = true
+}
+
+const submitSupplement = async () => {
+  const fields = ['chief_complaint', 'present_illness', 'past_history', 'physical_exam', 'doctor_advice']
+  const payload = {}
+  let hasValue = false
+  for (const field of fields) {
+    const val = (supplementForm.value[field] || '').trim()
+    if (val) {
+      payload[field] = val
+      hasValue = true
+    }
+  }
+  if (!hasValue) {
+    ElMessage.warning('请至少填写一项病历信息')
+    return
+  }
+  supplementSubmitting.value = true
+  try {
+    await request.put(`/doctor/visits/${supplementVisitId.value}/medical-record`, payload)
+    ElMessage.success('病历补充成功')
+    supplementDialogVisible.value = false
+    fetchHistory()
+  } catch (error) {
+    ElMessage.error(error.msg || '保存失败')
+  } finally {
+    supplementSubmitting.value = false
+  }
 }
 
 const reopenPrescription = (row) => {

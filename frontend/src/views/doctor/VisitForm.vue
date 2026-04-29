@@ -12,20 +12,30 @@
       <el-row :gutter="20">
         <!-- 左侧：电子病历 -->
         <el-col :span="10">
-          <el-card class="box-card" header="电子病历">
+          <el-card class="box-card">
+            <template #header>
+              <div style="display: flex; justify-content: space-between; align-items: center;">
+                <span style="font-weight: bold;">电子病历</span>
+                <el-tooltip content="仅保留诊断字段，快速开方。其余病历信息可稍后在历史记录中补充。" placement="top">
+                  <el-checkbox v-model="quickMode" label="快速接诊" style="color: #e6a23c; font-weight: bold;" />
+                </el-tooltip>
+              </div>
+            </template>
             <el-form :model="visitForm" label-position="top">
-              <el-form-item label="主诉">
-                <el-input v-model="visitForm.chief_complaint" type="textarea" :rows="2" @input="onTemplateInput('chief_complaint')"></el-input>
-              </el-form-item>
-              <el-form-item label="现病史">
-                <el-input v-model="visitForm.present_illness" type="textarea" :rows="2"></el-input>
-              </el-form-item>
-              <el-form-item label="既往史（过敏史）">
-                <el-input v-model="visitForm.past_history" type="textarea" :rows="2"></el-input>
-              </el-form-item>
-              <el-form-item label="体格检查">
-                <el-input v-model="visitForm.physical_exam" type="textarea" :rows="2" @input="onTemplateInput('physical_exam')"></el-input>
-              </el-form-item>
+              <div v-show="!quickMode">
+                <el-form-item label="主诉">
+                  <el-input v-model="visitForm.chief_complaint" type="textarea" :rows="2" @input="onTemplateInput('chief_complaint')"></el-input>
+                </el-form-item>
+                <el-form-item label="现病史">
+                  <el-input v-model="visitForm.present_illness" type="textarea" :rows="2"></el-input>
+                </el-form-item>
+                <el-form-item label="既往史（过敏史）">
+                  <el-input v-model="visitForm.past_history" type="textarea" :rows="2"></el-input>
+                </el-form-item>
+                <el-form-item label="体格检查">
+                  <el-input v-model="visitForm.physical_exam" type="textarea" :rows="2" @input="onTemplateInput('physical_exam')"></el-input>
+                </el-form-item>
+              </div>
               <el-form-item label="诊断" class="asterisk-left el-form-item--label-top">
                 <div style="width: 100%; display: flex; flex-direction: column; gap: 10px;">
                   <el-autocomplete
@@ -51,9 +61,11 @@
                   ></el-input>
                 </div>
               </el-form-item>
-              <el-form-item label="医生留言/小贴士 (如：适量运动，戒烟戒酒)">
-                <el-input v-model="visitForm.doctor_advice" type="textarea" :rows="2" placeholder="给患者的自定义建议..." @input="onTemplateInput('doctor_advice')"></el-input>
-              </el-form-item>
+              <div v-show="!quickMode">
+                <el-form-item label="医生留言/小贴士 (如：适量运动，戒烟戒酒)">
+                  <el-input v-model="visitForm.doctor_advice" type="textarea" :rows="2" placeholder="给患者的自定义建议..." @input="onTemplateInput('doctor_advice')"></el-input>
+                </el-form-item>
+              </div>
             </el-form>
           </el-card>
         </el-col>
@@ -224,11 +236,14 @@
       <el-descriptions border :column="2" title="就诊信息">
         <el-descriptions-item label="患者">{{ patientName }} ({{ studentId }})</el-descriptions-item>
         <el-descriptions-item label="诊断">{{ visitForm.diagnosis || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="主诉" :span="2">{{ visitForm.chief_complaint || '无' }}</el-descriptions-item>
-        <el-descriptions-item label="现病史" :span="2">{{ visitForm.present_illness || '无' }}</el-descriptions-item>
-        <el-descriptions-item label="既往史（过敏史）" :span="2">{{ visitForm.past_history || '无' }}</el-descriptions-item>
-        <el-descriptions-item label="体格检查" :span="2">{{ visitForm.physical_exam || '无' }}</el-descriptions-item>
-        <el-descriptions-item label="医生留言" :span="2">{{ visitForm.doctor_advice || '无' }}</el-descriptions-item>
+        <el-descriptions-item v-if="quickMode" label="提示" :span="2">
+          <span style="color: #e6a23c;">快速接诊模式，其余病历信息可稍后在历史记录中补充</span>
+        </el-descriptions-item>
+        <el-descriptions-item v-if="!quickMode" label="主诉" :span="2">{{ visitForm.chief_complaint || '无' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!quickMode" label="现病史" :span="2">{{ visitForm.present_illness || '无' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!quickMode" label="既往史（过敏史）" :span="2">{{ visitForm.past_history || '无' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!quickMode" label="体格检查" :span="2">{{ visitForm.physical_exam || '无' }}</el-descriptions-item>
+        <el-descriptions-item v-if="!quickMode" label="医生留言" :span="2">{{ visitForm.doctor_advice || '无' }}</el-descriptions-item>
       </el-descriptions>
 
       <div style="margin-top: 20px;">
@@ -314,6 +329,9 @@ const sourceVisitId = route.query.source_visit_id
 
 const diagnosisSearch = ref('')
 
+// 快速接诊模式
+const quickMode = ref(false)
+
 // 电子病历表单
 const visitForm = ref({
   chief_complaint: '',
@@ -332,7 +350,7 @@ const selectedDrugId = ref(null)
 const prescriptionItems = ref([])
 
 // 预设选项数据
-const usageOptions = ref(['口服', '外用', '静脉注射', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
+const usageOptions = ref(['口服', '外用', '静脉注射', '静脉滴注', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
 const buildDosageOptions = () => {
   const out = []
   const push = (v) => {

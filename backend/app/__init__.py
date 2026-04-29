@@ -55,6 +55,28 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "patient", "id_card", "VARCHAR(20)")
     _ensure_sqlite_column(app, "patient", "counselor_name", "VARCHAR(64)")
 
+    # visit 表新增列
+    _ensure_sqlite_column(app, "visit", "verified_by", "INTEGER")
+    _ensure_sqlite_column(app, "visit", "verified_at", "DATETIME")
+    _ensure_sqlite_column(app, "visit", "rejected_by", "INTEGER")
+    _ensure_sqlite_column(app, "visit", "rejected_at", "DATETIME")
+    _ensure_sqlite_column(app, "visit", "reject_reason", "TEXT")
+
+    # prescription_item 表新增列
+    _ensure_sqlite_column(app, "prescription_item", "original_price", "FLOAT")
+    _ensure_sqlite_column(app, "prescription_item", "original_amount", "FLOAT")
+    _ensure_sqlite_column(app, "prescription_item", "new_price", "FLOAT")
+    _ensure_sqlite_column(app, "prescription_item", "new_amount", "FLOAT")
+    _ensure_sqlite_column(app, "prescription_item", "modified_by", "INTEGER")
+    _ensure_sqlite_column(app, "prescription_item", "modified_at", "DATETIME")
+    _ensure_sqlite_column(app, "prescription_item", "modify_reason", "TEXT")
+
+    # drug 表新增列
+    _ensure_sqlite_column(app, "drug", "variant_type", "VARCHAR(20)")
+    _ensure_sqlite_column(app, "drug", "stock_group_code", "VARCHAR(36)")
+    _ensure_sqlite_column(app, "drug", "unit_amount", "INTEGER")
+    _ensure_sqlite_column(app, "drug", "base_name", "VARCHAR(128)")
+
     from backend.app.api import bp as api_bp
     app.register_blueprint(api_bp, url_prefix='/api')
 
