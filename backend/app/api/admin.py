@@ -1399,19 +1399,15 @@ def delete_user(id):
 @role_required('admin')
 def backup_database():
     try:
-        possible_paths = [
-            os.path.join(os.getcwd(), 'app.db'),
-            os.path.join(os.getcwd(), 'backend', 'app.db'),
-            os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'app.db')
-        ]
+        # 从配置中解析实际数据库文件路径
+        uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
+        if uri.startswith('sqlite:///'):
+            db_path = uri.replace('sqlite:///', '')
+        else:
+            # 非 SQLite 数据库不支持文件备份
+            return jsonify({"msg": "Only SQLite database supports file backup"}), 400
 
-        db_path = None
-        for p in possible_paths:
-            if os.path.exists(p):
-                db_path = p
-                break
-
-        if not db_path:
+        if not os.path.exists(db_path):
             return jsonify({"msg": "Database file not found"}), 500
 
         backup_dir = os.path.join(os.path.dirname(db_path), 'backups')

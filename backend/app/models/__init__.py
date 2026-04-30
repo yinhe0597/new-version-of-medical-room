@@ -120,6 +120,7 @@ class Visit(db.Model):
     physical_exam = db.Column(db.Text)
     diagnosis = db.Column(db.Text)
     doctor_advice = db.Column(db.Text)
+    special_note = db.Column(db.Text)
 
     consultation_fee = db.Column(db.Float, default=0.0)
     total_amount = db.Column(db.Float, default=0.0)

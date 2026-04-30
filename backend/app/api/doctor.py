@@ -683,6 +683,7 @@ def create_visit():
         physical_exam=data.get('physical_exam'),
         diagnosis=diagnosis,
         doctor_advice=data.get('doctor_advice'),
+        special_note=data.get('special_note'),
         consultation_fee=data.get('consultation_fee', 0),
         total_amount=total_amount,
         status=VISIT_STATUS_PENDING
@@ -823,6 +824,7 @@ def get_doctor_visit_detail(visit_id):
             "physical_exam": visit.physical_exam,
             "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis),
             "doctor_advice": visit.doctor_advice,
+            "special_note": visit.special_note,
             "consultation_fee": visit.consultation_fee,
             "total_amount": visit.total_amount,
             "status": visit.status,
@@ -851,7 +853,7 @@ def update_visit_medical_record(visit_id):
         return jsonify({"msg": "Visit status does not allow modification"}), 400
 
     data = request.get_json(silent=True) or {}
-    allowed_fields = ['chief_complaint', 'present_illness', 'past_history', 'physical_exam', 'doctor_advice']
+    allowed_fields = ['chief_complaint', 'present_illness', 'past_history', 'physical_exam', 'doctor_advice', 'special_note']
     updated = False
     for field in allowed_fields:
         value = (data.get(field) or '').strip()
