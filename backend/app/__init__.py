@@ -61,6 +61,7 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "visit", "rejected_by", "INTEGER")
     _ensure_sqlite_column(app, "visit", "rejected_at", "DATETIME")
     _ensure_sqlite_column(app, "visit", "reject_reason", "TEXT")
+    _ensure_sqlite_column(app, "visit", "special_note", "TEXT")
 
     # prescription_item 表新增列
     _ensure_sqlite_column(app, "prescription_item", "original_price", "FLOAT")
@@ -94,21 +95,28 @@ def create_app(config_class=None):
         pass
 
     # 静态文件和前端文件支持
+    def _get_dist_dir():
+        """Get frontend dist directory, with fallback for different environments."""
+        if hasattr(sys, '_MEIPASS'):
+            d = os.path.join(sys._MEIPASS, 'frontend', 'dist')
+            if os.path.isdir(d):
+                return d
+        # Fallback: relative to APP_ROOT (for onefile mode or dev)
+        app_root = os.environ.get('APP_ROOT', '')
+        if app_root:
+            d = os.path.join(app_root, 'dist')
+            if os.path.isdir(d):
+                return d
+        # Dev environment fallback
+        return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist')
+
     @app.route('/static/<path:path>')
     def serve_static(path):
-        if hasattr(sys, '_MEIPASS'):
-            static_dir = os.path.join(sys._MEIPASS, 'frontend', 'dist', 'assets')
-        else:
-            static_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist', 'assets')
-        return send_from_directory(static_dir, path)
+        return send_from_directory(os.path.join(_get_dist_dir(), 'assets'), path)
 
     @app.route('/')
     @app.route('/<path:path>')
     def serve_frontend(path='index.html'):
-        if hasattr(sys, '_MEIPASS'):
-            dist_dir = os.path.join(sys._MEIPASS, 'frontend', 'dist')
-        else:
-            dist_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist')
-        return send_from_directory(dist_dir, path)
+        return send_from_directory(_get_dist_dir(), path)
 
     return app

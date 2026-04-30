@@ -212,6 +212,18 @@
               </el-table-column>
             </el-table>
 
+            <!-- 特殊计量与用法备注 -->
+            <el-form-item label="特殊计量与用法备注" style="margin-top: 12px;">
+              <el-input
+                v-model="visitForm.special_note"
+                type="textarea"
+                :rows="2"
+                placeholder="如有特殊配药要求请在此备注，护士将据此进行特殊配药（如：生理盐水250ml+头孢曲松2g 静滴）"
+                maxlength="500"
+                show-word-limit
+              />
+            </el-form-item>
+
             <!-- 费用结算 -->
             <div class="footer-action">
               <el-form inline>
@@ -244,6 +256,9 @@
         <el-descriptions-item v-if="!quickMode" label="既往史（过敏史）" :span="2">{{ visitForm.past_history || '无' }}</el-descriptions-item>
         <el-descriptions-item v-if="!quickMode" label="体格检查" :span="2">{{ visitForm.physical_exam || '无' }}</el-descriptions-item>
         <el-descriptions-item v-if="!quickMode" label="医生留言" :span="2">{{ visitForm.doctor_advice || '无' }}</el-descriptions-item>
+        <el-descriptions-item v-if="visitForm.special_note" label="特殊计量与用法备注" :span="2">
+          <span style="color: #e6a23c; font-weight: bold;">{{ visitForm.special_note }}</span>
+        </el-descriptions-item>
       </el-descriptions>
 
       <div style="margin-top: 20px;">
@@ -340,6 +355,7 @@ const visitForm = ref({
   physical_exam: '',
   diagnosis: '',
   doctor_advice: '',
+  special_note: '',
   consultation_fee: 8.00
 })
 
@@ -461,6 +477,7 @@ const loadRejectedVisitAsDraft = async () => {
     visitForm.value.physical_exam = detail.physical_exam || ''
     visitForm.value.diagnosis = detail.diagnosis || ''
     visitForm.value.doctor_advice = detail.doctor_advice || ''
+    visitForm.value.special_note = detail.special_note || ''
     visitForm.value.consultation_fee = Number(detail.consultation_fee || 8)
 
     const draftItems = Array.isArray(detail.items) ? detail.items : []
@@ -689,6 +706,7 @@ const resetForm = () => {
     physical_exam: '',
     diagnosis: '',
     doctor_advice: '',
+    special_note: '',
     consultation_fee: 8.00
   }
   prescriptionItems.value = []

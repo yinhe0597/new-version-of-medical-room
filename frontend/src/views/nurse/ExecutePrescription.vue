@@ -17,6 +17,9 @@
               {{ getStatusText(visitDetail.status) }}
             </el-tag>
           </el-descriptions-item>
+          <el-descriptions-item v-if="visitDetail.special_note" label="特殊配药备注" :span="3">
+            <span style="color: #e6a23c; font-weight: bold;">{{ visitDetail.special_note }}</span>
+          </el-descriptions-item>
           <el-descriptions-item v-if="visitDetail.status === 'rejected'" label="驳回原因" :span="3">
             {{ visitDetail.reject_reason || '-' }}
           </el-descriptions-item>
@@ -173,6 +176,11 @@
         <div v-if="visitDetail?.doctor_advice" class="advice-print-info" style="margin-top: 10px; padding: 5px; border: 1px solid #eee;">
           <p><strong>医生小贴士：</strong></p>
           <p>{{ visitDetail.doctor_advice }}</p>
+        </div>
+
+        <div v-if="visitDetail?.special_note" style="margin-top: 10px; padding: 5px; border: 1px solid #e6a23c; background: #fdf6ec;">
+          <p><strong>特殊配药备注：</strong></p>
+          <p>{{ visitDetail.special_note }}</p>
         </div>
 
         <hr/>

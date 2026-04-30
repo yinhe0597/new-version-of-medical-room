@@ -588,6 +588,7 @@ def get_visit_detail(visit_id):
             "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis),
             "consultation_fee": visit.consultation_fee,
             "doctor_advice": visit.doctor_advice,
+            "special_note": visit.special_note,
             "items": items,
             "total_amount": visit.total_amount,
             "status": visit.status,
