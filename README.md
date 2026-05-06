@@ -1,6 +1,6 @@
 # 校医务室诊疗管理系统 (Medical Room Management System)
 
-当前版本：**v26.04.30.08.13**
+当前版本：**v26.05.06.08.58**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black)
@@ -68,6 +68,19 @@
 ![营收报表](docs/images/revenue-report.png)
 
 ## 更新日志
+
+### v26.05.06.08.58（2026-05-06）
+
+**严重缺陷修复：**
+- 医生端：修复搜索学生功能在部署环境中完全失效的问题（根因：`doctor.py` 中数据库路径被硬编码为开发机绝对路径 `E:\yws2\...`，绕过了 SQLAlchemy 连接管理）
+- 将 `search_patient()` 改为使用 SQLAlchemy ORM 查询，确保在任何机器上均使用正确的数据库
+
+**SPA 路由修复：**
+- 修复部署后刷新非根路径页面（如 `/doctor/history`）返回 404 白屏的问题
+- `__init__.py` catch-all 路由增加文件存在性判断：真实文件直接返回，非文件路径回退到 `index.html` 由 Vue Router 处理
+
+**文档更新：**
+- 新增开发日志：`docs/开发日志-2026-05-06-v08.58.md`
 
 ### v26.04.30.08.13（2026-04-30）
 

@@ -117,6 +117,13 @@ def create_app(config_class=None):
     @app.route('/')
     @app.route('/<path:path>')
     def serve_frontend(path='index.html'):
-        return send_from_directory(_get_dist_dir(), path)
+        dist_dir = _get_dist_dir()
+        # Try serving the exact file first (JS, CSS, images, etc.)
+        full_path = os.path.join(dist_dir, path)
+        if path != 'index.html' and not os.path.isfile(full_path):
+            # File doesn't exist — this is a Vue Router client-side route,
+            # fall back to index.html so the SPA can handle it
+            path = 'index.html'
+        return send_from_directory(dist_dir, path)
 
     return app

@@ -243,67 +243,36 @@ def search_patient():
         return jsonify({"msg": "Too many requests"}), 429
     bucket.append(now_ts)
 
-    # 直接使用sqlite3连接指定的数据库文件
-    import sqlite3
-    import os
-    
-    db_path = os.path.abspath("E:\\yws2\\medical-room-management-system\\ceshi\\app.db")
-    logger.info(f"Using database: {db_path}")
-    logger.info(f"Database exists: {os.path.exists(db_path)}")
-    
-    conn = sqlite3.connect(db_path)
-    cursor = conn.cursor()
-    
-    # 添加完整的搜索过滤逻辑
-    query = """
-        SELECT id, student_id, name, gender, class_name, phone, created_at, 
-               grade, college, major, name_pinyin, name_initials, is_temporary, 
-               age, id_card, counselor_name
-        FROM patient 
-        WHERE (name LIKE ? OR 
-               student_id LIKE ? OR 
-               phone LIKE ? OR 
-               name_pinyin LIKE ? OR 
-               name_initials LIKE ?)
-        LIMIT 50
-    """
-    
-    # 构建搜索参数
-    search_params = [
-        f"%{keyword}%",  # 姓名
-        f"%{keyword}%",  # 学号
-        f"%{keyword}%",  # 电话
-        f"%{kw_lower}%",  # 拼音全称
-        f"%{kw_lower}%"   # 拼音首字母
-    ]
-    
-    logger.info(f"Executing search query with params: {search_params}")
-    cursor.execute(query, search_params)
-    patients = cursor.fetchall()
-    logger.info(f"Found {len(patients)} patients matching keyword")
-    
-    conn.close()
+    like_kw = f"%{keyword}%"
+    like_lower = f"%{kw_lower}%"
 
-    if not patients:
-        resp = jsonify({"data": []})
-        resp.headers["X-Response-Time-ms"] = f"{(time.perf_counter() - start) * 1000:.2f}"
-        return resp, 200
+    patients = Patient.query.filter(
+        or_(
+            Patient.name.ilike(like_kw),
+            Patient.student_id.ilike(like_kw),
+            Patient.phone.ilike(like_kw),
+            Patient.name_pinyin.ilike(like_lower),
+            Patient.name_initials.ilike(like_lower),
+        )
+    ).limit(50).all()
+
+    logger.info(f"Found {len(patients)} patients matching keyword")
 
     data = []
-    for patient in patients:
+    for p in patients:
         data.append({
-            "id": patient[0],
-            "student_id": patient[1],
-            "name": patient[2],
-            "gender": patient[3],
-            "grade": patient[7],
-            "college": patient[8],
-            "major": patient[9],
-            "class_name": patient[4],
-            "phone": patient[5],
-            "counselor_name": patient[15],
-            "is_temporary": bool(patient[12]),
-            "age": patient[13]
+            "id": p.id,
+            "student_id": p.student_id,
+            "name": p.name,
+            "gender": p.gender,
+            "grade": p.grade,
+            "college": p.college,
+            "major": p.major,
+            "class_name": p.class_name,
+            "phone": p.phone,
+            "counselor_name": p.counselor_name,
+            "is_temporary": bool(p.is_temporary) if p.is_temporary is not None else False,
+            "age": p.age,
         })
 
     logger.info(f"Returning {len(data)} patients")
