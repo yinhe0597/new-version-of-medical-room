@@ -1,6 +1,6 @@
 # 校医务室诊疗管理系统 (Medical Room Management System)
 
-当前版本：**v26.05.06.08.58**
+当前版本：**v26.05.06.12.36**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black)
@@ -68,6 +68,17 @@
 ![营收报表](docs/images/revenue-report.png)
 
 ## 更新日志
+
+### v26.05.06.12.36（2026-05-06）
+
+**价格精度修复：**
+- 修复散装药品价格浮点精度问题：单价显示 ¥0.20 但实际存储值为 0.1968...，导致 12×0.20 显示为 ¥2.36 而非 ¥2.40
+- 后端：处方创建时 `unit_price`、`item_amount`、`purchase_cost` 统一 `round(..., 2)`
+- 前端：VisitForm 和 DirectPurchase 中药品单价赋值、小计计算、总金额累加统一四舍五入到分
+- 数据库：修复 135 条散装药品的浮点精度异常价格记录
+
+**文档更新：**
+- 新增开发日志：`docs/开发日志-2026-05-06-v12.36.md`
 
 ### v26.05.06.08.58（2026-05-06）
 

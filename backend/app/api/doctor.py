@@ -533,7 +533,7 @@ def create_visit():
         return jsonify({"msg": "Missing items", "field": "items"}), 400
 
     # Verify stock availability
-    total_amount = float(data.get('consultation_fee', 0))
+    total_amount = round(float(data.get('consultation_fee', 0)), 2)
     drug_items = []
 
     for idx, item in enumerate(items):
@@ -581,13 +581,13 @@ def create_visit():
                     extra += f", retail_available={retail_avail}"
                 return jsonify({"msg": f"Insufficient stock for {drug.base_name or drug.name}{extra}"}), 400
 
-            unit_price = drug.price or 0.0
+            unit_price = round(drug.price or 0.0, 2)
             if drug.variant_type == "retail" and group.pack_drug and group.pack_drug.purchase_price and group.pack_amount:
-                purchase_cost = float(group.pack_drug.purchase_price or 0.0) / float(group.pack_amount) * float(unit_amount) * quantity
+                purchase_cost = round(float(group.pack_drug.purchase_price or 0.0) / float(group.pack_amount) * float(unit_amount) * quantity, 2)
             else:
-                purchase_cost = float(drug.purchase_price or 0.0) * quantity
+                purchase_cost = round(float(drug.purchase_price or 0.0) * quantity, 2)
 
-            item_amount = quantity * unit_price
+            item_amount = round(quantity * unit_price, 2)
             total_amount += item_amount
             drug_items.append({
                 "drug": drug,
@@ -612,19 +612,19 @@ def create_visit():
 
         # Calculate prices and costs
         if is_scattered:
-            unit_price = drug.scattered_price or 0.0
+            unit_price = round(drug.scattered_price or 0.0, 2)
             conv_rate = drug.conversion_rate or 1
-            purchase_cost = (drug.purchase_price or 0.0) / conv_rate * quantity
+            purchase_cost = round((drug.purchase_price or 0.0) / conv_rate * quantity, 2)
             stock_needed = quantity / conv_rate
         else:
-            unit_price = drug.price or 0.0
-            purchase_cost = (drug.purchase_price or 0.0) * quantity
+            unit_price = round(drug.price or 0.0, 2)
+            purchase_cost = round((drug.purchase_price or 0.0) * quantity, 2)
             stock_needed = quantity
 
         if (drug.type == 1 or drug.type is None) and drug.stock < math.ceil(stock_needed):
             return jsonify({"msg": f"Insufficient stock for {drug.name}"}), 400
 
-        item_amount = quantity * unit_price
+        item_amount = round(quantity * unit_price, 2)
         total_amount += item_amount
 
         drug_items.append({
