@@ -202,7 +202,7 @@
               </el-table-column>
               <el-table-column label="金额" width="80">
                 <template #default="scope">
-                  {{ (scope.row.price * scope.row.quantity).toFixed(2) }}
+                  {{ (Math.round(scope.row.price * scope.row.quantity * 100) / 100).toFixed(2) }}
                 </template>
               </el-table-column>
               <el-table-column label="操作" width="60">
@@ -279,7 +279,7 @@
             <template #default="scope">¥ {{ scope.row.price.toFixed(2) }}</template>
           </el-table-column>
           <el-table-column label="金额" width="100">
-            <template #default="scope">¥ {{ (scope.row.price * scope.row.quantity).toFixed(2) }}</template>
+            <template #default="scope">¥ {{ (Math.round(scope.row.price * scope.row.quantity * 100) / 100).toFixed(2) }}</template>
           </el-table-column>
         </el-table>
       </div>
@@ -456,13 +456,13 @@ const applyTemplate = (row) => {
 
 const totalAmount = computed(() => {
   const drugTotal = prescriptionItems.value.reduce((sum, item) => {
-    return sum + (item.price * item.quantity)
+    return sum + Math.round(item.price * item.quantity * 100) / 100
   }, 0)
-  return drugTotal + visitForm.value.consultation_fee
+  return Math.round((drugTotal + visitForm.value.consultation_fee) * 100) / 100
 })
 
 const drugTotalAmount = computed(() => {
-  return prescriptionItems.value.reduce((sum, item) => sum + (item.price * item.quantity), 0)
+  return prescriptionItems.value.reduce((sum, item) => sum + Math.round(item.price * item.quantity * 100) / 100, 0)
 })
 
 const loadRejectedVisitAsDraft = async () => {
@@ -491,7 +491,7 @@ const loadRejectedVisitAsDraft = async () => {
         name: item.drug_name,
         type: Number(item.drug_type || 1),
         specification: item.specification,
-        price: Number.isFinite(unitPrice) ? unitPrice : 0,
+        price: Number.isFinite(unitPrice) ? Math.round(unitPrice * 100) / 100 : 0,
         maxStock: 999,
         is_scattered: !!item.is_scattered,
         quantity: quantity > 0 ? quantity : 1,
@@ -638,7 +638,7 @@ const handleDrugSelect = (val) => {
         name: drug.name,
         type: drug.type,
         specification: drug.specification,
-        price: drug.display_price,
+        price: Math.round(drug.display_price * 100) / 100,
         maxStock: drug.maxStock,
         is_scattered: drug.is_scattered,
         quantity: 1,
