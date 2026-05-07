@@ -28,7 +28,7 @@ from backend.app.services.drug_stock import (
     validate_pack_spec,
     validate_prices,
 )
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from sqlalchemy import or_
 import re
 
@@ -519,7 +519,7 @@ def get_inventory_records():
             "old_stock": record.old_stock,
             "new_stock": record.new_stock,
             "remark": record.remark,
-            "timestamp": record.timestamp.strftime('%Y-%m-%d %H:%M:%S')
+            "timestamp": (record.timestamp + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
         })
 
     return jsonify({
@@ -1029,7 +1029,7 @@ def execute_visit(visit_id):
             "data": {
                 "payment_id": payment.id,
                 "amount": payment.amount,
-                "paid_at": payment.payment_date.strftime('%Y-%m-%d %H:%M')
+                "paid_at": (payment.payment_date + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
             }
         }), 200
 
