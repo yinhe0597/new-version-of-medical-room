@@ -757,7 +757,7 @@ def get_revenue_stats():
             total_profit += profit
 
             details.append({
-                "date": p.payment_date.strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else "",
+                "date": (p.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else "",
                 "visit_id": p.visit_id,
                 "patient_name": v.patient.name if v.patient else "",
                 "student_id": v.patient.student_id if v.patient else "",
@@ -965,7 +965,7 @@ def export_revenue_stats():
 
         ws.append(
             [
-                safe_text(p.payment_date.strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else ""),
+                safe_text((p.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else ""),
                 v.id,
                 safe_text(v.patient.name if v.patient else ""),
                 safe_text(v.patient.student_id if v.patient else ""),
