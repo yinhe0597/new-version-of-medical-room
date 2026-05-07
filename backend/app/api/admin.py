@@ -2,7 +2,7 @@ from flask import request, jsonify, send_file, make_response, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Drug, Payment, Visit, PrescriptionItem, Patient
+from backend.app.models import User, Drug, Payment, Visit, PrescriptionItem, Patient, InventoryRecord
 from backend.app.utils.decorators import role_required
 from datetime import datetime, date, timedelta
 from sqlalchemy import func
@@ -340,6 +340,43 @@ def update_drug(id):
 
     db.session.commit()
     return jsonify({"msg": "Drug updated successfully"}), 200
+
+@bp.route('/admin/drugs/<int:drug_id>/inbound', methods=['POST'])
+@role_required(['admin', 'nurse'])
+def drug_inbound(drug_id):
+    """药品入库（进货/补货）"""
+    drug = Drug.query.get_or_404(drug_id)
+    data = request.get_json()
+
+    quantity = data.get('quantity')
+    remark = data.get('remark', '')
+
+    if not quantity or quantity <= 0:
+        return jsonify({"msg": "入库数量必须大于0"}), 400
+
+    old_stock = drug.stock
+    drug.stock = old_stock + quantity
+
+    # 创建入库记录
+    record = InventoryRecord(
+        drug_id=drug.id,
+        nurse_id=int(get_jwt_identity()),
+        old_stock=old_stock,
+        new_stock=drug.stock,
+        remark=f"入库: {remark}" if remark else "入库"
+    )
+    db.session.add(record)
+    db.session.commit()
+
+    return jsonify({
+        "msg": "入库成功",
+        "data": {
+            "id": drug.id,
+            "name": drug.name,
+            "old_stock": old_stock,
+            "new_stock": drug.stock
+        }
+    }), 200
 
 @bp.route('/admin/drugs/<int:id>', methods=['DELETE'])
 @role_required(['admin', 'nurse'])

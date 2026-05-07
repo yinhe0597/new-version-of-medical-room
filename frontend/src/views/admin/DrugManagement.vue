@@ -142,9 +142,47 @@
         <el-form-item label="转换率" prop="conversion_rate" v-if="form.type === 1 && form.has_scattered && !isGroupedStock">
           <el-input-number v-model="form.conversion_rate" :min="1" :step="1" placeholder="1整件=多少零卖单位" />
         </el-form-item>
-        <el-form-item label="初始库存" prop="stock" v-if="form.type === 1">
-          <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="isGroupedStock" />
+        <el-form-item :label="isEdit ? '现有库存' : '初始库存'" prop="stock" v-if="form.type === 1">
+          <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="isEdit || isGroupedStock" />
         </el-form-item>
+
+        <!-- 库存操作区域（仅编辑模式） -->
+        <div v-if="isEdit && form.type === 1" style="margin-bottom: 18px; padding: 12px; background: #f5f7fa; border-radius: 6px;">
+          <div style="margin-bottom: 10px;">
+            <el-button type="warning" size="small" @click="showCorrectionForm = !showCorrectionForm">
+              盘点勘误
+            </el-button>
+            <el-button type="success" size="small" @click="showInboundForm = !showInboundForm">
+              入库
+            </el-button>
+          </div>
+
+          <!-- 盘点勘误表单 -->
+          <div v-if="showCorrectionForm" style="margin-top: 10px; padding: 10px; background: #fff; border-radius: 4px;">
+            <el-form-item label="实际数量" style="margin-bottom: 8px;">
+              <el-input-number v-model="correctionStock" :min="0" :step="1" />
+            </el-form-item>
+            <el-form-item label="备注" style="margin-bottom: 8px;">
+              <el-input v-model="correctionRemark" placeholder="请填写勘误原因" />
+            </el-form-item>
+            <el-button type="warning" size="small" @click="submitCorrection" :loading="correctionLoading">
+              确认勘误
+            </el-button>
+          </div>
+
+          <!-- 入库表单 -->
+          <div v-if="showInboundForm" style="margin-top: 10px; padding: 10px; background: #fff; border-radius: 4px;">
+            <el-form-item label="入库数量" style="margin-bottom: 8px;">
+              <el-input-number v-model="inboundQuantity" :min="1" :step="1" />
+            </el-form-item>
+            <el-form-item label="备注" style="margin-bottom: 8px;">
+              <el-input v-model="inboundRemark" placeholder="如：进货补充" />
+            </el-form-item>
+            <el-button type="success" size="small" @click="submitInbound" :loading="inboundLoading">
+              确认入库
+            </el-button>
+          </div>
+        </div>
       </el-form>
       <template #footer>
         <el-button @click="dialogVisible = false">取消</el-button>
@@ -238,6 +276,64 @@ const formRef = ref(null)
 
 const smartDialogVisible = ref(false)
 const smartResult = ref(null)
+
+// 库存操作相关
+const showCorrectionForm = ref(false)
+const showInboundForm = ref(false)
+const correctionStock = ref(0)
+const correctionRemark = ref('')
+const correctionLoading = ref(false)
+const inboundQuantity = ref(1)
+const inboundRemark = ref('')
+const inboundLoading = ref(false)
+
+const submitCorrection = async () => {
+  if (correctionStock.value === form.value.stock) {
+    ElMessage.warning('实际数量未发生变化')
+    return
+  }
+  correctionLoading.value = true
+  try {
+    await request.post('/nurse/inventory', {
+      drug_id: form.value.id,
+      new_stock: correctionStock.value,
+      remark: correctionRemark.value || '盘点勘误'
+    })
+    ElMessage.success('盘点勘误成功')
+    form.value.stock = correctionStock.value
+    showCorrectionForm.value = false
+    correctionRemark.value = ''
+    fetchDrugs()
+  } catch (error) {
+    ElMessage.error(error.msg || '勘误失败')
+  } finally {
+    correctionLoading.value = false
+  }
+}
+
+const submitInbound = async () => {
+  if (!inboundQuantity.value || inboundQuantity.value <= 0) {
+    ElMessage.warning('入库数量必须大于0')
+    return
+  }
+  inboundLoading.value = true
+  try {
+    const res = await request.post(`/admin/drugs/${form.value.id}/inbound`, {
+      quantity: inboundQuantity.value,
+      remark: inboundRemark.value || ''
+    })
+    ElMessage.success('入库成功')
+    form.value.stock = res.data.new_stock
+    showInboundForm.value = false
+    inboundQuantity.value = 1
+    inboundRemark.value = ''
+    fetchDrugs()
+  } catch (error) {
+    ElMessage.error(error.msg || '入库失败')
+  } finally {
+    inboundLoading.value = false
+  }
+}
 
 const handleSmartInventory = async () => {
   const loadingInstance = ElLoading.service({
@@ -388,6 +484,9 @@ const openEditDialog = (row) => {
     base_name: null,
     ...row
   }
+  showCorrectionForm.value = false
+  showInboundForm.value = false
+  correctionStock.value = form.value.stock
   dialogVisible.value = true
 }
 

@@ -106,7 +106,7 @@
               <el-table-column prop="specification" label="规格" width="100" />
               <el-table-column label="零散用药" width="80">
                 <template #default="scope">
-                  <el-checkbox v-model="scope.row.is_scattered" v-if="scope.row.type === 1" />
+                  <el-checkbox v-model="scope.row.is_scattered" v-if="scope.row.type === 1" @change="(val) => { if (val) scope.row.days = 2; else scope.row.days = 1; }" />
                   <span v-else style="color: #909399; font-size: 12px;">-</span>
                 </template>
               </el-table-column>
@@ -646,7 +646,7 @@ const handleDrugSelect = (val) => {
         dosage: '',
         frequency: drug.type === 1 ? '每日3次' : '',
         timing: drug.type === 1 ? '餐后' : '',
-        days: 1
+        days: drug.is_scattered ? 2 : 1
       })
     }
   }

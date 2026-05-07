@@ -1,10 +1,6 @@
 <template>
   <div class="inventory-container">
     <el-tabs v-model="activeTab" class="inventory-tabs">
-      <el-tab-pane label="入库管理" name="inbound">
-        <DrugEntry />
-      </el-tab-pane>
-
       <!-- 盘点操作标签页 -->
       <el-tab-pane label="库存盘点" name="inventory">
         <el-card>
@@ -98,6 +94,57 @@
           </div>
         </el-card>
       </el-tab-pane>
+
+      <!-- 月度盘点标签页 -->
+      <el-tab-pane label="月度盘点" name="monthly">
+        <el-card>
+          <template #header>
+            <div class="card-header">
+              <span>月度库存对比报表</span>
+            </div>
+          </template>
+
+          <el-form :inline="true" class="monthly-form">
+            <el-form-item label="起始日期">
+              <el-date-picker 
+                v-model="monthlyStartDate" 
+                type="date" 
+                placeholder="选择起始日期"
+                value-format="YYYY-MM-DD"
+              />
+            </el-form-item>
+            <el-form-item label="截止日期">
+              <el-date-picker 
+                v-model="monthlyEndDate" 
+                type="date" 
+                placeholder="选择截止日期"
+                value-format="YYYY-MM-DD"
+              />
+            </el-form-item>
+            <el-form-item>
+              <el-button type="primary" @click="fetchMonthlyReport" :loading="monthlyLoading">
+                生成报表
+              </el-button>
+              <el-button type="success" @click="exportMonthlyReport" :disabled="monthlyData.length === 0">
+                导出Excel
+              </el-button>
+            </el-form-item>
+          </el-form>
+
+          <el-table :data="monthlyData" stripe style="width: 100%" v-loading="monthlyLoading" 
+                    show-summary :summary-method="getMonthlySummaries">
+            <el-table-column type="index" label="序号" width="60" />
+            <el-table-column prop="drug_name" label="药品名称" min-width="150" />
+            <el-table-column prop="specification" label="规格" width="120" />
+            <el-table-column prop="unit" label="单位" width="80" />
+            <el-table-column prop="opening_stock" label="上月盘点数" width="120" />
+            <el-table-column prop="inbound" label="入库数" width="100" />
+            <el-table-column prop="outbound" label="出库数" width="100" />
+            <el-table-column prop="adjustment" label="盘点调整" width="100" />
+            <el-table-column prop="closing_stock" label="现存数" width="100" />
+          </el-table>
+        </el-card>
+      </el-tab-pane>
     </el-tabs>
 
       <!-- 盘点弹窗 (普通药品) -->
@@ -188,7 +235,6 @@ import { ref, onMounted, watch } from 'vue'
 import { Search } from '@element-plus/icons-vue'
 import { ElMessage } from 'element-plus'
 import request from '@/api/request'
-import DrugEntry from '@/components/DrugEntry.vue'
 
 const activeTab = ref('inventory')
 
@@ -206,6 +252,12 @@ const recordTotal = ref(0)
 const drugPage = ref(1)
 const drugPageSize = ref(20)
 const drugTotal = ref(0)
+
+// Monthly Report Tab
+const monthlyStartDate = ref('')
+const monthlyEndDate = ref('')
+const monthlyData = ref([])
+const monthlyLoading = ref(false)
 
 // Dialog
 const dialogVisible = ref(false)
@@ -356,9 +408,71 @@ const submitInventory = async () => {
   })
 }
 
+const fetchMonthlyReport = async () => {
+  if (!monthlyStartDate.value || !monthlyEndDate.value) {
+    ElMessage.warning('请选择起始日期和截止日期')
+    return
+  }
+  monthlyLoading.value = true
+  try {
+    const res = await request.get('/nurse/inventory/monthly-report', {
+      params: {
+        start_date: monthlyStartDate.value,
+        end_date: monthlyEndDate.value
+      }
+    })
+    monthlyData.value = res.data || []
+  } catch (error) {
+    ElMessage.error('生成报表失败')
+  } finally {
+    monthlyLoading.value = false
+  }
+}
+
+const exportMonthlyReport = () => {
+  if (!monthlyStartDate.value || !monthlyEndDate.value) {
+    ElMessage.warning('请选择日期范围')
+    return
+  }
+  const token = localStorage.getItem('token')
+  const url = `/api/nurse/inventory/monthly-report/export?start_date=${monthlyStartDate.value}&end_date=${monthlyEndDate.value}`
+  
+  fetch(url, {
+    headers: { 'Authorization': `Bearer ${token}` }
+  })
+  .then(res => res.blob())
+  .then(blob => {
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `月度盘点报表_${monthlyStartDate.value}_${monthlyEndDate.value}.xlsx`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  })
+  .catch(() => ElMessage.error('导出失败'))
+}
+
+// 合计行方法
+const getMonthlySummaries = ({ columns, data }) => {
+  const sums = []
+  columns.forEach((column, index) => {
+    if (index === 0) {
+      sums[index] = '合计'
+      return
+    }
+    if (['opening_stock', 'inbound', 'outbound', 'adjustment', 'closing_stock'].includes(column.property)) {
+      sums[index] = data.reduce((sum, row) => sum + (Number(row[column.property]) || 0), 0)
+    } else {
+      sums[index] = ''
+    }
+  })
+  return sums
+}
+
 watch(activeTab, (newTab) => {
   if (newTab === 'records') {
     fetchRecords()
+  } else if (newTab === 'monthly') {
+    // 月度盘点不自动加载，等用户点击"生成报表"
   } else {
     fetchDrugs()
   }
