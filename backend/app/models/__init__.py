@@ -217,3 +217,13 @@ class InventoryRecord(db.Model):
 
     def __repr__(self):
         return f'<InventoryRecord {self.id}>'
+
+class DailyStockSnapshot(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    drug_id = db.Column(db.Integer, db.ForeignKey('drug.id'), index=True)
+    date = db.Column(db.Date, index=True)
+    stock = db.Column(db.Integer)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    drug = db.relationship('Drug')
+    __table_args__ = (db.UniqueConstraint('drug_id', 'date'),)

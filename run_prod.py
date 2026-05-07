@@ -6,6 +6,9 @@ import os
 import sys
 import socket
 import logging
+import threading
+import time as time_module
+from datetime import datetime as dt_now, date as date_type, time as time_type
 
 # ---------------------------------------------------------------------------
 # 1. 计算 APP_ROOT（exe 所在目录 or 项目根目录）
@@ -73,11 +76,58 @@ def get_local_ip():
 # 7. 导入并启动 Flask 应用
 # ---------------------------------------------------------------------------
 from backend.app import create_app, db
-from backend.app.models import User
+from backend.app.models import User, Drug, DailyStockSnapshot
 
 app = create_app()
 
 PORT = 5000
+
+def take_daily_snapshot(flask_app):
+    """保存所有活跃药品的当日库存快照"""
+    with flask_app.app_context():
+        from datetime import date
+        today = date.today()
+        
+        # 检查今天是否已有快照
+        existing = db.session.query(DailyStockSnapshot).filter_by(date=today).first()
+        if existing:
+            logging.info(f'Daily snapshot for {today} already exists, skipping.')
+            return
+        
+        # 获取所有活跃药品
+        drugs = Drug.query.filter(Drug.status == 1).all()
+        count = 0
+        for drug in drugs:
+            snapshot = DailyStockSnapshot(
+                drug_id=drug.id,
+                date=today,
+                stock=drug.stock
+            )
+            db.session.add(snapshot)
+            count += 1
+        
+        db.session.commit()
+        logging.info(f'Daily snapshot saved: {count} drugs for {today}')
+
+def snapshot_scheduler(flask_app):
+    """后台线程：每天0点执行快照"""
+    import time as t
+    while True:
+        now = dt_now.now()
+        # 计算距离下一个0点的秒数
+        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if now.hour >= 0 and now.minute >= 0:
+            from datetime import timedelta
+            tomorrow = tomorrow + timedelta(days=1)
+        seconds_until_midnight = (tomorrow - now).total_seconds()
+        
+        logging.info(f'Snapshot scheduler: next snapshot in {seconds_until_midnight:.0f} seconds')
+        t.sleep(seconds_until_midnight)
+        
+        try:
+            take_daily_snapshot(flask_app)
+        except Exception as e:
+            logging.error(f'Snapshot error: {e}')
 
 if __name__ == '__main__':
     from werkzeug.security import generate_password_hash
@@ -103,6 +153,14 @@ if __name__ == '__main__':
                 logging.info('Created nurse user')
             db.session.commit()
             logging.info('Database initialization completed.')
+
+        # 启动时补建今天的快照（如果不存在）
+        take_daily_snapshot(app)
+
+        # 启动后台快照调度线程
+        snapshot_thread = threading.Thread(target=snapshot_scheduler, args=(app,), daemon=True)
+        snapshot_thread.start()
+        logging.info('Daily snapshot scheduler started.')
 
         local_ip = get_local_ip()
 

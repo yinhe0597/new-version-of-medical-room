@@ -1,4 +1,4 @@
-from flask import request, jsonify
+from flask import request, jsonify, send_file
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
@@ -7,6 +7,7 @@ from backend.app.models import (
     DrugStockGroup,
     InventoryRecord,
     DiagnosisDict,
+    DailyStockSnapshot,
     Payment,
     PrescriptionItem,
     User,
@@ -29,8 +30,10 @@ from backend.app.services.drug_stock import (
     validate_prices,
 )
 from datetime import datetime, timezone, timedelta
-from sqlalchemy import or_
+from sqlalchemy import or_, func
 import re
+import math
+import io
 
 _DIAG_LINE_CODE_RE = re.compile(r"^(?P<name>.*?)[（(](?P<code>[^）)]+)[）)]\s*$")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -530,6 +533,297 @@ def get_inventory_records():
             "total": pagination.total
         }
     }), 200
+
+
+def _compute_monthly_report(start_date_str, end_date_str):
+    """核心算法：计算月度盘点报表数据"""
+    from datetime import date as date_type
+
+    try:
+        start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
+        end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
+    except (ValueError, TypeError):
+        return None, "Invalid date format, use YYYY-MM-DD"
+
+    start_date = start_dt.date()
+    end_date = end_dt.date()
+
+    # 本地时间转UTC
+    start_datetime_utc = start_dt - timedelta(hours=8)
+    end_datetime_utc = end_dt.replace(hour=23, minute=59, second=59) - timedelta(hours=8)
+
+    # 查询活跃药品
+    drugs = Drug.query.filter(
+        Drug.status == 1,
+        or_(Drug.type == 1, Drug.type.is_(None))
+    ).all()
+
+    if not drugs:
+        return [], None
+
+    drug_ids = [d.id for d in drugs]
+    drug_map = {d.id: d for d in drugs}
+
+    # 批量查询：期间入库（remark LIKE '入库%'）
+    inbound_query = (
+        db.session.query(
+            InventoryRecord.drug_id,
+            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
+        )
+        .filter(
+            InventoryRecord.drug_id.in_(drug_ids),
+            InventoryRecord.remark.like('入库%'),
+            InventoryRecord.timestamp >= start_datetime_utc,
+            InventoryRecord.timestamp <= end_datetime_utc
+        )
+        .group_by(InventoryRecord.drug_id)
+        .all()
+    )
+    inbound_map = {row[0]: int(row[1] or 0) for row in inbound_query}
+
+    # 批量查询：期间盘点调整（remark NOT LIKE '入库%'）
+    adjustment_query = (
+        db.session.query(
+            InventoryRecord.drug_id,
+            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
+        )
+        .filter(
+            InventoryRecord.drug_id.in_(drug_ids),
+            ~InventoryRecord.remark.like('入库%'),
+            InventoryRecord.timestamp >= start_datetime_utc,
+            InventoryRecord.timestamp <= end_datetime_utc
+        )
+        .group_by(InventoryRecord.drug_id)
+        .all()
+    )
+    adjustment_map = {row[0]: int(row[1] or 0) for row in adjustment_query}
+
+    # 批量查询：期间出库处方项
+    outbound_items = (
+        db.session.query(
+            PrescriptionItem.drug_id,
+            PrescriptionItem.quantity,
+            PrescriptionItem.is_scattered
+        )
+        .join(Visit, PrescriptionItem.visit_id == Visit.id)
+        .join(Payment, Payment.visit_id == Visit.id)
+        .filter(
+            PrescriptionItem.drug_id.in_(drug_ids),
+            Visit.status == VISIT_STATUS_COMPLETED,
+            Payment.payment_date >= start_datetime_utc,
+            Payment.payment_date <= end_datetime_utc
+        )
+        .all()
+    )
+
+    # 计算出库扣减量
+    outbound_map = {}
+    for drug_id, quantity, is_scattered in outbound_items:
+        drug = drug_map.get(drug_id)
+        if not drug:
+            continue
+        deduction = _calc_deduction(drug, quantity, is_scattered)
+        outbound_map[drug_id] = outbound_map.get(drug_id, 0) + deduction
+
+    # 批量获取快照
+    start_snapshots = {s.drug_id: s.stock for s in
+        DailyStockSnapshot.query.filter_by(date=start_date).all()}
+    end_snapshots = {s.drug_id: s.stock for s in
+        DailyStockSnapshot.query.filter_by(date=end_date).all()}
+
+    # 回退计算所需：期末反推
+    ir_after_end = (
+        db.session.query(
+            InventoryRecord.drug_id,
+            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
+        )
+        .filter(
+            InventoryRecord.drug_id.in_(drug_ids),
+            InventoryRecord.timestamp > end_datetime_utc
+        )
+        .group_by(InventoryRecord.drug_id)
+        .all()
+    )
+    ir_after_end_map = {row[0]: int(row[1] or 0) for row in ir_after_end}
+
+    dispensing_after_end = (
+        db.session.query(
+            PrescriptionItem.drug_id,
+            PrescriptionItem.quantity,
+            PrescriptionItem.is_scattered
+        )
+        .join(Visit, PrescriptionItem.visit_id == Visit.id)
+        .join(Payment, Payment.visit_id == Visit.id)
+        .filter(
+            PrescriptionItem.drug_id.in_(drug_ids),
+            Visit.status == VISIT_STATUS_COMPLETED,
+            Payment.payment_date > end_datetime_utc
+        )
+        .all()
+    )
+    disp_after_end_map = {}
+    for drug_id, quantity, is_scattered in dispensing_after_end:
+        drug = drug_map.get(drug_id)
+        if not drug:
+            continue
+        deduction = _calc_deduction(drug, quantity, is_scattered)
+        disp_after_end_map[drug_id] = disp_after_end_map.get(drug_id, 0) + deduction
+
+    # 回退计算所需：期初反推
+    ir_after_start = (
+        db.session.query(
+            InventoryRecord.drug_id,
+            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
+        )
+        .filter(
+            InventoryRecord.drug_id.in_(drug_ids),
+            InventoryRecord.timestamp >= start_datetime_utc
+        )
+        .group_by(InventoryRecord.drug_id)
+        .all()
+    )
+    ir_after_start_map = {row[0]: int(row[1] or 0) for row in ir_after_start}
+
+    dispensing_after_start = (
+        db.session.query(
+            PrescriptionItem.drug_id,
+            PrescriptionItem.quantity,
+            PrescriptionItem.is_scattered
+        )
+        .join(Visit, PrescriptionItem.visit_id == Visit.id)
+        .join(Payment, Payment.visit_id == Visit.id)
+        .filter(
+            PrescriptionItem.drug_id.in_(drug_ids),
+            Visit.status == VISIT_STATUS_COMPLETED,
+            Payment.payment_date >= start_datetime_utc
+        )
+        .all()
+    )
+    disp_after_start_map = {}
+    for drug_id, quantity, is_scattered in dispensing_after_start:
+        drug = drug_map.get(drug_id)
+        if not drug:
+            continue
+        deduction = _calc_deduction(drug, quantity, is_scattered)
+        disp_after_start_map[drug_id] = disp_after_start_map.get(drug_id, 0) + deduction
+
+    # 组装结果
+    result = []
+    for drug in drugs:
+        current_stock = int(drug.stock or 0)
+
+        # 期初库存：优先快照，回退反推
+        opening_stock = start_snapshots.get(drug.id)
+        if opening_stock is None:
+            opening_stock = current_stock - ir_after_start_map.get(drug.id, 0) + disp_after_start_map.get(drug.id, 0)
+
+        # 期末库存：今天用当前库存，否则优先快照，回退反推
+        if end_date == date_type.today():
+            closing_stock = current_stock
+        else:
+            closing_stock = end_snapshots.get(drug.id)
+            if closing_stock is None:
+                closing_stock = current_stock - ir_after_end_map.get(drug.id, 0) + disp_after_end_map.get(drug.id, 0)
+        inbound = inbound_map.get(drug.id, 0)
+        outbound = outbound_map.get(drug.id, 0)
+        adjustment = adjustment_map.get(drug.id, 0)
+
+        # 过滤无变动且库存为0的药品
+        if inbound == 0 and outbound == 0 and adjustment == 0 and opening_stock == 0 and closing_stock == 0:
+            continue
+
+        result.append({
+            "drug_id": drug.id,
+            "drug_name": drug.name,
+            "specification": drug.specification,
+            "unit": drug.unit,
+            "opening_stock": opening_stock,
+            "inbound": inbound,
+            "outbound": outbound,
+            "adjustment": adjustment,
+            "closing_stock": closing_stock,
+        })
+
+    return result, None
+
+
+def _calc_deduction(drug, quantity, is_scattered):
+    """计算出库扣减量（与execute_visit一致）"""
+    qty = int(quantity or 0)
+    if drug.stock_group_code:
+        unit_amount = int(drug.unit_amount or 1)
+        return math.ceil(qty / unit_amount)
+    if is_scattered and not drug.stock_group_code:
+        conv_rate = drug.conversion_rate or 1
+        return math.ceil(qty / conv_rate)
+    return qty
+
+
+@bp.route('/nurse/inventory/monthly-report', methods=['GET'])
+@role_required(['nurse', 'admin'])
+def get_monthly_report():
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    if not start_date or not end_date:
+        return jsonify({"msg": "Missing start_date or end_date"}), 400
+
+    data, error = _compute_monthly_report(start_date, end_date)
+    if error:
+        return jsonify({"msg": error}), 400
+
+    return jsonify({
+        "data": data,
+        "meta": {"total": len(data)}
+    }), 200
+
+
+@bp.route('/nurse/inventory/monthly-report/export', methods=['GET'])
+@role_required(['nurse', 'admin'])
+def export_monthly_report():
+    from openpyxl import Workbook
+
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+
+    if not start_date or not end_date:
+        return jsonify({"msg": "Missing start_date or end_date"}), 400
+
+    data, error = _compute_monthly_report(start_date, end_date)
+    if error:
+        return jsonify({"msg": error}), 400
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "月度盘点报表"
+
+    headers = ["序号", "药品名称", "规格", "单位", "上月盘点数（期初）", "入库数", "出库数", "盘点调整", "现存数（期末）"]
+    ws.append(headers)
+
+    for idx, item in enumerate(data, 1):
+        ws.append([
+            idx,
+            item["drug_name"],
+            item["specification"],
+            item["unit"],
+            item["opening_stock"],
+            item["inbound"],
+            item["outbound"],
+            item["adjustment"],
+            item["closing_stock"],
+        ])
+
+    output = io.BytesIO()
+    wb.save(output)
+    output.seek(0)
+
+    filename = f"月度盘点报表_{start_date}_{end_date}.xlsx"
+    return send_file(
+        output,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        as_attachment=True,
+        download_name=filename
+    )
 
 @bp.route('/nurse/visits/<int:visit_id>', methods=['GET'])
 @role_required('nurse')
