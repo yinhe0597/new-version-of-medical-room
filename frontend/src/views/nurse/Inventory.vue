@@ -16,11 +16,11 @@
                 placeholder="搜索药品名称/规格"
                 style="width: 300px"
                 clearable
-                @clear="fetchDrugs"
-                @keyup.enter="fetchDrugs"
+                @clear="() => { drugPage = 1; fetchDrugs() }"
+                @keyup.enter="() => { drugPage = 1; fetchDrugs() }"
               >
                 <template #append>
-                  <el-button :icon="Search" @click="fetchDrugs" />
+                  <el-button :icon="Search" @click="() => { drugPage = 1; fetchDrugs() }" />
                 </template>
               </el-input>
             </div>
@@ -58,6 +58,16 @@
               </template>
             </el-table-column>
           </el-table>
+
+          <div class="pagination" style="margin-top: 16px; text-align: right;">
+            <el-pagination
+              v-model:current-page="drugPage"
+              v-model:page-size="drugPageSize"
+              :total="drugTotal"
+              layout="total, prev, pager, next"
+              @current-change="handleDrugPageChange"
+            />
+          </div>
         </el-card>
       </el-tab-pane>
 
@@ -193,6 +203,9 @@ const loadingRecords = ref(false)
 const recordPage = ref(1)
 const recordSize = ref(20)
 const recordTotal = ref(0)
+const drugPage = ref(1)
+const drugPageSize = ref(20)
+const drugTotal = ref(0)
 
 // Dialog
 const dialogVisible = ref(false)
@@ -228,14 +241,24 @@ const fetchDrugs = async () => {
   loading.value = true
   try {
     const res = await request.get('/nurse/drugs', {
-      params: { keyword: searchQuery.value }
+      params: {
+        keyword: searchQuery.value,
+        page: drugPage.value,
+        size: drugPageSize.value
+      }
     })
     drugs.value = res.data
+    drugTotal.value = res.meta ? res.meta.total : 0
   } catch (error) {
     ElMessage.error('获取药品列表失败')
   } finally {
     loading.value = false
   }
+}
+
+const handleDrugPageChange = (val) => {
+  drugPage.value = val
+  fetchDrugs()
 }
 
 const fetchRecords = async () => {

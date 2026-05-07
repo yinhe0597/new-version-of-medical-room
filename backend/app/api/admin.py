@@ -1120,7 +1120,7 @@ def get_drug_outbound_records():
     details = []
     for r in rows:
         details.append({
-            "date": r.payment_date.strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else "",
+            "date": (r.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else "",
             "visit_id": r.visit_id,
             "patient_name": r.patient_name,
             "student_id": r.student_id,
@@ -1282,7 +1282,7 @@ def export_drug_outbound_records():
         total_quantity += qty
         total_amount += amt
         ws.append([
-            safe_text(r.payment_date.strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else ""),
+            safe_text((r.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else ""),
             r.visit_id,
             safe_text(r.patient_name),
             safe_text(r.student_id),
