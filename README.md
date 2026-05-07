@@ -1,6 +1,6 @@
 # 校医务室诊疗管理系统 (Medical Room Management System)
 
-当前版本：**v26.05.06.12.36**
+当前版本：**v26.05.07.14.05**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black)
@@ -68,6 +68,15 @@
 ![营收报表](docs/images/revenue-report.png)
 
 ## 更新日志
+
+### v26.05.07.14.05（2026-05-07）
+
+**缺陷修复：**
+- 修复管理员端药品出库报表出库时间显示不正确（UTC时间未转换为本地时间），`payment_date` 格式化前加 8 小时偏移
+- 护士端库存盘点页面添加翻页功能：后端 `/nurse/drugs` 改为分页查询，前端添加 `el-pagination` 组件，每页20条
+
+**文档更新：**
+- 新增开发日志：`docs/开发日志-2026-05-07-v14.05.md`
 
 ### v26.05.06.12.36（2026-05-06）
 

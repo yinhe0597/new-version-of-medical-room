@@ -1082,9 +1082,11 @@ def list_drugs():
         except Exception:
             pass
 
-    drugs = query.limit(50).all()
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('size', 20, type=int)
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     data = []
-    for drug in drugs:
+    for drug in pagination.items:
         data.append({
             "id": drug.id,
             "name": drug.name,
@@ -1104,4 +1106,11 @@ def list_drugs():
             "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None
         })
 
-    return jsonify({"data": data}), 200
+    return jsonify({
+        "data": data,
+        "meta": {
+            "page": page,
+            "per_page": per_page,
+            "total": pagination.total
+        }
+    }), 200
