@@ -17,8 +17,8 @@
           <el-menu-item index="/doctor/patient">
             <span>接诊</span>
           </el-menu-item>
-          <el-menu-item index="/doctor/templates/chief-complaint">
-            <span>主诉模板</span>
+          <el-menu-item index="/doctor/templates/present-illness">
+            <span>现病史模板</span>
           </el-menu-item>
           <el-menu-item index="/doctor/templates/physical-exam">
             <span>体格检查模板</span>

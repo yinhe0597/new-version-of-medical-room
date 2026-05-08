@@ -1252,6 +1252,8 @@ def execute_visit(visit_id):
 
     data = request.get_json() or {}
     payment_method = data.get('payment_method', 'cash')
+    employee_discount = data.get('employee_discount', False)
+    actual_amount = data.get('actual_amount')
 
     visit.total_amount = _recompute_visit_total(visit)
 
@@ -1307,11 +1309,21 @@ def execute_visit(visit_id):
             visit.verified_by = int(user_id)
         if visit.verified_at is None:
             visit.verified_at = datetime.utcnow()
+
+        # 计算实收金额
+        final_amount = visit.total_amount
+        original_amount = None
+        if employee_discount and actual_amount is not None:
+            original_amount = visit.total_amount
+            final_amount = float(actual_amount)
+
         payment = Payment(
             visit_id=visit.id,
             nurse_id=int(user_id),
-            amount=visit.total_amount,
-            payment_method=payment_method
+            amount=final_amount,
+            payment_method=payment_method,
+            is_employee_discount=employee_discount,
+            original_amount=original_amount
         )
         db.session.add(payment)
 
@@ -1323,6 +1335,7 @@ def execute_visit(visit_id):
             "data": {
                 "payment_id": payment.id,
                 "amount": payment.amount,
+                "original_amount": payment.original_amount,
                 "paid_at": (payment.payment_date + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
             }
         }), 200

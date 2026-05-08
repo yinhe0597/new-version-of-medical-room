@@ -198,6 +198,8 @@ class Payment(db.Model):
     payment_date = db.Column(db.DateTime, default=datetime.utcnow)
     payment_method = db.Column(db.String(50))
     receipt_printed = db.Column(db.Boolean, default=False)
+    is_employee_discount = db.Column(db.Boolean, default=False)  # 是否职工优惠
+    original_amount = db.Column(db.Float, nullable=True)  # 原始应收金额（优惠前）
 
     def __repr__(self):
         return f'<Payment {self.id}>'

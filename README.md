@@ -1,6 +1,6 @@
 # 校医务室诊疗管理系统 (Medical Room Management System)
 
-当前版本：**v26.05.08.08.16**
+当前版本：**v26.05.08.13.48**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black)
@@ -68,6 +68,13 @@
 ![营收报表](docs/images/revenue-report.png)
 
 ## 更新日志
+
+### v26.05.08.13.48（2026-05-08）
+
+- v26.05.08.13.48: 医生端主诉模板改为现病史模板(##快捷调用)；护士端菜单改名"库存盘点"；新增职工优惠收费功能
+
+**文档更新：**
+- 新增开发日志：`docs/开发日志-2026-05-08-v13.48.md`
 
 ### v26.05.08.08.16（2026-05-08）
 

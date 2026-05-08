@@ -24,10 +24,10 @@
             <el-form :model="visitForm" label-position="top">
               <div v-show="!quickMode">
                 <el-form-item label="主诉">
-                  <el-input v-model="visitForm.chief_complaint" type="textarea" :rows="2" @input="onTemplateInput('chief_complaint')"></el-input>
+                  <el-input v-model="visitForm.chief_complaint" type="textarea" :rows="2"></el-input>
                 </el-form-item>
                 <el-form-item label="现病史">
-                  <el-input v-model="visitForm.present_illness" type="textarea" :rows="2"></el-input>
+                  <el-input v-model="visitForm.present_illness" type="textarea" :rows="2" @input="onTemplateInput('present_illness')"></el-input>
                 </el-form-item>
                 <el-form-item label="既往史（过敏史）">
                   <el-input v-model="visitForm.past_history" type="textarea" :rows="2"></el-input>
@@ -409,7 +409,7 @@ const templateDialogTitle = computed(() => {
 })
 
 const templateCategoryByField = {
-  chief_complaint: 'chief_complaint',
+  present_illness: 'present_illness',
   physical_exam: 'physical_exam',
   doctor_advice: 'doctor_advice'
 }

@@ -131,6 +131,22 @@
             <p>诊察费: ¥ {{ visitDetail.consultation_fee.toFixed(2) }}</p>
             <p class="total">应收总额: ¥ {{ visitDetail.total_amount.toFixed(2) }}</p>
           </div>
+
+          <div class="discount-section" style="margin-top: 10px;">
+            <el-checkbox v-model="employeeDiscount">职工优惠</el-checkbox>
+            <div v-if="employeeDiscount" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
+              <span>实收金额：</span>
+              <el-input-number 
+                v-model="actualAmount" 
+                :min="0" 
+                :max="visitDetail.total_amount" 
+                :precision="2" 
+                :step="0.5"
+                size="small"
+              />
+              <span>元</span>
+            </div>
+          </div>
           
           <div class="payment-method">
             <span>支付方式：</span>
@@ -184,7 +200,9 @@
         </div>
 
         <hr/>
-        <p>金额: ¥ {{ receiptData?.amount.toFixed(2) }}</p>
+        <p v-if="receiptData?.original_amount">应收: ¥ {{ receiptData?.original_amount.toFixed(2) }}</p>
+        <p v-if="receiptData?.original_amount">优惠类型: 职工优惠</p>
+        <p>{{ receiptData?.original_amount ? '实收' : '金额' }}: ¥ {{ receiptData?.amount.toFixed(2) }}</p>
         <p>支付方式: {{ getPaymentMethodText(paymentMethod) }}</p>
         <hr/>
         <p style="text-align: center">盖章有效</p>
@@ -265,7 +283,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, reactive } from 'vue'
+import { ref, onMounted, computed, reactive, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import request from '@/api/request'
 import { ElMessage } from 'element-plus'
@@ -278,6 +296,8 @@ const visitDetail = ref(null)
 const loading = ref(false)
 const executing = ref(false)
 const paymentMethod = ref('cash')
+const employeeDiscount = ref(false)
+const actualAmount = ref(0)
 const showReceipt = ref(false)
 const receiptData = ref(null)
 const verifying = ref(false)
@@ -302,6 +322,12 @@ const serviceOptions = ref([])
 const addServiceForm = reactive({
   drug_id: null,
   quantity: 1
+})
+
+watch(employeeDiscount, (val) => {
+  if (val && visitDetail.value) {
+    actualAmount.value = visitDetail.value.total_amount
+  }
 })
 
 const getStatusText = (status) => {
@@ -483,7 +509,9 @@ const handleExecute = async () => {
   executing.value = true
   try {
     const res = await request.post(`/nurse/visits/${visitId}/execute`, {
-      payment_method: paymentMethod.value
+      payment_method: paymentMethod.value,
+      employee_discount: employeeDiscount.value,
+      actual_amount: employeeDiscount.value ? actualAmount.value : null
     })
     receiptData.value = res.data
     showReceipt.value = true
