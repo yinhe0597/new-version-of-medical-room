@@ -2,7 +2,7 @@ from flask import request, jsonify, send_file, make_response, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Drug, Payment, Visit, PrescriptionItem, Patient, InventoryRecord
+from backend.app.models import User, Drug, Payment, Visit, PrescriptionItem, Patient, InventoryRecord, OperationLog
 from backend.app.utils.decorators import role_required
 from datetime import datetime, date, timedelta
 from sqlalchemy import func
@@ -11,6 +11,7 @@ import os
 import shutil
 import csv
 import io
+import json
 import subprocess
 from sqlalchemy.exc import IntegrityError
 
@@ -308,6 +309,24 @@ def create_drug():
         inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None
     )
     db.session.add(drug)
+    db.session.commit()
+
+    # 记录运营日志
+    log = OperationLog(
+        user_id=int(get_jwt_identity()),
+        action_type='drug_create',
+        target_type='drug',
+        target_id=drug.id,
+        summary=f"新增药品: {drug.name}",
+        details=json.dumps({
+            "name": drug.name,
+            "specification": drug.specification or "",
+            "unit": drug.unit or "",
+            "price": drug.price,
+            "stock": drug.stock
+        }, ensure_ascii=False)
+    )
+    db.session.add(log)
     db.session.commit()
 
     return jsonify({"data": {"id": drug.id}}), 201
@@ -1431,6 +1450,62 @@ def delete_user(id):
     db.session.delete(user)
     db.session.commit()
     return jsonify({"msg": "User deleted successfully"}), 200
+
+@bp.route('/admin/operation-logs', methods=['GET'])
+@role_required('admin')
+def get_operation_logs():
+    """获取运营日志列表"""
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('size', 20, type=int)
+    action_type = request.args.get('action_type', '')
+    start_date = request.args.get('start_date', '')
+    end_date = request.args.get('end_date', '')
+    
+    query = OperationLog.query.order_by(OperationLog.timestamp.desc())
+    
+    if action_type:
+        query = query.filter(OperationLog.action_type == action_type)
+    
+    if start_date:
+        try:
+            start_dt = datetime.strptime(start_date, '%Y-%m-%d') - timedelta(hours=8)
+            query = query.filter(OperationLog.timestamp >= start_dt)
+        except ValueError:
+            pass
+    
+    if end_date:
+        try:
+            end_dt = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59) - timedelta(hours=8)
+            query = query.filter(OperationLog.timestamp <= end_dt)
+        except ValueError:
+            pass
+    
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    
+    data = []
+    for log in pagination.items:
+        local_time = log.timestamp + timedelta(hours=8) if log.timestamp else None
+        user = log.user
+        data.append({
+            "id": log.id,
+            "user_name": user.real_name if user else "未知",
+            "user_role": user.role if user else "",
+            "action_type": log.action_type,
+            "target_type": log.target_type,
+            "target_id": log.target_id,
+            "summary": log.summary,
+            "details": log.details,
+            "timestamp": local_time.strftime("%Y-%m-%d %H:%M:%S") if local_time else ""
+        })
+    
+    return jsonify({
+        "data": data,
+        "meta": {
+            "page": page,
+            "per_page": per_page,
+            "total": pagination.total
+        }
+    }), 200
 
 @bp.route('/admin/backup', methods=['POST'])
 @role_required('admin')

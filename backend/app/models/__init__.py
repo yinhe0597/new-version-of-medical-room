@@ -227,3 +227,18 @@ class DailyStockSnapshot(db.Model):
 
     drug = db.relationship('Drug')
     __table_args__ = (db.UniqueConstraint('drug_id', 'date'),)
+
+class OperationLog(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), index=True)
+    action_type = db.Column(db.String(50), index=True)
+    target_type = db.Column(db.String(50))
+    target_id = db.Column(db.Integer)
+    summary = db.Column(db.String(200))
+    details = db.Column(db.Text)
+    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+
+    user = db.relationship('User')
+
+    def __repr__(self):
+        return f'<OperationLog {self.id} {self.action_type}>'

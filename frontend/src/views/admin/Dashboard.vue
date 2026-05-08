@@ -29,6 +29,10 @@
           <el-icon><DataLine /></el-icon>
           <span>药品出库报表</span>
         </el-menu-item>
+        <el-menu-item index="/admin/operation-log">
+          <el-icon><Document /></el-icon>
+          <span>运营日志</span>
+        </el-menu-item>
         <el-menu-item index="/admin/settings">
           <el-icon><Setting /></el-icon>
           <span>系统设置</span>
@@ -55,7 +59,7 @@
 import { computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { FirstAidKit, DataLine, Setting, User, Avatar } from '@element-plus/icons-vue'
+import { FirstAidKit, DataLine, Setting, User, Avatar, Document } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 const router = useRouter()

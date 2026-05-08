@@ -2,7 +2,8 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, VISIT_STATUS_PENDING
+from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, VISIT_STATUS_PENDING
+import json
 from backend.app.utils.decorators import role_required
 from datetime import datetime, timezone
 import math
@@ -686,6 +687,24 @@ def create_visit():
 
     db.session.commit()
 
+    # 检查是否为临时人员就诊
+    patient = Patient.query.get(patient_id)
+    if patient and patient.is_temporary:
+        log = OperationLog(
+            user_id=int(get_jwt_identity()),
+            action_type='temp_patient_visit',
+            target_type='visit',
+            target_id=visit.id,
+            summary=f"临时人员就诊: {patient.name}",
+            details=json.dumps({
+                "patient_name": patient.name,
+                "patient_id": patient.id,
+                "diagnosis": visit.diagnosis or ""
+            }, ensure_ascii=False)
+        )
+        db.session.add(log)
+        db.session.commit()
+
     return jsonify({"data": {"visit_id": visit.id}}), 201
 
 @bp.route('/doctor/visits/history', methods=['GET'])
@@ -823,6 +842,18 @@ def update_visit_medical_record(visit_id):
 
     data = request.get_json(silent=True) or {}
     allowed_fields = ['chief_complaint', 'present_illness', 'past_history', 'physical_exam', 'doctor_advice', 'special_note']
+
+    # 记录旧值用于日志
+    changes = {}
+    for field in allowed_fields:
+        new_value = data.get(field)
+        if new_value is not None:
+            new_value = new_value.strip() if isinstance(new_value, str) else new_value
+            old_value = getattr(visit, field) or ''
+            if new_value and new_value != old_value:
+                changes[field] = {"old": old_value, "new": new_value}
+
+    # 执行字段更新
     updated = False
     for field in allowed_fields:
         value = (data.get(field) or '').strip()
@@ -833,8 +864,57 @@ def update_visit_medical_record(visit_id):
     if not updated:
         return jsonify({"msg": "No valid fields to update"}), 400
 
+    # 记录操作日志
+    if changes:
+        field_names_map = {
+            'chief_complaint': '主诉',
+            'present_illness': '现病史',
+            'past_history': '既往史',
+            'physical_exam': '体格检查',
+            'doctor_advice': '医生留言',
+            'special_note': '特殊备注'
+        }
+        changed_fields = [field_names_map.get(f, f) for f in changes.keys()]
+        summary = f"修改了{'、'.join(changed_fields)}"
+
+        log = OperationLog(
+            user_id=int(get_jwt_identity()),
+            action_type='visit_edit',
+            target_type='visit',
+            target_id=visit.id,
+            summary=summary,
+            details=json.dumps({"changes": changes}, ensure_ascii=False)
+        )
+        db.session.add(log)
+
     db.session.commit()
     return jsonify({"msg": "Medical record updated successfully"}), 200
+
+
+@bp.route('/doctor/visits/<int:visit_id>/revisions', methods=['GET'])
+@jwt_required()
+@role_required(['doctor', 'admin'])
+def get_visit_revisions(visit_id):
+    """获取就诊记录的修改历史"""
+    logs = OperationLog.query.filter_by(
+        target_type='visit',
+        target_id=visit_id,
+        action_type='visit_edit'
+    ).order_by(OperationLog.timestamp.desc()).all()
+
+    data = []
+    for log in logs:
+        from datetime import timedelta
+        local_time = log.timestamp + timedelta(hours=8) if log.timestamp else None
+        data.append({
+            "id": log.id,
+            "user_name": log.user.real_name if log.user else "未知",
+            "summary": log.summary,
+            "details": json.loads(log.details) if log.details else {},
+            "timestamp": local_time.strftime("%Y-%m-%d %H:%M:%S") if local_time else ""
+        })
+
+    return jsonify({"data": data}), 200
 
 _TEXT_TEMPLATE_CATEGORIES = {"chief_complaint", "physical_exam", "doctor_advice"}
 
