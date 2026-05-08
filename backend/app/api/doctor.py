@@ -916,7 +916,7 @@ def get_visit_revisions(visit_id):
 
     return jsonify({"data": data}), 200
 
-_TEXT_TEMPLATE_CATEGORIES = {"chief_complaint", "physical_exam", "doctor_advice"}
+_TEXT_TEMPLATE_CATEGORIES = {"present_illness", "physical_exam", "doctor_advice"}
 
 @bp.route('/doctor/templates', methods=['GET'])
 @jwt_required()

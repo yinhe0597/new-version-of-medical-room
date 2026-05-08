@@ -15,7 +15,7 @@
         </el-menu-item>
         <el-menu-item index="/nurse/inventory">
           <el-icon><Box /></el-icon>
-          <span>库存与入库</span>
+          <span>库存盘点</span>
         </el-menu-item>
         <el-menu-item index="/nurse/drugs">
           <el-icon><FirstAidKit /></el-icon>

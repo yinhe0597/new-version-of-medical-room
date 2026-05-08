@@ -39,10 +39,10 @@ const routes = [
         component: () => import('@/views/doctor/PatientSearch.vue')
       },
       {
-        path: 'templates/chief-complaint',
-        name: 'ChiefComplaintTemplates',
+        path: 'templates/present-illness',
+        name: 'PresentIllnessTemplates',
         component: () => import('@/views/doctor/TextTemplates.vue'),
-        meta: { templateCategory: 'chief_complaint', templateTitle: '主诉模板' }
+        meta: { templateCategory: 'present_illness', templateTitle: '现病史模板' }
       },
       {
         path: 'templates/physical-exam',
