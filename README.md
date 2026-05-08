@@ -1,6 +1,6 @@
 # 校医务室诊疗管理系统 (Medical Room Management System)
 
-当前版本：**v26.05.07.18.50**
+当前版本：**v26.05.08.08.16**
 
 ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 ![Flask](https://img.shields.io/badge/Backend-Flask-black)
@@ -68,6 +68,16 @@
 ![营收报表](docs/images/revenue-report.png)
 
 ## 更新日志
+
+### v26.05.08.08.16（2026-05-08）
+
+**新增功能：**
+- 新增运营日志系统（记录病例修改/新增药品/临时就诊）
+- 医生端修改病历功能优化（所有未驳回记录可随时修改）
+- 病例修改历史追溯（时间线展示变更详情）
+
+**文档更新：**
+- 新增开发日志：`docs/开发日志-2026-05-08-v08.16.md`
 
 ### v26.05.07.18.50（2026-05-07）
 

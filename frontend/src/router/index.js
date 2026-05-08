@@ -145,6 +145,12 @@ const routes = [
         component: () => import('@/views/admin/DrugOutboundReport.vue')
       },
       {
+        path: 'operation-log',
+        name: 'OperationLog',
+        component: () => import('@/views/admin/OperationLog.vue'),
+        meta: { title: '运营日志' }
+      },
+      {
         path: 'settings',
         name: 'SystemSettings',
         component: () => import('@/views/admin/SystemSettings.vue')

@@ -38,13 +38,13 @@
               病例复盘
             </el-button>
             <el-button
-              v-if="scope.row.medical_record_incomplete && scope.row.status !== 'rejected'"
+              v-if="scope.row.status !== 'rejected'"
               size="small"
               type="success"
               link
               @click="openSupplementDialog(scope.row)"
             >
-              补充病历
+              修改病历
             </el-button>
             <el-button
               v-if="scope.row.status === 'rejected'"
@@ -98,6 +98,34 @@
           <el-descriptions-item label="医生留言">{{ visitDetail.doctor_advice || '无' }}</el-descriptions-item>
         </el-descriptions>
 
+        <!-- 修改记录 -->
+        <div v-if="revisions.length > 0" style="margin-top: 20px;">
+          <el-divider content-position="left">修改记录</el-divider>
+          <el-timeline>
+            <el-timeline-item
+              v-for="rev in revisions"
+              :key="rev.id"
+              :timestamp="rev.timestamp"
+              placement="top"
+            >
+              <el-card shadow="never" :body-style="{ padding: '10px' }">
+                <p style="margin: 0; font-size: 13px; color: #606266;">
+                  <strong>{{ rev.user_name }}</strong> {{ rev.summary }}
+                </p>
+                <div v-if="rev.details && rev.details.changes" style="margin-top: 8px;">
+                  <div v-for="(change, field) in rev.details.changes" :key="field"
+                       style="font-size: 12px; color: #909399; margin-top: 4px;">
+                    <span>{{ fieldLabel(field) }}：</span>
+                    <span style="text-decoration: line-through; color: #F56C6C;">{{ change.old || '(空)' }}</span>
+                    <span> → </span>
+                    <span style="color: #67C23A;">{{ change.new || '(空)' }}</span>
+                  </div>
+                </div>
+              </el-card>
+            </el-timeline-item>
+          </el-timeline>
+        </div>
+
         <div style="margin-top: 20px;">
           <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">处方明细</div>
           <el-table :data="visitDetail.items" border stripe size="small">
@@ -121,8 +149,8 @@
       </template>
     </el-dialog>
 
-    <!-- 补充病历弹窗 -->
-    <el-dialog v-model="supplementDialogVisible" title="补充病历" width="700px">
+    <!-- 修改病历弹窗 -->
+    <el-dialog v-model="supplementDialogVisible" title="修改病历" width="700px">
       <el-form :model="supplementForm" label-position="top">
         <el-form-item label="主诉">
           <el-input v-model="supplementForm.chief_complaint" type="textarea" :rows="2" placeholder="请填写主诉"></el-input>
@@ -166,6 +194,34 @@ const dialogVisible = ref(false)
 const detailLoading = ref(false)
 const visitDetail = ref(null)
 const printRef = ref(null)
+
+// 修改记录
+const revisions = ref([])
+const revisionsLoading = ref(false)
+
+const loadRevisions = async (visitId) => {
+  revisionsLoading.value = true
+  try {
+    const res = await request.get(`/doctor/visits/${visitId}/revisions`)
+    revisions.value = res.data.data || res.data || []
+  } catch (e) {
+    revisions.value = []
+  } finally {
+    revisionsLoading.value = false
+  }
+}
+
+const fieldLabel = (field) => {
+  const map = {
+    'chief_complaint': '主诉',
+    'present_illness': '现病史',
+    'past_history': '既往史',
+    'physical_exam': '体格检查',
+    'doctor_advice': '医生留言',
+    'special_note': '特殊备注'
+  }
+  return map[field] || field
+}
 
 // 补充病历状态
 const supplementDialogVisible = ref(false)
@@ -226,9 +282,11 @@ const getStatusText = (status) => {
 const openCaseReview = async (visitId) => {
   dialogVisible.value = true
   detailLoading.value = true
+  revisions.value = []
   try {
     const res = await request.get(`/doctor/visits/${visitId}`)
     visitDetail.value = res.data
+    loadRevisions(visitId)
   } catch (error) {
     ElMessage.error('获取详情失败')
     dialogVisible.value = false
@@ -338,7 +396,7 @@ const submitSupplement = async () => {
   supplementSubmitting.value = true
   try {
     await request.put(`/doctor/visits/${supplementVisitId.value}/medical-record`, payload)
-    ElMessage.success('病历补充成功')
+    ElMessage.success('病历修改成功')
     supplementDialogVisible.value = false
     fetchHistory()
   } catch (error) {
