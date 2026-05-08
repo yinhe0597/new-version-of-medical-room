@@ -1421,3 +1421,157 @@ def list_drugs():
             "total": pagination.total
         }
     }), 200
+
+
+@bp.route('/nurse/my-history', methods=['GET'])
+@role_required('nurse')
+def get_my_history():
+    """获取当前护士经手的所有历史处方记录"""
+    user_id = int(get_jwt_identity())
+
+    # 子查询：通过 Payment 表找到 nurse_id 对应的 visit_id
+    payment_visit_ids = db.session.query(Payment.visit_id).filter(Payment.nurse_id == user_id).subquery()
+
+    visits = (
+        Visit.query
+        .filter(
+            or_(
+                Visit.verified_by == user_id,
+                Visit.rejected_by == user_id,
+                Visit.revoked_by == user_id,
+                Visit.id.in_(payment_visit_ids)
+            )
+        )
+        .options(
+            db.joinedload(Visit.patient),
+            db.joinedload(Visit.doctor),
+            db.joinedload(Visit.payment),
+        )
+        .order_by(Visit.timestamp.desc())
+        .all()
+    )
+
+    data = []
+    for visit in visits:
+        payment = visit.payment
+        data.append({
+            "visit_id": visit.id,
+            "patient_name": visit.patient.name if visit.patient else "未知",
+            "student_id": visit.patient.student_id if visit.patient else "",
+            "created_at": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
+            "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis) if visit.diagnosis else "",
+            "doctor_name": visit.doctor.real_name if visit.doctor else "未知",
+            "total_amount": visit.total_amount,
+            "status": visit.status,
+            "payment_method": payment.payment_method if payment else None,
+            "verified_at": _format_local_dt(visit.verified_at, "%Y-%m-%d %H:%M:%S") if visit.verified_at else None,
+            "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
+            "reject_reason": visit.reject_reason,
+            "revoked_at": _format_local_dt(visit.revoked_at, "%Y-%m-%d %H:%M:%S") if visit.revoked_at else None,
+            "revoke_reason": visit.revoke_reason,
+        })
+
+    return jsonify({"data": data}), 200
+
+
+@bp.route('/nurse/visits/<int:visit_id>/revoke', methods=['POST'])
+@role_required('nurse')
+def revoke_visit(visit_id):
+    """
+    撤销已完成的交易：
+    1. 还原库存（因为实际未发药）
+    2. 删除 Payment 记录
+    3. 重置 Visit 状态为 pending
+    4. 记录审计信息
+    """
+    visit = Visit.query.options(
+        db.joinedload(Visit.payment),
+    ).get_or_404(visit_id)
+
+    # 校验状态
+    if visit.status != VISIT_STATUS_COMPLETED:
+        return jsonify({"msg": "只有已完成的处方才能撤销交易"}), 400
+
+    # 校验当前护士是否为经手人
+    user_id = int(get_jwt_identity())
+    payment = visit.payment or Payment.query.filter_by(visit_id=visit.id).first()
+
+    is_handler = (visit.verified_by == user_id) or (payment and payment.nurse_id == user_id)
+    if not is_handler:
+        return jsonify({"msg": "只有经手护士才能撤销该交易"}), 403
+
+    # 校验撤销原因
+    data = request.get_json() or {}
+    reason = (data.get("reason") or "").strip()
+    if not reason:
+        return jsonify({"msg": "请提供撤销原因"}), 400
+
+    try:
+        # 1. 还原库存
+        items = list(visit.items or [])
+        group_cache = {}
+        group_restore = {}
+
+        for item in items:
+            if item.drug is None:
+                continue
+            is_stock_item = item.drug.type == 1 or item.drug.type is None
+            if not is_stock_item:
+                continue  # 诊疗项目不涉及库存
+
+            qty = int(item.quantity or 0)
+            if qty <= 0:
+                continue
+
+            if item.drug.stock_group_code:
+                # 库存组还原
+                code = item.drug.stock_group_code
+                group = group_cache.get(code)
+                if group is None:
+                    group = DrugStockGroup.query.filter_by(group_code=code).first()
+                    if group:
+                        group_cache[code] = group
+
+                if group:
+                    unit_amount = int(item.drug.unit_amount or 0)
+                    if unit_amount > 0:
+                        restore_units = compute_deduct_units(qty, unit_amount)
+                        group_restore[code] = group_restore.get(code, 0) + restore_units
+                continue
+
+            # 普通药品库存还原
+            conv_rate = item.drug.conversion_rate or 1
+            stock_restore = math.ceil(qty / conv_rate) if item.is_scattered else qty
+            item.drug.stock += int(stock_restore)
+
+        # 还原库存组
+        for code, units in group_restore.items():
+            group = group_cache[code]
+            group.total_units += int(units)
+            stocks = recompute_variant_stocks(group.total_units, group.pack_amount, group.retail_amount)
+            if group.pack_drug is not None:
+                group.pack_drug.stock = stocks["pack_stock"]
+            if group.retail_drug is not None and stocks.get("retail_stock") is not None:
+                group.retail_drug.stock = stocks["retail_stock"]
+
+        # 2. 删除 Payment 记录
+        if payment:
+            db.session.delete(payment)
+
+        # 3. 重置 Visit 状态
+        visit.status = VISIT_STATUS_PENDING
+        visit.verified_by = None
+        visit.verified_at = None
+
+        # 4. 记录审计信息
+        visit.revoked_by = user_id
+        visit.revoked_at = datetime.utcnow()
+        visit.revoke_reason = reason
+
+        db.session.commit()
+
+        return jsonify({"msg": "交易已成功撤销"}), 200
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": f"撤销失败: {str(e)}"}), 500

@@ -10,7 +10,7 @@ VISIT_STATUS_REJECTED = "rejected"
 VISIT_ALLOWED_STATUS_TRANSITIONS = {
     VISIT_STATUS_PENDING: {VISIT_STATUS_NURSE_VERIFIED, VISIT_STATUS_REJECTED},
     VISIT_STATUS_NURSE_VERIFIED: {VISIT_STATUS_COMPLETED, VISIT_STATUS_REJECTED},
-    VISIT_STATUS_COMPLETED: set(),
+    VISIT_STATUS_COMPLETED: {VISIT_STATUS_PENDING},
     VISIT_STATUS_REJECTED: set(),
 }
 
@@ -130,11 +130,15 @@ class Visit(db.Model):
     rejected_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     rejected_at = db.Column(db.DateTime, nullable=True)
     reject_reason = db.Column(db.Text, nullable=True)
+    revoked_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    revoke_reason = db.Column(db.Text, nullable=True)
 
     items = db.relationship('PrescriptionItem', backref='visit', lazy='dynamic')
     payment = db.relationship('Payment', backref='visit', uselist=False)
     verifier = db.relationship('User', foreign_keys=[verified_by])
     rejector = db.relationship('User', foreign_keys=[rejected_by])
+    revoker = db.relationship('User', foreign_keys=[revoked_by])
 
     def __repr__(self):
         return f'<Visit {self.id}>'

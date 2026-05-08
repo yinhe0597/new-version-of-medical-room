@@ -91,6 +91,11 @@ const routes = [
         component: () => import('@/views/nurse/ExecutePrescription.vue')
       },
       {
+        path: 'history',
+        name: 'NurseHistory',
+        component: () => import('@/views/nurse/HistoryList.vue')
+      },
+      {
         path: 'inventory',
         name: 'Inventory',
         component: () => import('@/views/nurse/Inventory.vue')
