@@ -62,6 +62,9 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "visit", "rejected_at", "DATETIME")
     _ensure_sqlite_column(app, "visit", "reject_reason", "TEXT")
     _ensure_sqlite_column(app, "visit", "special_note", "TEXT")
+    _ensure_sqlite_column(app, "visit", "revoked_by", "INTEGER")
+    _ensure_sqlite_column(app, "visit", "revoked_at", "DATETIME")
+    _ensure_sqlite_column(app, "visit", "revoke_reason", "TEXT")
 
     # prescription_item 表新增列
     _ensure_sqlite_column(app, "prescription_item", "original_price", "FLOAT")
@@ -77,6 +80,11 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "drug", "stock_group_code", "VARCHAR(36)")
     _ensure_sqlite_column(app, "drug", "unit_amount", "INTEGER")
     _ensure_sqlite_column(app, "drug", "base_name", "VARCHAR(128)")
+
+    # payment 表新增列
+    _ensure_sqlite_column(app, "payment", "receipt_printed", "BOOLEAN DEFAULT 0")
+    _ensure_sqlite_column(app, "payment", "is_employee_discount", "BOOLEAN DEFAULT 0")
+    _ensure_sqlite_column(app, "payment", "original_amount", "FLOAT")
 
     from backend.app.api import bp as api_bp
     app.register_blueprint(api_bp, url_prefix='/api')

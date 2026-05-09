@@ -16,6 +16,7 @@ from backend.app.models import (
     VISIT_STATUS_NURSE_VERIFIED,
     VISIT_STATUS_PENDING,
     VISIT_STATUS_REJECTED,
+    VISIT_STATUS_REVOKED,
     is_visit_status_transition_allowed,
 )
 from backend.app.utils.decorators import role_required
@@ -1481,7 +1482,7 @@ def revoke_visit(visit_id):
     撤销已完成的交易：
     1. 还原库存（因为实际未发药）
     2. 删除 Payment 记录
-    3. 重置 Visit 状态为 pending
+    3. 标记 Visit 状态为 revoked（已撤销），保留审核痕迹
     4. 记录审计信息
     """
     visit = Visit.query.options(
@@ -1558,10 +1559,8 @@ def revoke_visit(visit_id):
         if payment:
             db.session.delete(payment)
 
-        # 3. 重置 Visit 状态
-        visit.status = VISIT_STATUS_PENDING
-        visit.verified_by = None
-        visit.verified_at = None
+        # 3. 标记 Visit 状态为已撤销（保留审核痕迹）
+        visit.status = VISIT_STATUS_REVOKED
 
         # 4. 记录审计信息
         visit.revoked_by = user_id

@@ -16,6 +16,7 @@
         <el-option label="已审核" value="nurse_verified" />
         <el-option label="已完成" value="completed" />
         <el-option label="已驳回" value="rejected" />
+        <el-option label="已撤销" value="revoked" />
       </el-select>
     </div>
 
@@ -132,7 +133,8 @@ const getStatusText = (status) => {
     pending: '待处理',
     nurse_verified: '已审核',
     completed: '已完成',
-    rejected: '已驳回'
+    rejected: '已驳回',
+    revoked: '已撤销'
   }
   return map[status] || status
 }
@@ -142,7 +144,8 @@ const getStatusTagType = (status) => {
     pending: 'warning',
     nurse_verified: '',
     completed: 'success',
-    rejected: 'danger'
+    rejected: 'danger',
+    revoked: 'info'
   }
   return map[status] ?? 'info'
 }

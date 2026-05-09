@@ -6,7 +6,12 @@
         <el-card>
           <template #header>
             <div class="card-header">
-              <span>药品库存列表</span>
+              <div style="display: flex; align-items: center; gap: 12px;">
+                <span>药品库存列表</span>
+                <el-button type="warning" @click="handleSmartInventory">
+                  <el-icon><Cpu /></el-icon> 智能盘库
+                </el-button>
+              </div>
               <el-input
                 v-model="searchQuery"
                 placeholder="搜索药品名称/规格"
@@ -182,6 +187,59 @@
         </template>
       </el-dialog>
 
+      <!-- 智能盘库结果弹窗 -->
+      <el-dialog
+        v-model="smartDialogVisible"
+        title="智能盘库报告"
+        width="700px"
+        destroy-on-close
+      >
+        <!-- 筛选控制区域 -->
+        <div style="margin-bottom: 16px; display: flex; align-items: center; gap: 16px;">
+          <div style="display: flex; align-items: center; gap: 8px;">
+            <span style="white-space: nowrap; font-size: 14px;">库存预警阈值：</span>
+            <el-input-number 
+              v-model="smartThreshold" 
+              :min="1" 
+              :max="9999" 
+              size="default"
+              style="width: 150px;"
+            />
+          </div>
+          <el-checkbox v-model="smartScatteredOnly">仅显示含"散"类目</el-checkbox>
+          <el-button type="primary" size="default" @click="handleSmartInventory">
+            重新筛选
+          </el-button>
+        </div>
+
+        <div v-if="smartResult">
+          <el-alert
+            :title="`本次盘库共合并 ${smartResult.merged_groups} 组重复项，清理了 ${smartResult.deleted_duplicates} 条冗余记录。`"
+            type="success"
+            show-icon
+            :closable="false"
+            style="margin-bottom: 16px"
+          />
+          
+          <h3 style="margin: 0 0 12px 0; font-size: 15px;">库存预警清单 (库存 &lt; {{ smartThreshold }})</h3>
+          <el-table :data="smartResult.warnings" border stripe size="small" max-height="400" empty-text="无符合条件的预警药品">
+            <el-table-column prop="name" label="药品名称" min-width="150" />
+            <el-table-column prop="specification" label="规格" width="120" />
+            <el-table-column prop="stock" label="当前库存" width="100" align="center">
+              <template #default="scope">
+                <span style="color: #f56c6c; font-weight: bold">{{ scope.row.stock }}</span>
+              </template>
+            </el-table-column>
+          </el-table>
+          <div style="margin-top: 8px; color: #909399; font-size: 13px;">
+            共 {{ smartResult.warnings.length }} 种药品库存低于预警值
+          </div>
+        </div>
+        <template #footer>
+          <el-button @click="smartDialogVisible = false">关 闭</el-button>
+        </template>
+      </el-dialog>
+
       <!-- 联合盘点弹窗 (整散库存组药品) -->
       <el-dialog
         v-model="groupDialogVisible"
@@ -232,8 +290,8 @@
 
 <script setup>
 import { ref, onMounted, watch } from 'vue'
-import { Search } from '@element-plus/icons-vue'
-import { ElMessage } from 'element-plus'
+import { Search, Cpu } from '@element-plus/icons-vue'
+import { ElMessage, ElLoading } from 'element-plus'
 import request from '@/api/request'
 
 const activeTab = ref('inventory')
@@ -258,6 +316,12 @@ const monthlyStartDate = ref('')
 const monthlyEndDate = ref('')
 const monthlyData = ref([])
 const monthlyLoading = ref(false)
+
+// Smart Inventory
+const smartDialogVisible = ref(false)
+const smartResult = ref(null)
+const smartThreshold = ref(30)
+const smartScatteredOnly = ref(false)
 
 // Dialog
 const dialogVisible = ref(false)
@@ -406,6 +470,26 @@ const submitInventory = async () => {
       }
     }
   })
+}
+
+const handleSmartInventory = async () => {
+  const loadingInstance = ElLoading.service({
+    lock: true,
+    text: '正在智能盘点库存，请稍候...',
+    background: 'rgba(0, 0, 0, 0.7)',
+  })
+  try {
+    const res = await request.post('/admin/drugs/smart-inventory', {
+      threshold: smartThreshold.value,
+      scattered_only: smartScatteredOnly.value
+    })
+    smartResult.value = res.data?.data || res.data
+    smartDialogVisible.value = true
+  } catch (error) {
+    ElMessage.error(error.msg || '智能盘库失败')
+  } finally {
+    loadingInstance.close()
+  }
 }
 
 const fetchMonthlyReport = async () => {

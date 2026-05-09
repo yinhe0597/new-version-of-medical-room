@@ -5,8 +5,6 @@
         <div class="card-header">
           <div class="left-panel">
             <el-button type="primary" :icon="Plus" @click="openCreateDialog">新增</el-button>
-            <el-button type="success" :icon="Upload" @click="openImportDialog">批量入库</el-button>
-            <el-button type="warning" :icon="Cpu" @click="handleSmartInventory">智能盘库</el-button>
           </div>
           <div class="right-panel">
             <el-input 
@@ -190,76 +188,15 @@
       </template>
     </el-dialog>
 
-    <!-- 批量入库弹窗 -->
-    <el-dialog
-      v-model="importDialogVisible"
-      title="批量入库"
-      width="400px"
-    >
-      <div style="text-align: center;">
-        <p>支持 CSV 模板上传，或直接上传 <b>yaowu.xls</b></p>
-        <el-button type="primary" link @click="downloadTemplate">下载CSV模板</el-button>
-        <div style="margin-top: 20px;">
-          <el-upload
-            class="upload-demo"
-            drag
-            action=""
-            :http-request="handleUpload"
-            :show-file-list="false"
-            accept=".csv,.xls,.xlsx"
-          >
-            <el-icon class="el-icon--upload"><upload-filled /></el-icon>
-            <div class="el-upload__text">
-              拖拽文件到此处或 <em>点击上传</em>
-            </div>
-            <template #tip>
-              <div class="el-upload__tip">
-                支持 CSV / XLS 文件
-              </div>
-            </template>
-          </el-upload>
-        </div>
-      </div>
-    </el-dialog>
 
-    <!-- 智能盘库结果弹窗 -->
-    <el-dialog
-      v-model="smartDialogVisible"
-      title="智能盘库报告"
-      width="600px"
-    >
-      <div v-if="smartResult">
-        <el-alert
-          :title="`本次盘库共合并 ${smartResult.merged_groups} 组重复项，清理了 ${smartResult.deleted_duplicates} 条冗余记录。`"
-          type="success"
-          show-icon
-          :closable="false"
-          style="margin-bottom: 20px"
-        />
-        
-        <h3>库存预警清单 (库存 < 10)</h3>
-        <el-table :data="smartResult.warnings" border stripe size="small" height="300">
-          <el-table-column prop="name" label="药品名称" />
-          <el-table-column prop="specification" label="规格" width="120" />
-          <el-table-column prop="stock" label="当前库存" width="100">
-            <template #default="scope">
-              <span style="color: #f56c6c; font-weight: bold">{{ scope.row.stock }}</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-      <template #footer>
-        <el-button type="primary" @click="smartDialogVisible = false">确 定</el-button>
-      </template>
-    </el-dialog>
   </div>
 </template>
 
 <script setup>
 import { ref, onMounted, computed, watch } from 'vue'
 import request from '@/api/request'
-import { Plus, Upload, UploadFilled, Cpu } from '@element-plus/icons-vue'
-import { ElMessage, ElMessageBox, ElLoading } from 'element-plus'
+import { Plus } from '@element-plus/icons-vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const keyword = ref('')
 const drugList = ref([])
@@ -269,13 +206,12 @@ const pageSize = ref(20)
 const total = ref(0)
 
 const dialogVisible = ref(false)
-const importDialogVisible = ref(false)
+
 const isEdit = ref(false)
 const submitting = ref(false)
 const formRef = ref(null)
 
-const smartDialogVisible = ref(false)
-const smartResult = ref(null)
+
 
 // 库存操作相关
 const showCorrectionForm = ref(false)
@@ -335,23 +271,6 @@ const submitInbound = async () => {
   }
 }
 
-const handleSmartInventory = async () => {
-  const loadingInstance = ElLoading.service({
-    lock: true,
-    text: '正在智能盘点库存，请稍候...',
-    background: 'rgba(0, 0, 0, 0.7)',
-  })
-  try {
-    const res = await request.post('/admin/drugs/smart-inventory')
-    smartResult.value = res.data
-    smartDialogVisible.value = true
-    fetchDrugs() // Refresh list after inventory
-  } catch (error) {
-    ElMessage.error(error.msg || '智能盘库失败')
-  } finally {
-    loadingInstance.close()
-  }
-}
 
 const form = ref({
   id: null,
@@ -583,44 +502,6 @@ const handleEnable = async (row) => {
   }
 }
 
-const openImportDialog = () => {
-  importDialogVisible.value = true
-}
-
-const downloadTemplate = async () => {
-  try {
-    const res = await request.get('/admin/drugs/template', { responseType: 'blob' })
-    const url = window.URL.createObjectURL(new Blob([res]))
-    const link = document.createElement('a')
-    link.href = url
-    link.setAttribute('download', '药品导入模板.csv')
-    document.body.appendChild(link)
-    link.click()
-  } catch (error) {
-    ElMessage.error('下载模板失败')
-  }
-}
-
-const handleUpload = async (options) => {
-  const formData = new FormData()
-  formData.append('file', options.file)
-  
-  const isXls = options.file.name.endsWith('.xls') || options.file.name.endsWith('.xlsx')
-  const uploadUrl = isXls ? '/admin/drugs/import_xls' : '/admin/drugs/import'
-
-  try {
-    const res = await request.post(uploadUrl, formData, {
-      headers: {
-        'Content-Type': 'multipart/form-data'
-      }
-    })
-    ElMessage.success(res.msg || '导入成功')
-    importDialogVisible.value = false
-    fetchDrugs()
-  } catch (error) {
-    ElMessage.error(error.msg || '导入失败')
-  }
-}
 
 onMounted(() => {
   fetchDrugs()
