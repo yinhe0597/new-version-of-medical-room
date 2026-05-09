@@ -621,6 +621,10 @@ def get_drug_template():
 @bp.route('/admin/drugs/smart-inventory', methods=['POST'])
 @role_required(['admin', 'nurse'])
 def smart_inventory():
+    data = request.get_json() or {}
+    threshold = int(data.get('threshold', 30))
+    scattered_only = data.get('scattered_only', False)
+
     total_merged = 0
     total_deleted = 0
 
@@ -662,11 +666,22 @@ def smart_inventory():
 
         db.session.commit()
 
-        low_stock_drugs = Drug.query.filter(
+        query = Drug.query.filter(
             Drug.type == 1,
             Drug.status == 1,
-            Drug.stock < 10
-        ).order_by(Drug.stock.asc()).all()
+            Drug.stock < threshold
+        )
+
+        # 如果勾选了"散"筛选，只显示名称或规格中含有"散"字的药品
+        if scattered_only:
+            query = query.filter(
+                db.or_(
+                    Drug.name.like('%散%'),
+                    Drug.specification.like('%散%')
+                )
+            )
+
+        low_stock_drugs = query.order_by(Drug.stock.asc()).all()
 
         warnings = []
         for d in low_stock_drugs:
@@ -682,7 +697,8 @@ def smart_inventory():
             "data": {
                 "merged_groups": total_merged,
                 "deleted_duplicates": total_deleted,
-                "warnings": warnings
+                "warnings": warnings,
+                "threshold": threshold
             }
         }), 200
 
