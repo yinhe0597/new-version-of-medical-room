@@ -9,9 +9,9 @@
     </el-page-header>
 
     <div class="main-content">
-      <el-row :gutter="20">
+      <div class="resizable-container">
         <!-- 左侧：电子病历 -->
-        <el-col :span="10">
+        <div class="left-panel" :style="{ width: leftWidth + 'px' }">
           <el-card class="box-card">
             <template #header>
               <div style="display: flex; justify-content: space-between; align-items: center;">
@@ -68,10 +68,15 @@
               </div>
             </el-form>
           </el-card>
-        </el-col>
+        </div>
+
+        <!-- 拖拽分隔条 -->
+        <div class="resize-handle" @mousedown="startResize">
+          <div class="resize-line"></div>
+        </div>
 
         <!-- 右侧：开处方 -->
-        <el-col :span="14">
+        <div class="right-panel">
           <el-card class="box-card" header="处方开立">
             <!-- 药品搜索 -->
             <div class="drug-search">
@@ -240,8 +245,8 @@
               </div>
             </div>
           </el-card>
-        </el-col>
-      </el-row>
+        </div>
+      </div>
     </div>
 
     <el-dialog v-model="confirmDialogVisible" title="确认提交处方" width="900px">
@@ -343,6 +348,34 @@ const studentId = route.query.student_id
 const sourceVisitId = route.query.source_visit_id
 
 const diagnosisSearch = ref('')
+
+// 拖拽调节相关
+const leftWidth = ref(parseInt(localStorage.getItem('visitFormLeftWidth') || '420'))
+const isResizing = ref(false)
+const MIN_LEFT_WIDTH = 280
+const MAX_LEFT_WIDTH = 700
+
+const startResize = (e) => {
+  isResizing.value = true
+  const startX = e.clientX
+  const startWidth = leftWidth.value
+  
+  const onMouseMove = (moveEvent) => {
+    const delta = moveEvent.clientX - startX
+    const newWidth = startWidth + delta
+    leftWidth.value = Math.max(MIN_LEFT_WIDTH, Math.min(MAX_LEFT_WIDTH, newWidth))
+  }
+  
+  const onMouseUp = () => {
+    isResizing.value = false
+    localStorage.setItem('visitFormLeftWidth', leftWidth.value.toString())
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+  }
+  
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
 
 // 快速接诊模式
 const quickMode = ref(false)
@@ -794,6 +827,48 @@ const confirmSubmit = async () => {
 }
 .main-content {
   margin-top: 20px;
+}
+.resizable-container {
+  display: flex;
+  gap: 0;
+  height: calc(100vh - 160px);
+  overflow: hidden;
+}
+.left-panel {
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding-right: 8px;
+}
+.right-panel {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding-left: 8px;
+  min-width: 500px;
+}
+.resize-handle {
+  width: 8px;
+  cursor: col-resize;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background-color 0.2s;
+}
+.resize-handle:hover {
+  background-color: #e4e7ed;
+}
+.resize-handle:active {
+  background-color: #409eff;
+}
+.resize-line {
+  width: 2px;
+  height: 40px;
+  background-color: #dcdfe6;
+  border-radius: 1px;
+}
+.resize-handle:hover .resize-line {
+  background-color: #409eff;
 }
 .drug-search {
   margin-bottom: 10px;

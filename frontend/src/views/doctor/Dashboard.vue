@@ -1,14 +1,17 @@
 <template>
   <el-container class="layout-container">
-    <el-aside width="200px">
+    <el-aside :width="isCollapsed ? '64px' : '200px'">
       <el-menu
         :default-active="activeMenu"
         class="el-menu-vertical"
         router
+        :collapse="isCollapsed"
       >
         <div class="logo">
-          <h3>医生工作站</h3>
+          <h3 v-if="!isCollapsed">医生工作站</h3>
+          <el-icon v-else :size="24"><User /></el-icon>
         </div>
+        <el-button :icon="isCollapsed ? Expand : Fold" @click="isCollapsed = !isCollapsed" style="width: 100%; border: none; border-radius: 0;" />
         <el-sub-menu index="patient-reception">
           <template #title>
             <el-icon><User /></el-icon>
@@ -54,10 +57,12 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { ref, computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { User, List, ShoppingCart } from '@element-plus/icons-vue'
+import { User, List, ShoppingCart, Expand, Fold } from '@element-plus/icons-vue'
+
+const isCollapsed = ref(false)
 
 const userStore = useUserStore()
 const router = useRouter()
@@ -75,9 +80,16 @@ const logout = () => {
 .layout-container {
   height: 100vh;
 }
+.el-aside {
+  transition: width 0.3s ease;
+  overflow: hidden;
+}
 .el-menu-vertical {
   height: 100%;
   border-right: 1px solid #dcdfe6;
+}
+.el-menu-vertical:not(.el-menu--collapse) {
+  width: 200px;
 }
 .logo {
   height: 60px;
