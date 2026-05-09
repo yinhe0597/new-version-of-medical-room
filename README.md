@@ -285,6 +285,31 @@ npm run dev
 
 ---
 
+## ☕ 赞助与支持
+
+<div align="center">
+
+<table>
+  <tr>
+    <td align="center">
+      <img src="docs/images/alipay.jpg" width="300" alt="支付宝收款码" />
+      <br />
+      <b>支付宝</b>
+    </td>
+    <td align="center">
+      <img src="docs/images/wechat.png" width="300" alt="微信收款码" />
+      <br />
+      <b>微信支付</b>
+    </td>
+  </tr>
+</table>
+
+<p><em>如果你也喜欢这个项目，可以请作者喝杯咖啡 ☕</em></p>
+
+</div>
+
+---
+
 <div align="center">
 
 **Made with ❤️ for School Medical Rooms**
