@@ -283,7 +283,7 @@ def create_drug():
 
     drug_type = data.get('type', 1)
 
-    if drug_type == 1:
+    if drug_type == 1 or drug_type == 3:
         required_fields = ['name', 'specification', 'unit', 'price', 'stock']
     else:
         required_fields = ['name', 'specification', 'unit', 'price']
@@ -300,13 +300,14 @@ def create_drug():
         unit=data['unit'],
         purchase_price=float(data.get('purchase_price', 0.0)),
         price=float(data['price']),
-        has_scattered=data.get('has_scattered', False),
-        scattered_price=float(data.get('scattered_price', 0.0)) if data.get('scattered_price') else None,
-        conversion_rate=int(data.get('conversion_rate', 1)) if data.get('conversion_rate') else None,
+        has_scattered=data.get('has_scattered', False) if drug_type != 3 else False,
+        scattered_price=float(data.get('scattered_price', 0.0)) if data.get('scattered_price') and drug_type != 3 else None,
+        conversion_rate=int(data.get('conversion_rate', 1)) if data.get('conversion_rate') and drug_type != 3 else None,
         stock=int(data['stock']),
         status=data.get('status', 1),
         batch_no=data.get('batch_no'),
-        inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None
+        inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None,
+        variant_type="consumable" if drug_type == 3 else None,
     )
     db.session.add(drug)
     db.session.commit()
@@ -317,7 +318,7 @@ def create_drug():
         action_type='drug_create',
         target_type='drug',
         target_id=drug.id,
-        summary=f"新增药品: {drug.name}",
+        summary=f"新增{'药品' if drug_type == 1 else '诊疗项目' if drug_type == 2 else '耗材'}: {drug.name}",
         details=json.dumps({
             "name": drug.name,
             "specification": drug.specification or "",
@@ -652,7 +653,7 @@ def smart_inventory():
             duplicate_drugs = drugs[1:]
 
             for dup_drug in duplicate_drugs:
-                if primary_drug.type == 1 and dup_drug.stock > 0:
+                if primary_drug.type in (1, 3) and dup_drug.stock > 0:
                     primary_drug.stock += dup_drug.stock
 
                 items_to_update = PrescriptionItem.query.filter_by(drug_id=dup_drug.id).all()
@@ -667,7 +668,7 @@ def smart_inventory():
         db.session.commit()
 
         query = Drug.query.filter(
-            Drug.type == 1,
+            Drug.type.in_([1, 3]),
             Drug.status == 1,
             Drug.stock < threshold
         )
@@ -794,6 +795,7 @@ def get_revenue_stats():
         total_revenue = 0.0
         drug_revenue = 0.0
         service_revenue = 0.0
+        consumable_revenue = 0.0
         consultation_revenue = 0.0
         total_cost = 0.0
         total_profit = 0.0
@@ -807,13 +809,17 @@ def get_revenue_stats():
             consult = float(v.consultation_fee or 0.0)
             drug_amt = 0.0
             service_amt = 0.0
+            consumable_amt = 0.0
             cost = 0.0
             for it in items_by_visit.get(v.id, []):
                 amount_val = it.new_amount if it.new_amount is not None else it.amount
                 amount_val = float(amount_val or 0.0)
                 d = getattr(it, "drug", None)
-                if d is not None and int(getattr(d, "type", 1) or 1) == 1:
+                drug_type = int(getattr(d, "type", 1) or 1)
+                if drug_type == 1:
                     drug_amt += amount_val
+                elif drug_type == 3:
+                    consumable_amt += amount_val
                 else:
                     service_amt += amount_val
                 cost += float(it.purchase_cost or 0.0)
@@ -824,6 +830,7 @@ def get_revenue_stats():
             total_revenue += amount
             drug_revenue += drug_amt
             service_revenue += service_amt
+            consumable_revenue += consumable_amt
             consultation_revenue += consult
             total_cost += cost
             total_profit += profit
@@ -839,6 +846,7 @@ def get_revenue_stats():
                 "chief_complaint": v.chief_complaint or "",
                 "drug_amount": drug_amt,
                 "service_amount": service_amt,
+                "consumable_amount": consumable_amt,
                 "consultation_fee": consult,
                 "amount": amount,
                 "cost": cost,
@@ -850,6 +858,7 @@ def get_revenue_stats():
                 "total_revenue": total_revenue,
                 "drug_revenue": drug_revenue,
                 "service_revenue": service_revenue,
+                "consumable_revenue": consumable_revenue,
                 "consultation_revenue": consultation_revenue,
                 "total_cost": total_cost,
                 "total_profit": total_profit,
@@ -993,6 +1002,7 @@ def export_revenue_stats():
             "诊察费",
             "药品金额",
             "诊疗项目金额",
+            "耗材金额",
             "总金额",
             "成本",
             "利润",
@@ -1005,6 +1015,7 @@ def export_revenue_stats():
     consultation_revenue = 0.0
     drug_revenue = 0.0
     service_revenue = 0.0
+    consumable_revenue = 0.0
     total_cost = 0.0
     total_profit = 0.0
 
@@ -1017,12 +1028,16 @@ def export_revenue_stats():
         cost = 0.0
         drug_amt = 0.0
         service_amt = 0.0
+        consumable_amt = 0.0
         for it in items_by_visit.get(v.id, []):
             amount_val = it.new_amount if it.new_amount is not None else it.amount
             amount_val = float(amount_val or 0.0)
             d = getattr(it, "drug", None)
-            if d is not None and int(getattr(d, "type", 1) or 1) == 1:
+            drug_type = int(getattr(d, "type", 1) or 1)
+            if drug_type == 1:
                 drug_amt += amount_val
+            elif drug_type == 3:
+                consumable_amt += amount_val
             else:
                 service_amt += amount_val
             cost += float(it.purchase_cost or 0.0)
@@ -1032,6 +1047,7 @@ def export_revenue_stats():
         consultation_revenue += consult
         drug_revenue += drug_amt
         service_revenue += service_amt
+        consumable_revenue += consumable_amt
         total_cost += cost
         total_profit += profit
 
@@ -1047,6 +1063,7 @@ def export_revenue_stats():
                 round(consult, 2),
                 round(drug_amt, 2),
                 round(service_amt, 2),
+                round(consumable_amt, 2),
                 round(amount, 2),
                 round(cost, 2),
                 round(profit, 2),
@@ -1065,6 +1082,7 @@ def export_revenue_stats():
     ws2.append(["总收入", round(total_revenue, 2)])
     ws2.append(["药品收入", round(drug_revenue, 2)])
     ws2.append(["诊疗项目收入", round(service_revenue, 2)])
+    ws2.append(["耗材收入", round(consumable_revenue, 2)])
     ws2.append(["诊察费收入", round(consultation_revenue, 2)])
     ws2.append(["总成本", round(total_cost, 2)])
     ws2.append(["总利润", round(total_profit, 2)])
@@ -1164,7 +1182,7 @@ def get_drug_outbound_records():
         .join(PrescriptionItem, PrescriptionItem.visit_id == Visit.id)
         .join(Drug, PrescriptionItem.drug_id == Drug.id)
         .filter(Payment.payment_date >= start, Payment.payment_date < end)
-        .filter(Drug.type == 1)
+        .filter(Drug.type.in_([1, 3]))
     )
 
     if doctor_id:
@@ -1315,7 +1333,7 @@ def export_drug_outbound_records():
         .join(PrescriptionItem, PrescriptionItem.visit_id == Visit.id)
         .join(Drug, PrescriptionItem.drug_id == Drug.id)
         .filter(Payment.payment_date >= start, Payment.payment_date < end)
-        .filter(Drug.type == 1)
+        .filter(Drug.type.in_([1, 3]))
     )
     if doctor_id:
         q = q.filter(Visit.doctor_id == doctor_id)

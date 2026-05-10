@@ -34,6 +34,7 @@
               <template #default="scope">
                 <el-tag v-if="scope.row.variant_type === 'pack'">整装</el-tag>
                 <el-tag v-else-if="scope.row.variant_type === 'retail'" type="warning">零散</el-tag>
+                <el-tag v-else-if="scope.row.variant_type === 'consumable'" type="info">耗材</el-tag>
                 <el-tag v-else-if="scope.row.has_scattered" type="info">整/散</el-tag>
                 <span v-else>-</span>
               </template>
