@@ -27,9 +27,9 @@
 
         <el-card v-if="hasServiceItems && canModify" class="mb-20">
           <div style="margin-bottom: 15px;">
-            <span style="font-weight: bold; margin-right: 10px;">诊疗项目管理</span>
+            <span style="font-weight: bold; margin-right: 10px;">诊疗项目/耗材管理</span>
             <el-button size="small" type="primary" @click="openAddServiceDialog">
-              + 添加诊疗项目
+              + 添加项目
             </el-button>
           </div>
           
@@ -247,7 +247,7 @@
       </template>
     </el-dialog>
 
-    <el-dialog v-model="showAddService" title="添加诊疗项目" width="500px">
+    <el-dialog v-model="showAddService" title="添加项目" width="500px">
       <el-form :model="addServiceForm" label-width="90px">
         <el-form-item label="选择项目">
           <el-select
@@ -255,7 +255,7 @@
             filterable
             remote
             reserve-keyword
-            placeholder="输入诊疗项目名称搜索"
+            placeholder="输入项目/耗材名称搜索"
             :remote-method="searchServices"
             :loading="loadingServices"
             style="width: 100%"
@@ -351,7 +351,7 @@ const getStatusTagType = (status) => {
 }
 
 const getStockNeeded = (item) => {
-  if (!item || item.type !== 1) return 0
+  if (!item || (item.type !== 1 && item.type !== 3)) return 0
   const qty = Number(item.quantity || 0)
   if (!item.is_scattered) return qty
   const rate = Number(item.conversion_rate || 1)
@@ -387,12 +387,12 @@ const canModify = computed(() => {
 
 const serviceItems = computed(() => {
   if (!visitDetail.value) return []
-  return visitDetail.value.items.filter(item => item.type === 2)
+  return visitDetail.value.items.filter(item => item.type === 2 || item.type === 3)
 })
 
 const drugItems = computed(() => {
   if (!visitDetail.value) return []
-  return visitDetail.value.items.filter(item => item.type !== 2)
+  return visitDetail.value.items.filter(item => item.type !== 2 && item.type !== 3)
 })
 
 const hasServiceItems = computed(() => {

@@ -622,7 +622,7 @@ def create_visit():
             purchase_cost = round((drug.purchase_price or 0.0) * quantity, 2)
             stock_needed = quantity
 
-        if (drug.type == 1 or drug.type is None) and drug.stock < math.ceil(stock_needed):
+        if (drug.type in (1, 3) or drug.type is None) and drug.stock < math.ceil(stock_needed):
             return jsonify({"msg": f"Insufficient stock for {drug.name}"}), 400
 
         item_amount = round(quantity * unit_price, 2)

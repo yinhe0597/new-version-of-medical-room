@@ -11,6 +11,7 @@
         <el-radio-group v-model="form.type">
           <el-radio :label="1">药品</el-radio>
           <el-radio :label="2">诊疗项目</el-radio>
+          <el-radio :label="3">耗材</el-radio>
         </el-radio-group>
       </el-form-item>
 
@@ -135,6 +136,27 @@
         </el-row>
       </template>
 
+      <template v-else-if="form.type === 3">
+        <el-form-item label="规格" prop="specification">
+          <el-input v-model="form.specification" placeholder="例如：100只/盒" />
+        </el-form-item>
+        <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="单位" prop="unit">
+              <el-input v-model="form.unit" placeholder="例如：只" />
+            </el-form-item>
+          </el-col>
+          <el-col :span="12">
+            <el-form-item label="单价(元)" prop="price">
+              <el-input-number v-model="form.price" :min="0" :precision="2" :step="0.1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+        </el-row>
+        <el-form-item label="入库数量" prop="inbound_quantity">
+          <el-input-number v-model="form.inbound_quantity" :min="1" :step="1" style="width: 100%" />
+        </el-form-item>
+      </template>
+
       <template v-else>
         <el-form-item label="规格" prop="specification">
           <el-input v-model="form.specification" placeholder="例如：次/项" />
@@ -221,6 +243,11 @@ const rules = computed(() => {
       },
       trigger: 'blur'
     }]
+  } else if (form.value.type === 3) {
+    base.specification = [{ required: true, message: '请输入规格', trigger: 'blur' }]
+    base.unit = [{ required: true, message: '请输入单位', trigger: 'blur' }]
+    base.price = [{ required: true, message: '请输入单价', trigger: 'blur' }]
+    base.inbound_quantity = [{ required: true, message: '请输入入库数量', trigger: 'blur' }]
   } else {
     base.specification = [{ required: true, message: '请输入规格', trigger: 'blur' }]
     base.unit = [{ required: true, message: '请输入单位', trigger: 'blur' }]

@@ -99,7 +99,7 @@
                 >
                   <span style="float: left">{{ item.name }}</span>
                   <span style="float: right; color: #8492a6; font-size: 13px">
-                    {{ item.specification }} | {{ item.type === 1 ? '库存: ' + item.stock + ' | ' : '' }}{{ item.option_label }}: ¥{{ item.display_price.toFixed(2) }}
+                    {{ item.specification }} | {{ (item.type === 1 || item.type === 3) ? '库存: ' + item.stock + ' | ' : '' }}{{ item.option_label }}: ¥{{ item.display_price.toFixed(2) }}
                   </span>
                 </el-option>
               </el-select>
@@ -194,7 +194,7 @@
                   <el-input-number 
                     v-model="scope.row.quantity" 
                     :min="1" 
-                    :max="scope.row.type === 1 ? (scope.row.maxStock > 0 ? scope.row.maxStock : 999) : 999" 
+                    :max="(scope.row.type === 1 || scope.row.type === 3) ? (scope.row.maxStock > 0 ? scope.row.maxStock : 999) : 999" 
                     size="small" 
                     style="width: 100px"
                   />
@@ -627,6 +627,17 @@ const searchDrugs = async (query) => {
           display_price: d.price,
           is_scattered: false,
           maxStock: 999
+        })
+        return
+      }
+      if (d.variant_type === 'consumable') {
+        options.push({
+          ...d,
+          option_id: `${d.id}:consumable`,
+          option_label: '耗材',
+          display_price: d.price,
+          is_scattered: false,
+          maxStock: d.stock
         })
         return
       }
