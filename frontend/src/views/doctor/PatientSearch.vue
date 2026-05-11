@@ -127,7 +127,7 @@
     </el-dialog>
 
     <!-- 新人首诊登记 -->
-    <el-card v-else-if="showCreateForm" class="create-card">
+    <el-card v-if="showCreateForm" class="create-card">
       <template #header>
         <span>未找到人员，请进行新人首诊登记</span>
       </template>
