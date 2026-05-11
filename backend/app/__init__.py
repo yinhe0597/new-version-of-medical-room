@@ -74,8 +74,15 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "prescription_item", "modified_by", "INTEGER")
     _ensure_sqlite_column(app, "prescription_item", "modified_at", "DATETIME")
     _ensure_sqlite_column(app, "prescription_item", "modify_reason", "TEXT")
+    _ensure_sqlite_column(app, "prescription_item", "is_scattered", "BOOLEAN DEFAULT 0")
+    _ensure_sqlite_column(app, "prescription_item", "purchase_cost", "FLOAT DEFAULT 0.0")
 
     # drug 表新增列
+    _ensure_sqlite_column(app, "drug", "type", "INTEGER DEFAULT 1")
+    _ensure_sqlite_column(app, "drug", "purchase_price", "FLOAT DEFAULT 0.0")
+    _ensure_sqlite_column(app, "drug", "has_scattered", "BOOLEAN DEFAULT 0")
+    _ensure_sqlite_column(app, "drug", "scattered_price", "FLOAT")
+    _ensure_sqlite_column(app, "drug", "conversion_rate", "INTEGER")
     _ensure_sqlite_column(app, "drug", "variant_type", "VARCHAR(20)")
     _ensure_sqlite_column(app, "drug", "stock_group_code", "VARCHAR(36)")
     _ensure_sqlite_column(app, "drug", "unit_amount", "INTEGER")
@@ -94,11 +101,10 @@ def create_app(config_class=None):
     try:
         uri = app.config.get("SQLALCHEMY_DATABASE_URI") or ""
         if isinstance(uri, str) and uri.startswith("sqlite"):
-            # 检查SQLite数据库文件是否存在
-            db_path = uri.replace("sqlite:///", "")
-            if not os.path.exists(db_path):
-                with app.app_context():
-                    db.create_all()
+            # 即使数据库文件已存在，也调用 db.create_all()
+            # 确保旧数据库中缺失的新表能被创建（不会影响已有表和数据）
+            with app.app_context():
+                db.create_all()
     except Exception:
         pass
 

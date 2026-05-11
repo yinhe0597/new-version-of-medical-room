@@ -19,7 +19,7 @@
         </el-menu-item>
         <el-menu-item index="/admin/patients">
           <el-icon><Avatar /></el-icon>
-          <span>学生档案管理</span>
+          <span>人员档案管理</span>
         </el-menu-item>
         <el-menu-item index="/admin/statistics">
           <el-icon><DataLine /></el-icon>

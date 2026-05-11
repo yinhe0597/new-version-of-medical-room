@@ -26,8 +26,8 @@
         <el-table-column prop="name" label="名称" />
         <el-table-column prop="type" label="类型" width="100">
           <template #default="scope">
-            <el-tag :type="scope.row.type === 2 ? 'warning' : ''">
-              {{ scope.row.type === 2 ? '诊疗项目' : '药品' }}
+            <el-tag :type="scope.row.type === 2 ? 'warning' : scope.row.type === 3 ? 'info' : ''">
+              {{ scope.row.type === 2 ? '诊疗项目' : scope.row.type === 3 ? '耗材' : '药品' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -35,6 +35,7 @@
           <template #default="scope">
             <el-tag v-if="scope.row.variant_type === 'pack'">整装</el-tag>
             <el-tag v-else-if="scope.row.variant_type === 'retail'" type="warning">零散</el-tag>
+            <el-tag v-else-if="scope.row.variant_type === 'consumable'" type="info">耗材</el-tag>
             <span v-else>-</span>
           </template>
         </el-table-column>
@@ -114,6 +115,7 @@
           <el-radio-group v-model="form.type" @change="handleTypeChange">
             <el-radio :label="1">药品</el-radio>
             <el-radio :label="2">诊疗项目 (打包收费)</el-radio>
+            <el-radio :label="3">耗材</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="名称" prop="name">
@@ -140,12 +142,12 @@
         <el-form-item label="转换率" prop="conversion_rate" v-if="form.type === 1 && form.has_scattered && !isGroupedStock">
           <el-input-number v-model="form.conversion_rate" :min="1" :step="1" placeholder="1整件=多少零卖单位" />
         </el-form-item>
-        <el-form-item :label="isEdit ? '现有库存' : '初始库存'" prop="stock" v-if="form.type === 1">
+        <el-form-item :label="isEdit ? '现有库存' : '初始库存'" prop="stock" v-if="form.type === 1 || form.type === 3">
           <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="isEdit || isGroupedStock" />
         </el-form-item>
 
         <!-- 库存操作区域（仅编辑模式） -->
-        <div v-if="isEdit && form.type === 1" style="margin-bottom: 18px; padding: 12px; background: #f5f7fa; border-radius: 6px;">
+        <div v-if="isEdit && (form.type === 1 || form.type === 3)" style="margin-bottom: 18px; padding: 12px; background: #f5f7fa; border-radius: 6px;">
           <div style="margin-bottom: 10px;">
             <el-button type="warning" size="small" @click="showCorrectionForm = !showCorrectionForm">
               盘点勘误
@@ -325,6 +327,11 @@ const handleTypeChange = (val) => {
     if (!form.value.unit) form.value.unit = '次';
   } else {
     form.value.stock = 0;
+    if (val === 3) {
+      form.value.has_scattered = false
+      form.value.scattered_price = null
+      form.value.conversion_rate = null
+    }
   }
 }
 

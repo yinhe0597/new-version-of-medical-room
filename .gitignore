@@ -20,6 +20,7 @@ pnpm-debug.log*
 lerna-debug.log*
 
 # Build files
+build/
 dist/
 build/
 *.local
@@ -65,3 +66,13 @@ studentINF.xlsx
 diff.txt
 
 .tools/
+
+# Large binaries and build artifacts
+*.7z
+upx-4.2.4-win64/
+
+# ICD-10 data file (large Excel)
+*.xlsx
+
+# Windows null device artifact
+nul

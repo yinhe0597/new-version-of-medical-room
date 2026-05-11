@@ -17,6 +17,16 @@ from sqlalchemy.exc import IntegrityError
 
 from pypinyin import pinyin, Style
 
+MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+
+def _check_upload_size(file_storage):
+    file_storage.seek(0, 2)
+    size = file_storage.tell()
+    file_storage.seek(0)
+    if size > MAX_UPLOAD_SIZE:
+        return False
+    return True
+
 def _name_pinyin_parts(text):
     if not isinstance(text, str) or not text:
         return "", ""
@@ -108,6 +118,8 @@ def import_patients():
         return jsonify({"msg": "No selected file"}), 400
     if not file.filename.endswith('.csv'):
         return jsonify({"msg": "Only CSV files are allowed"}), 400
+    if not _check_upload_size(file):
+        return jsonify({"msg": "File too large, max 10MB"}), 400
 
     try:
         file_content = file.stream.read()
@@ -231,6 +243,208 @@ def import_patients():
         db.session.rollback()
         return jsonify({"msg": f"Error parsing CSV: {str(e)}"}), 500
 
+@bp.route('/admin/patients', methods=['GET'])
+@role_required('admin')
+def get_patients():
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('size', 20, type=int)
+    keyword = request.args.get('keyword', '')
+
+    query = Patient.query.order_by(Patient.id.desc())
+    if keyword:
+        like = f'%{keyword}%'
+        query = query.filter(
+            db.or_(
+                Patient.name.like(like),
+                Patient.student_id.like(like),
+                Patient.phone.like(like),
+                Patient.name_pinyin.like(like),
+                Patient.name_initials.like(like),
+            )
+        )
+
+    pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    data = []
+    for p in pagination.items:
+        data.append({
+            "id": p.id,
+            "student_id": p.student_id,
+            "name": p.name,
+            "gender": p.gender,
+            "class_name": p.class_name,
+            "phone": p.phone,
+            "grade": p.grade,
+            "college": p.college,
+            "major": p.major,
+            "age": p.age,
+            "id_card": p.id_card,
+            "counselor_name": p.counselor_name,
+            "is_temporary": p.is_temporary,
+        })
+
+    return jsonify({
+        "data": data,
+        "meta": {"page": page, "per_page": per_page, "total": pagination.total}
+    }), 200
+
+@bp.route('/admin/patients', methods=['POST'])
+@role_required('admin')
+def create_patient():
+    data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
+    if not name:
+        return jsonify({"msg": "姓名不能为空"}), 400
+
+    student_id = (data.get('student_id') or '').strip() or None
+    if student_id:
+        existing = Patient.query.filter_by(student_id=student_id).first()
+        if existing:
+            return jsonify({"msg": f"学号 {student_id} 已存在"}), 400
+
+    full_py, initials_py = _name_pinyin_parts(name)
+
+    patient = Patient(
+        student_id=student_id,
+        name=name,
+        name_pinyin=full_py,
+        name_initials=initials_py,
+        gender=(data.get('gender') or '').strip() or None,
+        class_name=(data.get('class_name') or '').strip() or None,
+        phone=(data.get('phone') or '').strip() or None,
+        grade=(data.get('grade') or '').strip() or None,
+        college=(data.get('college') or '').strip() or None,
+        major=(data.get('major') or '').strip() or None,
+        age=int(data['age']) if data.get('age') else None,
+        id_card=(data.get('id_card') or '').strip() or None,
+        counselor_name=(data.get('counselor_name') or '').strip() or None,
+        is_temporary=bool(data.get('is_temporary', False)),
+    )
+    db.session.add(patient)
+    db.session.commit()
+
+    log = OperationLog(
+        user_id=int(get_jwt_identity()),
+        action_type='create_patient',
+        target_type='patient',
+        target_id=patient.id,
+        summary=f'新增人员: {name}'
+    )
+    db.session.add(log)
+    db.session.commit()
+
+    return jsonify({"data": {"id": patient.id}}), 201
+
+@bp.route('/admin/patients/<int:id>', methods=['PUT'])
+@role_required('admin')
+def update_patient(id):
+    patient = Patient.query.get_or_404(id)
+    data = request.get_json() or {}
+
+    new_student_id = (data.get('student_id') or '').strip() or None
+    if new_student_id and new_student_id != patient.student_id:
+        existing = Patient.query.filter_by(student_id=new_student_id).first()
+        if existing:
+            return jsonify({"msg": f"学号 {new_student_id} 已存在"}), 400
+        patient.student_id = new_student_id
+
+    if 'name' in data:
+        name = (data['name'] or '').strip()
+        if not name:
+            return jsonify({"msg": "姓名不能为空"}), 400
+        patient.name = name
+        full_py, initials_py = _name_pinyin_parts(name)
+        patient.name_pinyin = full_py
+        patient.name_initials = initials_py
+
+    for field in ['gender', 'class_name', 'phone', 'grade', 'college', 'major', 'id_card', 'counselor_name']:
+        if field in data:
+            setattr(patient, field, (data[field] or '').strip() or None)
+
+    if 'age' in data:
+        patient.age = int(data['age']) if data['age'] else None
+
+    if 'is_temporary' in data:
+        patient.is_temporary = bool(data['is_temporary'])
+
+    db.session.commit()
+    return jsonify({"msg": "更新成功"}), 200
+
+@bp.route('/admin/patients/<int:id>', methods=['DELETE'])
+@role_required('admin')
+def delete_patient(id):
+    patient = Patient.query.get_or_404(id)
+    if patient.visits.count() > 0:
+        return jsonify({"msg": "该人员已有就诊记录，无法删除"}), 400
+
+    db.session.delete(patient)
+    db.session.commit()
+    return jsonify({"msg": "删除成功"}), 200
+
+@bp.route('/admin/patients/<int:id>/visits', methods=['GET'])
+@role_required('admin')
+def get_patient_visits(id):
+    patient = Patient.query.get_or_404(id)
+    visits = patient.visits.order_by(Visit.timestamp.desc()).all()
+
+    data = []
+    for v in visits:
+        doctor_name = v.doctor.real_name if v.doctor else '-'
+        data.append({
+            "visit_id": v.id,
+            "date": v.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "diagnosis": v.diagnosis,
+            "chief_complaint": v.chief_complaint,
+            "total_amount": v.total_amount,
+            "status": v.status,
+            "doctor_name": doctor_name,
+        })
+
+    return jsonify({"data": data}), 200
+
+@bp.route('/admin/visits/<int:visit_id>', methods=['GET'])
+@role_required('admin')
+def get_visit_detail(visit_id):
+    visit = Visit.query.get_or_404(visit_id)
+
+    items = []
+    for item in visit.items:
+        items.append({
+            "drug_name": item.drug.name if item.drug else '-',
+            "specification": item.drug.specification if item.drug else '-',
+            "usage": item.usage,
+            "dosage": item.dosage,
+            "frequency": item.frequency,
+            "timing": item.timing,
+            "days": item.days,
+            "quantity": item.quantity,
+            "price_at_visit": item.price_at_visit,
+            "amount": item.amount,
+        })
+
+    return jsonify({
+        "data": {
+            "id": visit.id,
+            "created_at": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "status": visit.status,
+            "chief_complaint": visit.chief_complaint,
+            "present_illness": visit.present_illness,
+            "past_history": visit.past_history,
+            "physical_exam": visit.physical_exam,
+            "diagnosis": visit.diagnosis,
+            "doctor_advice": visit.doctor_advice,
+            "special_note": visit.special_note,
+            "total_amount": visit.total_amount,
+            "consultation_fee": visit.consultation_fee,
+            "doctor_name": visit.doctor.real_name if visit.doctor else '-',
+            "patient": {
+                "name": visit.patient.name if visit.patient else '-',
+                "student_id": visit.patient.student_id if visit.patient else '-',
+                "gender": visit.patient.gender if visit.patient else '-',
+            },
+            "items": items,
+        }
+    }), 200
+
 @bp.route('/admin/drugs', methods=['GET'])
 @role_required(['admin', 'nurse'])
 def get_drugs():
@@ -283,7 +497,7 @@ def create_drug():
 
     drug_type = data.get('type', 1)
 
-    if drug_type == 1:
+    if drug_type == 1 or drug_type == 3:
         required_fields = ['name', 'specification', 'unit', 'price', 'stock']
     else:
         required_fields = ['name', 'specification', 'unit', 'price']
@@ -300,13 +514,14 @@ def create_drug():
         unit=data['unit'],
         purchase_price=float(data.get('purchase_price', 0.0)),
         price=float(data['price']),
-        has_scattered=data.get('has_scattered', False),
-        scattered_price=float(data.get('scattered_price', 0.0)) if data.get('scattered_price') else None,
-        conversion_rate=int(data.get('conversion_rate', 1)) if data.get('conversion_rate') else None,
+        has_scattered=data.get('has_scattered', False) if drug_type != 3 else False,
+        scattered_price=float(data.get('scattered_price', 0.0)) if data.get('scattered_price') and drug_type != 3 else None,
+        conversion_rate=int(data.get('conversion_rate', 1)) if data.get('conversion_rate') and drug_type != 3 else None,
         stock=int(data['stock']),
         status=data.get('status', 1),
         batch_no=data.get('batch_no'),
-        inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None
+        inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None,
+        variant_type="consumable" if drug_type == 3 else None,
     )
     db.session.add(drug)
     db.session.commit()
@@ -317,7 +532,7 @@ def create_drug():
         action_type='drug_create',
         target_type='drug',
         target_id=drug.id,
-        summary=f"新增药品: {drug.name}",
+        summary=f"新增{'药品' if drug_type == 1 else '诊疗项目' if drug_type == 2 else '耗材'}: {drug.name}",
         details=json.dumps({
             "name": drug.name,
             "specification": drug.specification or "",
@@ -424,6 +639,8 @@ def import_drugs():
         return jsonify({"msg": "No selected file"}), 400
     if not file.filename.endswith('.csv'):
         return jsonify({"msg": "Only CSV files are allowed"}), 400
+    if not _check_upload_size(file):
+        return jsonify({"msg": "File too large, max 10MB"}), 400
 
     try:
         file_content = file.stream.read()
@@ -512,6 +729,11 @@ def import_drugs_xls():
     file = request.files['file']
     if file.filename == '':
         return jsonify({"msg": "No selected file"}), 400
+    allowed_extensions = ('.xls', '.xlsx')
+    if not file.filename.lower().endswith(allowed_extensions):
+        return jsonify({"msg": "Only Excel files (.xls, .xlsx) are allowed"}), 400
+    if not _check_upload_size(file):
+        return jsonify({"msg": "File too large, max 10MB"}), 400
 
     try:
         import pandas as pd
@@ -652,7 +874,7 @@ def smart_inventory():
             duplicate_drugs = drugs[1:]
 
             for dup_drug in duplicate_drugs:
-                if primary_drug.type == 1 and dup_drug.stock > 0:
+                if primary_drug.type in (1, 3) and dup_drug.stock > 0:
                     primary_drug.stock += dup_drug.stock
 
                 items_to_update = PrescriptionItem.query.filter_by(drug_id=dup_drug.id).all()
@@ -667,7 +889,7 @@ def smart_inventory():
         db.session.commit()
 
         query = Drug.query.filter(
-            Drug.type == 1,
+            Drug.type.in_([1, 3]),
             Drug.status == 1,
             Drug.stock < threshold
         )
@@ -794,6 +1016,7 @@ def get_revenue_stats():
         total_revenue = 0.0
         drug_revenue = 0.0
         service_revenue = 0.0
+        consumable_revenue = 0.0
         consultation_revenue = 0.0
         total_cost = 0.0
         total_profit = 0.0
@@ -807,13 +1030,17 @@ def get_revenue_stats():
             consult = float(v.consultation_fee or 0.0)
             drug_amt = 0.0
             service_amt = 0.0
+            consumable_amt = 0.0
             cost = 0.0
             for it in items_by_visit.get(v.id, []):
                 amount_val = it.new_amount if it.new_amount is not None else it.amount
                 amount_val = float(amount_val or 0.0)
                 d = getattr(it, "drug", None)
-                if d is not None and int(getattr(d, "type", 1) or 1) == 1:
+                drug_type = int(getattr(d, "type", 1) or 1)
+                if drug_type == 1:
                     drug_amt += amount_val
+                elif drug_type == 3:
+                    consumable_amt += amount_val
                 else:
                     service_amt += amount_val
                 cost += float(it.purchase_cost or 0.0)
@@ -824,6 +1051,7 @@ def get_revenue_stats():
             total_revenue += amount
             drug_revenue += drug_amt
             service_revenue += service_amt
+            consumable_revenue += consumable_amt
             consultation_revenue += consult
             total_cost += cost
             total_profit += profit
@@ -839,6 +1067,7 @@ def get_revenue_stats():
                 "chief_complaint": v.chief_complaint or "",
                 "drug_amount": drug_amt,
                 "service_amount": service_amt,
+                "consumable_amount": consumable_amt,
                 "consultation_fee": consult,
                 "amount": amount,
                 "cost": cost,
@@ -850,6 +1079,7 @@ def get_revenue_stats():
                 "total_revenue": total_revenue,
                 "drug_revenue": drug_revenue,
                 "service_revenue": service_revenue,
+                "consumable_revenue": consumable_revenue,
                 "consultation_revenue": consultation_revenue,
                 "total_cost": total_cost,
                 "total_profit": total_profit,
@@ -993,6 +1223,7 @@ def export_revenue_stats():
             "诊察费",
             "药品金额",
             "诊疗项目金额",
+            "耗材金额",
             "总金额",
             "成本",
             "利润",
@@ -1005,6 +1236,7 @@ def export_revenue_stats():
     consultation_revenue = 0.0
     drug_revenue = 0.0
     service_revenue = 0.0
+    consumable_revenue = 0.0
     total_cost = 0.0
     total_profit = 0.0
 
@@ -1017,12 +1249,16 @@ def export_revenue_stats():
         cost = 0.0
         drug_amt = 0.0
         service_amt = 0.0
+        consumable_amt = 0.0
         for it in items_by_visit.get(v.id, []):
             amount_val = it.new_amount if it.new_amount is not None else it.amount
             amount_val = float(amount_val or 0.0)
             d = getattr(it, "drug", None)
-            if d is not None and int(getattr(d, "type", 1) or 1) == 1:
+            drug_type = int(getattr(d, "type", 1) or 1)
+            if drug_type == 1:
                 drug_amt += amount_val
+            elif drug_type == 3:
+                consumable_amt += amount_val
             else:
                 service_amt += amount_val
             cost += float(it.purchase_cost or 0.0)
@@ -1032,6 +1268,7 @@ def export_revenue_stats():
         consultation_revenue += consult
         drug_revenue += drug_amt
         service_revenue += service_amt
+        consumable_revenue += consumable_amt
         total_cost += cost
         total_profit += profit
 
@@ -1047,6 +1284,7 @@ def export_revenue_stats():
                 round(consult, 2),
                 round(drug_amt, 2),
                 round(service_amt, 2),
+                round(consumable_amt, 2),
                 round(amount, 2),
                 round(cost, 2),
                 round(profit, 2),
@@ -1065,6 +1303,7 @@ def export_revenue_stats():
     ws2.append(["总收入", round(total_revenue, 2)])
     ws2.append(["药品收入", round(drug_revenue, 2)])
     ws2.append(["诊疗项目收入", round(service_revenue, 2)])
+    ws2.append(["耗材收入", round(consumable_revenue, 2)])
     ws2.append(["诊察费收入", round(consultation_revenue, 2)])
     ws2.append(["总成本", round(total_cost, 2)])
     ws2.append(["总利润", round(total_profit, 2)])
@@ -1164,7 +1403,7 @@ def get_drug_outbound_records():
         .join(PrescriptionItem, PrescriptionItem.visit_id == Visit.id)
         .join(Drug, PrescriptionItem.drug_id == Drug.id)
         .filter(Payment.payment_date >= start, Payment.payment_date < end)
-        .filter(Drug.type == 1)
+        .filter(Drug.type.in_([1, 3]))
     )
 
     if doctor_id:
@@ -1315,7 +1554,7 @@ def export_drug_outbound_records():
         .join(PrescriptionItem, PrescriptionItem.visit_id == Visit.id)
         .join(Drug, PrescriptionItem.drug_id == Drug.id)
         .filter(Payment.payment_date >= start, Payment.payment_date < end)
-        .filter(Drug.type == 1)
+        .filter(Drug.type.in_([1, 3]))
     )
     if doctor_id:
         q = q.filter(Visit.doctor_id == doctor_id)
