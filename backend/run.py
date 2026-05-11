@@ -6,7 +6,7 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 # 在创建app之前就设置环境变量，指定数据库文件
-os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.abspath('D:\\yiwushi\\DB\\app.db')
+os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.abspath('D:\\yiwushi\\open0.0\\data\\app.db')
 print(f"Using database: {os.environ['SQLALCHEMY_DATABASE_URI']}")
 
 from backend.app import create_app, db
