@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-MIT-yellow?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.3-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.4-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -47,7 +47,7 @@
 |:---:|------|------|
 | 🩺 **医生端** | 智能接诊 | 快速/完整接诊模式，现病史模板 `##` 快捷调用 |
 | 🩺 **医生端** | ICD-10 辅助诊断 | 支持拼音/拼音缩写/编码多维搜索 |
-| 🩺 **医生端** | 历史病例 | 一键查看患者所有就诊记录和处方明细 |
+| 🩺 **医生端** | 历史病例 | 搜索患者后直接查看该患者所有就诊记录和病历详情 |
 | 🩺 **医生端** | 病历修改 | 支持修改历史病历并追踪修改记录 |
 | 🩺 **医生端** | 零散用药 | 自动计算总用量，支持半片/半粒等特殊用量 |
 | 💊 **护士端** | 处方处置 | 审核确认、收费执行、驳回操作 |
@@ -58,6 +58,7 @@
 | 💊 **护士端** | 职工优惠 | 教职工就诊自动应用优惠折扣 |
 | 📊 **管理端** | 统计报表 | 营收统计（药品/诊疗/耗材三路拆分）、药品消耗、Excel 导出 |
 | 📊 **管理端** | 药品管理 | 药品/诊疗/耗材三类物资的增删改查、停用管理 |
+| 📊 **管理端** | 人员档案 | 学生/教职工/临时人员增删改查、批量导入、就诊历史查看 |
 | 📊 **管理端** | 运营日志 | 全系统操作追溯，病历修改/药品变更全记录 |
 | 👤 **系统** | 多角色权限 | 医生/护士/管理员三端独立界面与权限隔离 |
 | 🔧 **系统** | 平滑升级 | 旧数据库自动迁移，补全缺失表和字段，数据零丢失 |
@@ -170,6 +171,17 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.4（2026-05-11）🔐✨
+
+- 🔐 **安全加固**：全部文件上传端点增加 10MB 大小限制，Excel 导入补充扩展名白名单
+- 👤 **人员档案管理**：管理员端完整 CRUD —— 列表/搜索/新增/编辑/删除/批量导入，支持学生、教职工、临时人员
+- 🩺 **就诊历史**：医生搜索患者后可直接查看该患者历史就诊和病历详情；管理员端新增病历查看入口
+- 🔧 **前后端一致性修复**：医生端就诊历史补全 `status`、`chief_complaint`、`doctor_name` 字段
+
+> 📝 详细变更：[开发日志-open0.0.4.md](docs/开发日志-open0.0.4.md)
+
+---
 
 ### 🏷️ open0.0.3（2026-05-10）
 

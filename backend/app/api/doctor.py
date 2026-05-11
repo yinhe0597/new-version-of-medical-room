@@ -393,7 +393,9 @@ def get_patient_history(patient_id):
             "visit_id": visit.id,
             "date": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
             "diagnosis": visit.diagnosis,
-            "total_amount": visit.total_amount
+            "chief_complaint": visit.chief_complaint,
+            "total_amount": visit.total_amount,
+            "status": visit.status,
         })
 
     return jsonify({"data": data}), 200
@@ -823,6 +825,7 @@ def get_doctor_visit_detail(visit_id):
             "rejected_by": visit.rejected_by,
             "rejected_by_name": visit.rejector.real_name if visit.rejector else None,
             "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
+            "doctor_name": User.query.get(visit.doctor_id).real_name if visit.doctor_id else '-',
             "items": items
         }
     }), 200

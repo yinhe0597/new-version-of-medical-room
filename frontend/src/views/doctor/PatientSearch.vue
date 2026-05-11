@@ -38,7 +38,12 @@
       <template #header>
         <div class="card-header">
           <span>患者信息</span>
-          <el-button type="primary" @click="handleStartVisit">开始接诊</el-button>
+          <div>
+            <el-button @click="toggleHistory">
+              {{ showHistory ? '收起历史' : '查看就诊历史' }}
+            </el-button>
+            <el-button type="primary" @click="handleStartVisit">开始接诊</el-button>
+          </div>
         </div>
       </template>
       <el-descriptions border>
@@ -52,7 +57,74 @@
         <el-descriptions-item label="班级">{{ patient.class_name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="电话">{{ patient.phone || '-' }}</el-descriptions-item>
       </el-descriptions>
+
+      <!-- 就诊历史列表 -->
+      <div v-if="showHistory" class="history-section">
+        <el-divider content-position="left">就诊历史</el-divider>
+        <el-table :data="visitHistory" v-loading="historyLoading" stripe size="small">
+          <el-table-column prop="date" label="就诊时间" width="160" />
+          <el-table-column prop="diagnosis" label="诊断" min-width="150" show-overflow-tooltip />
+          <el-table-column prop="total_amount" label="金额" width="90">
+            <template #default="scope">¥{{ (scope.row.total_amount || 0).toFixed(2) }}</template>
+          </el-table-column>
+          <el-table-column prop="status" label="状态" width="100">
+            <template #default="scope">
+              <el-tag :type="getStatusType(scope.row.status)" size="small">
+                {{ getStatusText(scope.row.status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="100">
+            <template #default="scope">
+              <el-button size="small" type="primary" link @click="openCaseReview(scope.row.visit_id)">详情</el-button>
+            </template>
+          </el-table-column>
+        </el-table>
+        <div v-if="!historyLoading && visitHistory.length === 0" style="text-align:center;color:#909399;padding:16px 0;">
+          暂无就诊记录
+        </div>
+      </div>
     </el-card>
+
+    <!-- 病例复盘弹窗 -->
+    <el-dialog v-model="caseDialogVisible" title="病例详情" width="800px">
+      <div v-loading="caseLoading" v-if="caseDetail" class="case-review">
+        <el-descriptions border :column="2" title="患者信息">
+          <el-descriptions-item label="姓名">{{ caseDetail.patient?.name || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="学号">{{ caseDetail.patient?.student_id || '-' }}</el-descriptions-item>
+          <el-descriptions-item label="就诊时间" :span="2">{{ caseDetail.created_at }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ getStatusText(caseDetail.status) }}</el-descriptions-item>
+          <el-descriptions-item label="医生">{{ caseDetail.doctor_name }}</el-descriptions-item>
+        </el-descriptions>
+        <el-descriptions border :column="1" title="电子病历" direction="vertical" style="margin-top:16px;">
+          <el-descriptions-item label="主诉">{{ caseDetail.chief_complaint || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="现病史">{{ caseDetail.present_illness || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="既往史">{{ caseDetail.past_history || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="体格检查">{{ caseDetail.physical_exam || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="诊断">{{ caseDetail.diagnosis || '无' }}</el-descriptions-item>
+          <el-descriptions-item label="医生留言">{{ caseDetail.doctor_advice || '无' }}</el-descriptions-item>
+        </el-descriptions>
+        <div style="margin-top:16px;">
+          <div style="font-weight:bold;margin-bottom:8px;">处方明细</div>
+          <el-table :data="caseDetail.items" border stripe size="small">
+            <el-table-column prop="drug_name" label="药品名称" />
+            <el-table-column prop="specification" label="规格" width="100" />
+            <el-table-column label="用法" min-width="160">
+              <template #default="scope">
+                {{ scope.row.usage }} / {{ scope.row.dosage }} / {{ scope.row.frequency }} / {{ scope.row.timing }} ({{ scope.row.days }}天)
+              </template>
+            </el-table-column>
+            <el-table-column prop="quantity" label="数量" width="70" />
+            <el-table-column label="金额" width="80">
+              <template #default="scope">¥{{ (scope.row.amount || 0).toFixed(2) }}</template>
+            </el-table-column>
+          </el-table>
+        </div>
+      </div>
+      <template #footer>
+        <el-button @click="caseDialogVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
 
     <!-- 新人首诊登记 -->
     <el-card v-else-if="showCreateForm" class="create-card">
@@ -151,6 +223,60 @@ const searchResults = ref([])
 const phoneDialogVisible = ref(false)
 const tempPhone = ref('')
 const updatingPhone = ref(false)
+
+// 就诊历史
+const showHistory = ref(false)
+const visitHistory = ref([])
+const historyLoading = ref(false)
+
+// 病例详情弹窗
+const caseDialogVisible = ref(false)
+const caseLoading = ref(false)
+const caseDetail = ref(null)
+
+const getStatusType = (status) => {
+  const map = { pending: 'warning', nurse_verified: 'info', completed: 'success', rejected: 'danger', revoked: 'info' }
+  return map[status] || ''
+}
+const getStatusText = (status) => {
+  const map = { pending: '待护士核验', nurse_verified: '护士已核验', completed: '已完成', rejected: '已驳回', revoked: '已撤销' }
+  return map[status] || status
+}
+
+const fetchVisitHistory = async () => {
+  if (!patient.value) return
+  historyLoading.value = true
+  try {
+    const res = await request.get(`/doctor/patient/${patient.value.id}/visits`)
+    visitHistory.value = res.data || []
+  } catch {
+    visitHistory.value = []
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+const toggleHistory = () => {
+  showHistory.value = !showHistory.value
+  if (showHistory.value && visitHistory.value.length === 0) {
+    fetchVisitHistory()
+  }
+}
+
+const openCaseReview = async (visitId) => {
+  caseDialogVisible.value = true
+  caseLoading.value = true
+  caseDetail.value = null
+  try {
+    const res = await request.get(`/doctor/visits/${visitId}`)
+    caseDetail.value = res.data
+  } catch {
+    ElMessage.error('获取详情失败')
+    caseDialogVisible.value = false
+  } finally {
+    caseLoading.value = false
+  }
+}
 
 const escapeHtml = (value) => {
   return String(value ?? '')
@@ -297,6 +423,8 @@ const handleSelect = (item) => {
   patient.value = item
   showCreateForm.value = false
   searchKeyword.value = item.student_id || item.name || ''
+  showHistory.value = false
+  visitHistory.value = []
 }
 
 const handleEnter = () => {
@@ -474,5 +602,12 @@ const openCreateForm = (keyword) => {
 .patient-suggestion .class-name {
   color: #909399;
   font-size: 12px;
+}
+.history-section {
+  margin-top: 8px;
+}
+.case-review :deep(.highlight-label) {
+  color: #f56c6c;
+  font-weight: bold;
 }
 </style>
