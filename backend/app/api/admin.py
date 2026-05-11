@@ -289,7 +289,7 @@ def get_patients():
 
 @bp.route('/admin/patients', methods=['POST'])
 @role_required('admin')
-def create_patient():
+def admin_create_patient():
     data = request.get_json() or {}
     name = (data.get('name') or '').strip()
     if not name:
@@ -336,7 +336,7 @@ def create_patient():
 
 @bp.route('/admin/patients/<int:id>', methods=['PUT'])
 @role_required('admin')
-def update_patient(id):
+def admin_update_patient(id):
     patient = Patient.query.get_or_404(id)
     data = request.get_json() or {}
 
@@ -403,7 +403,7 @@ def get_patient_visits(id):
 
 @bp.route('/admin/visits/<int:visit_id>', methods=['GET'])
 @role_required('admin')
-def get_visit_detail(visit_id):
+def admin_get_visit_detail(visit_id):
     visit = Visit.query.get_or_404(visit_id)
 
     items = []
