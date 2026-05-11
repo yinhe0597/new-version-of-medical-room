@@ -382,12 +382,16 @@ const buildDosageOptions = () => {
     if (!out.includes(v)) out.push(v)
   }
 
-  const countUnits = ['片', '粒', '支']
+  const halfUnits = ['片', '粒', '袋', '包']
+  halfUnits.forEach(u => push(`半${u}`))
+
+  const countUnits = ['片', '粒', '袋', '包', '支', '瓶', '贴', '喷', '丸', '次', '滴']
   countUnits.forEach(u => {
     for (let i = 1; i <= 6; i++) push(`${i}${u}`)
   })
-  ;['10ml', '20ml'].forEach(push)
-  ;['5g', '10g'].forEach(push)
+
+  ;['1ml', '2ml', '5ml', '10ml', '20ml', '50ml', '100ml'].forEach(push)
+  ;['0.5g', '1g', '2g', '5g', '10g', '15g', '20g'].forEach(push)
   push('适量')
   return out
 }
