@@ -167,7 +167,7 @@ def get_pending_visits():
 @role_required(["nurse", "admin"])
 def search_drug_names():
     keyword = (request.args.get("keyword") or "").strip()
-    query = db.session.query(Drug.base_name, Drug.name).filter(Drug.type == 1)
+    query = db.session.query(Drug.base_name, Drug.name).filter(Drug.type.in_([1, 3]))
     if keyword:
         query = query.filter(or_(Drug.base_name.contains(keyword), Drug.name.contains(keyword)))
     rows = query.limit(50).all()
@@ -238,6 +238,64 @@ def inbound_stock():
         )
         db.session.add(drug)
         db.session.commit()
+        return jsonify({"data": {"drug_id": drug.id}}), 201
+
+    if item_type == 3:
+        specification = (data.get("specification") or "").strip()
+        unit = (data.get("unit") or "").strip() or "个"
+        try:
+            price_val = float(data.get("price"))
+        except Exception:
+            return jsonify({"msg": "Invalid price"}), 400
+        if price_val <= 0:
+            return jsonify({"msg": "price must be > 0"}), 400
+        try:
+            inbound_qty = int(data.get("inbound_quantity") or 0)
+        except Exception:
+            return jsonify({"msg": "Invalid inbound_quantity"}), 400
+        if inbound_qty <= 0:
+            return jsonify({"msg": "inbound_quantity must be > 0"}), 400
+
+        existing = Drug.query.filter(
+            Drug.type == 3,
+            Drug.name == name,
+            Drug.specification == specification,
+            Drug.batch_no == batch_no,
+            Drug.status == 1,
+            Drug.variant_type == "consumable",
+        ).first()
+        if existing:
+            return jsonify({"msg": "Duplicate consumable for same batch", "data": {"drug_id": existing.id}}), 409
+
+        now = datetime.utcnow()
+        drug = Drug(
+            name=name,
+            base_name=name,
+            type=3,
+            specification=specification,
+            unit=unit,
+            price=price_val,
+            stock=inbound_qty,
+            status=1,
+            batch_no=batch_no,
+            inbound_at=now,
+            variant_type="consumable",
+            purchase_price=float(data.get("purchase_price") or 0.0),
+        )
+        db.session.add(drug)
+        db.session.commit()
+
+        ir = InventoryRecord(
+            drug_id=drug.id,
+            nurse_id=int(user_id),
+            old_stock=0,
+            new_stock=inbound_qty,
+            remark="入库耗材",
+            timestamp=now,
+        )
+        db.session.add(ir)
+        db.session.commit()
+
         return jsonify({"data": {"drug_id": drug.id}}), 201
 
     pack_spec = (data.get("pack_specification") or "").strip()
@@ -556,7 +614,7 @@ def _compute_monthly_report(start_date_str, end_date_str):
     # 查询活跃药品
     drugs = Drug.query.filter(
         Drug.status == 1,
-        or_(Drug.type == 1, Drug.type.is_(None))
+        or_(Drug.type.in_([1, 3]), Drug.type.is_(None))
     ).all()
 
     if not drugs:
@@ -917,7 +975,7 @@ def verify_visit(visit_id):
         if qty <= 0:
             return jsonify({"msg": "Invalid quantity"}), 400
 
-        is_stock_item = item.drug.type == 1 or item.drug.type is None
+        is_stock_item = item.drug.type in (1, 3) or item.drug.type is None
         if not is_stock_item:
             if item.is_scattered:
                 return jsonify({"msg": "Non-drug item cannot be scattered"}), 400
@@ -1096,8 +1154,8 @@ def add_service_item(visit_id):
         return jsonify({"msg": "Quantity must be > 0"}), 400
 
     drug = Drug.query.get_or_404(drug_id)
-    if drug.type != 2:
-        return jsonify({"msg": "Only service items (type=2) can be added by nurse"}), 400
+    if drug.type not in (2, 3):
+        return jsonify({"msg": "Only service/consumable items (type=2/3) can be added by nurse"}), 400
 
     user_id = get_jwt_identity()
     now = datetime.utcnow()
@@ -1111,7 +1169,7 @@ def add_service_item(visit_id):
         amount=amount,
         modified_by=int(user_id),
         modified_at=now,
-        modify_reason="护士新增诊疗项目"
+        modify_reason="护士新增诊疗项目" if drug.type == 2 else "护士新增耗材"
     )
     db.session.add(item)
 
@@ -1148,8 +1206,8 @@ def update_service_item(visit_id, item_id):
     if item is None:
         return jsonify({"msg": "Prescription item not found"}), 404
 
-    if item.drug.type != 2:
-        return jsonify({"msg": "Only service items (type=2) can be modified by nurse"}), 400
+    if item.drug.type not in (2, 3):
+        return jsonify({"msg": "Only service/consumable items (type=2/3) can be modified by nurse"}), 400
 
     data = request.get_json() or {}
     quantity = data.get('quantity')
@@ -1203,8 +1261,8 @@ def delete_service_item(visit_id, item_id):
     if item is None:
         return jsonify({"msg": "Prescription item not found"}), 404
 
-    if item.drug.type != 2:
-        return jsonify({"msg": "Only service items (type=2) can be deleted by nurse"}), 400
+    if item.drug.type not in (2, 3):
+        return jsonify({"msg": "Only service/consumable items (type=2/3) can be deleted by nurse"}), 400
 
     db.session.delete(item)
     visit.total_amount = _recompute_visit_total(visit)
@@ -1222,7 +1280,7 @@ def delete_service_item(visit_id, item_id):
 @role_required('nurse')
 def search_services():
     keyword = (request.args.get('keyword') or "").strip()
-    query = Drug.query.filter(Drug.type == 2, Drug.status == 1)
+    query = Drug.query.filter(Drug.type.in_([2, 3]), Drug.status == 1)
     if keyword:
         query = query.filter(or_(Drug.name.contains(keyword), Drug.specification.contains(keyword)))
     services = query.limit(50).all()
@@ -1262,7 +1320,7 @@ def execute_visit(visit_id):
     group_deduct = {}
 
     for item in visit.items:
-        if item.drug.type == 1 or item.drug.type is None:
+        if item.drug.type in (1, 3) or item.drug.type is None:
             if item.drug.stock_group_code:
                 code = item.drug.stock_group_code
                 group = group_cache.get(code)
@@ -1298,7 +1356,7 @@ def execute_visit(visit_id):
                 group.retail_drug.stock = stocks["retail_stock"]
 
         for item in visit.items:
-            if item.drug.type == 1 or item.drug.type is None:
+            if item.drug.type in (1, 3) or item.drug.type is None:
                 if item.drug.stock_group_code:
                     continue
                 conv_rate = item.drug.conversion_rate or 1
@@ -1363,7 +1421,7 @@ def list_drugs():
     inbound_start = request.args.get('inbound_start', '')
     inbound_end = request.args.get('inbound_end', '')
     pack = request.args.get('pack', 'all')
-    query = Drug.query.filter(Drug.status == 1).filter(or_(Drug.type == 1, Drug.type.is_(None)))
+    query = Drug.query.filter(Drug.status == 1).filter(or_(Drug.type.in_([1, 3]), Drug.type.is_(None)))
     if pack == 'scattered':
         query = query.filter(Drug.has_scattered.is_(True))
     elif pack == 'packed':
@@ -1516,7 +1574,7 @@ def revoke_visit(visit_id):
         for item in items:
             if item.drug is None:
                 continue
-            is_stock_item = item.drug.type == 1 or item.drug.type is None
+            is_stock_item = item.drug.type in (1, 3) or item.drug.type is None
             if not is_stock_item:
                 continue  # 诊疗项目不涉及库存
 

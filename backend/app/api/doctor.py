@@ -393,7 +393,9 @@ def get_patient_history(patient_id):
             "visit_id": visit.id,
             "date": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
             "diagnosis": visit.diagnosis,
-            "total_amount": visit.total_amount
+            "chief_complaint": visit.chief_complaint,
+            "total_amount": visit.total_amount,
+            "status": visit.status,
         })
 
     return jsonify({"data": data}), 200
@@ -622,7 +624,7 @@ def create_visit():
             purchase_cost = round((drug.purchase_price or 0.0) * quantity, 2)
             stock_needed = quantity
 
-        if (drug.type == 1 or drug.type is None) and drug.stock < math.ceil(stock_needed):
+        if (drug.type in (1, 3) or drug.type is None) and drug.stock < math.ceil(stock_needed):
             return jsonify({"msg": f"Insufficient stock for {drug.name}"}), 400
 
         item_amount = round(quantity * unit_price, 2)
@@ -823,6 +825,7 @@ def get_doctor_visit_detail(visit_id):
             "rejected_by": visit.rejected_by,
             "rejected_by_name": visit.rejector.real_name if visit.rejector else None,
             "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
+            "doctor_name": User.query.get(visit.doctor_id).real_name if visit.doctor_id else '-',
             "items": items
         }
     }), 200
