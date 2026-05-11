@@ -8,7 +8,7 @@ block_cipher = None
 
 a = Analysis(
     ['run_prod.py'],
-    pathex=['d:\\yiwushi\\medical-room-mgmt'],
+    pathex=['D:\\yiwushi\\new-version-of-medical-room'],
     binaries=[],
     datas=[
         ('frontend/dist', 'frontend/dist'),
