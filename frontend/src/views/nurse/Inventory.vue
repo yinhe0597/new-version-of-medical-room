@@ -142,12 +142,14 @@
             <el-table-column type="index" label="序号" width="60" />
             <el-table-column prop="drug_name" label="药品名称" min-width="150" />
             <el-table-column prop="specification" label="规格" width="120" />
+            <el-table-column prop="purchase_price" label="购进价" width="90" />
             <el-table-column prop="unit" label="单位" width="80" />
             <el-table-column prop="opening_stock" label="上月盘点数" width="120" />
             <el-table-column prop="inbound" label="入库数" width="100" />
             <el-table-column prop="outbound" label="出库数" width="100" />
             <el-table-column prop="adjustment" label="盘点调整" width="100" />
             <el-table-column prop="closing_stock" label="现存数" width="100" />
+            <el-table-column prop="inbound_amount" label="本月进药金额" width="120" />
           </el-table>
         </el-card>
       </el-tab-pane>
@@ -544,7 +546,7 @@ const getMonthlySummaries = ({ columns, data }) => {
       sums[index] = '合计'
       return
     }
-    if (['opening_stock', 'inbound', 'outbound', 'adjustment', 'closing_stock'].includes(column.property)) {
+    if (['opening_stock', 'inbound', 'outbound', 'adjustment', 'closing_stock', 'inbound_amount'].includes(column.property)) {
       sums[index] = data.reduce((sum, row) => sum + (Number(row[column.property]) || 0), 0)
     } else {
       sums[index] = ''
