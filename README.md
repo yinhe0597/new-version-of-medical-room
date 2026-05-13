@@ -9,7 +9,7 @@
 [![Vue.js](https://img.shields.io/badge/Frontend-Vue%203-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
-[![License](https://img.shields.io/badge/License-MIT-yellow?logo=opensourceinitiative&logoColor=white)](LICENSE)
+[![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
 [![Version](https://img.shields.io/badge/Version-open0.0.5-red?logo=semver&logoColor=white)]()
 
 ---
@@ -26,8 +26,7 @@
 >
 > 目前系统仍在**小范围试用与反馈收集阶段**，功能与稳定性会持续迭代完善。预计 **2026 年下半年**趋向成熟稳定，届时将考虑迁移至 **MySQL + Linux / Docker** 部署方案。在此之前以 SQLite + Windows 为主，适合单机或小规模局域网试用。
 >
-> ✅ **本系统永久免费使用**，也可**免费商用**。如果在任何渠道遇到直接售卖本系统（而非技术服务）的行为，请勿轻信，大概率是诈骗。
-> > **商用条件**：商业使用方需同步提交所使用版本及其未来更新的完整源代码（保持项目开源精神）。
+> ✅ **本系统永久免费使用**。如果在任何渠道遇到直接售卖本系统（而非技术服务）的行为，请勿轻信，大概率是诈骗。
 >
 > 📬 提交 Issue 或反馈建议，一般情况下 **48 小时内回复**；建议被采纳后，**72 小时内完成修改并发布**。
 >
@@ -337,7 +336,17 @@ npm run dev
 
 ## 📄 开源许可
 
-本项目基于 [MIT License](LICENSE) 开源。
+本项目基于 **GNU Affero General Public License v3.0 (AGPL-3.0)** 开源。
+
+AGPL-3.0 是一个**强 copyleft** 许可证，核心要求：
+
+- **免费使用** ✅ — 个人、机构、商用均可免费使用
+- **修改需开源** ✅ — 若修改后对外分发或提供网络服务，必须公开完整修改后的源代码
+- **适用于 Web 应用** ✅ — 特别针对 B/S 架构设计，确保运行在服务器上的修改版也能回馈社区
+
+> 💡 简言之：你可以免费使用和部署本系统，也可以基于它做二次开发；但如果你将其用于商业目的或对外提供服务，**请将你的改进提交回馈给社区**，让更多人受益。
+
+完整许可证文本见 [LICENSE](LICENSE) 文件。
 
 ---
 
