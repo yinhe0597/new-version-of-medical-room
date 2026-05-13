@@ -46,7 +46,7 @@
             ¥ {{ scope.row.purchase_price ? scope.row.purchase_price.toFixed(2) : '0.00' }}
           </template>
         </el-table-column>
-        <el-table-column prop="price" label="整件价" width="80">
+        <el-table-column prop="price" label="零售价" width="80">
           <template #default="scope">
             ¥ {{ scope.row.price.toFixed(2) }}
           </template>
@@ -130,7 +130,7 @@
         <el-form-item label="购进价" prop="purchase_price">
           <el-input-number v-model="form.purchase_price" :min="0" :precision="2" :step="0.1" />
         </el-form-item>
-        <el-form-item label="整件价" prop="price">
+        <el-form-item label="零售价" prop="price">
           <el-input-number v-model="form.price" :min="0" :precision="2" :step="0.1" />
         </el-form-item>
         <el-form-item label="支持零卖" prop="has_scattered" v-if="form.type === 1 && !isGroupedStock">

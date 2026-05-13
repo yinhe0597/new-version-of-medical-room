@@ -838,16 +838,19 @@ def _compute_monthly_report(start_date_str, end_date_str):
         if inbound == 0 and outbound == 0 and adjustment == 0 and opening_stock == 0 and closing_stock == 0:
             continue
 
+        purchase_price = float(drug.purchase_price or 0)
         result.append({
             "drug_id": drug.id,
             "drug_name": drug.name,
             "specification": drug.specification,
+            "purchase_price": purchase_price,
             "unit": drug.unit,
             "opening_stock": opening_stock,
             "inbound": inbound,
             "outbound": outbound,
             "adjustment": adjustment,
             "closing_stock": closing_stock,
+            "inbound_amount": round(purchase_price * inbound, 2),
         })
 
     return result, None
@@ -903,7 +906,7 @@ def export_monthly_report():
     ws = wb.active
     ws.title = "月度盘点报表"
 
-    headers = ["序号", "药品名称", "规格", "单位", "上月盘点数（期初）", "入库数", "出库数", "盘点调整", "现存数（期末）"]
+    headers = ["序号", "药品名称", "规格", "购进价", "单位", "上月盘点数（期初）", "入库数", "出库数", "盘点调整", "现存数（期末）", "本月进药金额"]
     ws.append(headers)
 
     for idx, item in enumerate(data, 1):
@@ -911,12 +914,14 @@ def export_monthly_report():
             idx,
             item["drug_name"],
             item["specification"],
+            item["purchase_price"],
             item["unit"],
             item["opening_stock"],
             item["inbound"],
             item["outbound"],
             item["adjustment"],
             item["closing_stock"],
+            item["inbound_amount"],
         ])
 
     output = io.BytesIO()
