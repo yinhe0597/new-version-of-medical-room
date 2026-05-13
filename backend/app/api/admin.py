@@ -237,6 +237,15 @@ def import_patients():
                 db.session.commit()
 
         db.session.commit()
+        log = OperationLog(
+            user_id=int(get_jwt_identity()),
+            action_type='import_data',
+            target_type='patient',
+            target_id=0,
+            summary=f"批量导入人员: 成功{success_count}条, 失败{error_count}条"
+        )
+        db.session.add(log)
+        db.session.commit()
         return jsonify({"msg": f"Import complete. Success: {success_count}, Errors: {error_count}"}), 200
 
     except Exception as e:
@@ -366,6 +375,16 @@ def admin_update_patient(id):
     if 'is_temporary' in data:
         patient.is_temporary = bool(data['is_temporary'])
 
+    db.session.commit()
+
+    log = OperationLog(
+        user_id=int(get_jwt_identity()),
+        action_type='create_patient',
+        target_type='patient',
+        target_id=patient.id,
+        summary=f"编辑人员: {patient.name}"
+    )
+    db.session.add(log)
     db.session.commit()
     return jsonify({"msg": "更新成功"}), 200
 
@@ -572,6 +591,16 @@ def update_drug(id):
     if 'batch_no' in data: drug.batch_no = data['batch_no'] or None
     if 'inbound_at' in data: drug.inbound_at = datetime.fromisoformat(data['inbound_at']) if data['inbound_at'] else None
 
+    db.session.commit()
+
+    log = OperationLog(
+        user_id=int(get_jwt_identity()),
+        action_type='drug_update',
+        target_type='drug',
+        target_id=drug.id,
+        summary=f"编辑{'药品' if drug.type == 1 else '诊疗项目' if drug.type == 2 else '耗材'}: {drug.name}"
+    )
+    db.session.add(log)
     db.session.commit()
     return jsonify({"msg": "Drug updated successfully"}), 200
 

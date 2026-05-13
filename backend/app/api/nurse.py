@@ -12,6 +12,7 @@ from backend.app.models import (
     PrescriptionItem,
     User,
     Visit,
+    OperationLog,
     VISIT_STATUS_COMPLETED,
     VISIT_STATUS_NURSE_VERIFIED,
     VISIT_STATUS_PENDING,
@@ -34,6 +35,7 @@ from datetime import datetime, timezone, timedelta
 from sqlalchemy import or_, func
 import re
 import math
+import json
 import io
 
 _DIAG_LINE_CODE_RE = re.compile(r"^(?P<name>.*?)[（(](?P<code>[^）)]+)[）)]\s*$")
@@ -296,6 +298,16 @@ def inbound_stock():
         db.session.add(ir)
         db.session.commit()
 
+        log = OperationLog(
+            user_id=int(user_id),
+            action_type='nurse_inbound',
+            target_type='drug',
+            target_id=drug.id,
+            summary=f"入库耗材: {drug.name} x{inbound_qty}{unit}"
+        )
+        db.session.add(log)
+        db.session.commit()
+
         return jsonify({"data": {"drug_id": drug.id}}), 201
 
     pack_spec = (data.get("pack_specification") or "").strip()
@@ -448,6 +460,24 @@ def inbound_stock():
         )
 
     db.session.commit()
+
+    log = OperationLog(
+        user_id=int(user_id),
+        action_type='nurse_inbound',
+        target_type='drug',
+        target_id=pack_drug.id,
+        summary=f"入库药品: {base_name} ({pack_spec}) 批次:{batch_no}",
+        details=json.dumps({
+            "base_name": base_name,
+            "pack_spec": pack_spec,
+            "batch_no": batch_no,
+            "pack_drug_id": pack_drug.id,
+            "retail_drug_id": retail_drug.id if retail_drug else None,
+        }, ensure_ascii=False)
+    )
+    db.session.add(log)
+    db.session.commit()
+
     resp = {"group_code": group_code, "pack_drug_id": pack_drug.id}
     if retail_drug is not None:
         resp["retail_drug_id"] = retail_drug.id
@@ -478,10 +508,27 @@ def update_inventory():
             remark=remark
         )
         db.session.add(record)
-        
+
         drug.stock = int(new_stock)
-        
+
         db.session.commit()
+
+        log = OperationLog(
+            user_id=int(user_id),
+            action_type='nurse_inventory_adjust',
+            target_type='drug',
+            target_id=drug_id,
+            summary=f"库存调整: {drug.name} {record.old_stock}→{int(new_stock)}",
+            details=json.dumps({
+                "drug_name": drug.name,
+                "old_stock": record.old_stock,
+                "new_stock": int(new_stock),
+                "remark": remark
+            }, ensure_ascii=False)
+        )
+        db.session.add(log)
+        db.session.commit()
+
         return jsonify({"msg": "Inventory updated successfully"}), 200
     except Exception as e:
         db.session.rollback()
@@ -1014,6 +1061,15 @@ def verify_visit(visit_id):
         visit.status = VISIT_STATUS_NURSE_VERIFIED
         visit.verified_by = int(user_id)
         visit.verified_at = datetime.utcnow()
+
+        log = OperationLog(
+            user_id=int(user_id),
+            action_type='nurse_verify',
+            target_type='visit',
+            target_id=visit.id,
+            summary=f"审核通过: {visit.patient.name if visit.patient else '未知'} ({visit.diagnosis or '无诊断'})"
+        )
+        db.session.add(log)
         db.session.commit()
 
     return jsonify({"msg": "Visit verified"}), 200
@@ -1037,6 +1093,16 @@ def reject_visit(visit_id):
         visit.rejected_by = int(user_id)
         visit.rejected_at = datetime.utcnow()
         visit.reject_reason = reason
+
+        log = OperationLog(
+            user_id=int(user_id),
+            action_type='nurse_reject',
+            target_type='visit',
+            target_id=visit.id,
+            summary=f"驳回处方: {visit.patient.name if visit.patient else '未知'}",
+            details=json.dumps({"reason": reason}, ensure_ascii=False)
+        )
+        db.session.add(log)
         db.session.commit()
 
     return jsonify({"msg": "Visit rejected"}), 200
@@ -1116,6 +1182,25 @@ def modify_prescription_item(visit_id, item_id):
     visit.total_amount = _recompute_visit_total(visit)
     db.session.commit()
 
+    log = OperationLog(
+        user_id=int(user_id),
+        action_type='nurse_modify_price',
+        target_type='prescription_item',
+        target_id=item.id,
+        summary=f"改价: {item.drug.name if item.drug else '未知'} ¥{item.original_price}→¥{new_price_val}",
+        details=json.dumps({
+            "visit_id": visit.id,
+            "drug_name": item.drug.name if item.drug else '',
+            "old_price": item.original_price,
+            "new_price": new_price_val,
+            "old_amount": item.original_amount,
+            "new_amount": new_amount_val,
+            "reason": reason
+        }, ensure_ascii=False)
+    )
+    db.session.add(log)
+    db.session.commit()
+
     return jsonify({
         "data": {
             "visit_id": visit.id,
@@ -1174,6 +1259,24 @@ def add_service_item(visit_id):
     db.session.add(item)
 
     visit.total_amount = _recompute_visit_total(visit)
+    db.session.commit()
+
+    log = OperationLog(
+        user_id=int(user_id),
+        action_type='nurse_add_service',
+        target_type='prescription_item',
+        target_id=item.id,
+        summary=f"护士追加{'项目' if drug.type == 2 else '耗材'}: {drug.name} x{quantity} ¥{amount}",
+        details=json.dumps({
+            "visit_id": visit.id,
+            "drug_name": drug.name,
+            "drug_type": drug.type,
+            "quantity": quantity,
+            "price": float(drug.price or 0),
+            "amount": amount,
+        }, ensure_ascii=False)
+    )
+    db.session.add(log)
     db.session.commit()
 
     return jsonify({
@@ -1387,6 +1490,21 @@ def execute_visit(visit_id):
         db.session.add(payment)
 
         visit.status = VISIT_STATUS_COMPLETED
+
+        log = OperationLog(
+            user_id=int(user_id),
+            action_type='nurse_execute',
+            target_type='visit',
+            target_id=visit.id,
+            summary=f"执行收费: {visit.patient.name if visit.patient else '未知'} ¥{final_amount}",
+            details=json.dumps({
+                "payment_method": payment_method,
+                "amount": final_amount,
+                "employee_discount": employee_discount,
+                "original_amount": original_amount
+            }, ensure_ascii=False)
+        )
+        db.session.add(log)
 
         db.session.commit()
 
@@ -1624,6 +1742,16 @@ def revoke_visit(visit_id):
         visit.revoked_by = user_id
         visit.revoked_at = datetime.utcnow()
         visit.revoke_reason = reason
+
+        log = OperationLog(
+            user_id=int(user_id),
+            action_type='nurse_revoke',
+            target_type='visit',
+            target_id=visit.id,
+            summary=f"撤销交易: {visit.patient.name if visit.patient else '未知'}",
+            details=json.dumps({"reason": reason}, ensure_ascii=False)
+        )
+        db.session.add(log)
 
         db.session.commit()
 
