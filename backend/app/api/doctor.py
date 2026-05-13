@@ -2,7 +2,7 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, VISIT_STATUS_PENDING
+from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, Payment, VISIT_STATUS_PENDING
 import json
 from backend.app.utils.decorators import role_required
 from datetime import datetime, timezone

@@ -41,6 +41,15 @@
 
 **影响**：仅标签文案变更，无功能影响，后端字段名 `price` 保持不变。
 
+### 就诊详情：Missing Import 修复
+
+**修改点**：
+1. **后端 doctor.py**：在 `from backend.app.models` 导入语句中补充 `Payment` 模型引用
+
+**原因**：上一轮"就诊历史"功能新增状态流转时间线时，`db.joinedload(Visit.payment).joinedload(Payment.nurse)` 使用了 `Payment` 模型进行联表查询，但 `Payment` 未在文件顶部导入。所有医生调用 `GET /doctor/visits/:id` 时触发 `NameError: name 'Payment' is not defined`，API 返回 500，导致"病例详情"弹窗始终加载失败。
+
+**影响**：医生端病例详情接口恢复正常，新旧就诊记录均可成功加载完整病历与状态流转时间线；前端不再弹出"获取详情失败"错误提示。
+
 ## 2026/05/11
 
 ### 编译 exe 启动崩溃（AssertionError）
