@@ -10,10 +10,22 @@
       <!-- 筛选栏 -->
       <el-form :inline="true" class="filter-form">
         <el-form-item label="操作类型">
-          <el-select v-model="filters.action_type" clearable placeholder="全部" style="width: 160px">
-            <el-option label="修改病例" value="visit_edit" />
-            <el-option label="新增药品" value="drug_create" />
+          <el-select v-model="filters.action_type" clearable placeholder="全部" style="width: 200px">
+            <el-option label="修改病历" value="visit_edit" />
+            <el-option label="新增药品/项目" value="drug_create" />
+            <el-option label="编辑药品/项目" value="drug_update" />
             <el-option label="临时就诊" value="temp_patient_visit" />
+            <el-option label="新增人员" value="create_patient" />
+            <el-option label="护士审核通过" value="nurse_verify" />
+            <el-option label="护士驳回" value="nurse_reject" />
+            <el-option label="护士执行收费" value="nurse_execute" />
+            <el-option label="护士撤销交易" value="nurse_revoke" />
+            <el-option label="护士改价" value="nurse_modify_price" />
+            <el-option label="护士新增项目/耗材" value="nurse_add_service" />
+            <el-option label="护士库存调整" value="nurse_inventory_adjust" />
+            <el-option label="药品入库" value="nurse_inbound" />
+            <el-option label="导入数据" value="import_data" />
+            <el-option label="数据库备份" value="backup" />
           </el-select>
         </el-form-item>
         <el-form-item label="开始日期">
@@ -116,9 +128,21 @@ const roleMap = {
 }
 
 const actionTypeMap = {
-  visit_edit: { label: '修改病例', type: '' },
-  drug_create: { label: '新增药品', type: 'success' },
-  temp_patient_visit: { label: '临时就诊', type: 'warning' }
+  visit_edit: { label: '修改病历', type: '' },
+  drug_create: { label: '新增药品/项目', type: 'success' },
+  drug_update: { label: '编辑药品/项目', type: 'success' },
+  temp_patient_visit: { label: '临时就诊', type: 'warning' },
+  create_patient: { label: '新增人员', type: '' },
+  nurse_verify: { label: '护士审核通过', type: 'primary' },
+  nurse_reject: { label: '护士驳回', type: 'danger' },
+  nurse_execute: { label: '护士执行收费', type: 'success' },
+  nurse_revoke: { label: '护士撤销交易', type: 'danger' },
+  nurse_modify_price: { label: '护士改价', type: 'warning' },
+  nurse_add_service: { label: '护士新增项目', type: 'primary' },
+  nurse_inventory_adjust: { label: '库存调整', type: 'warning' },
+  nurse_inbound: { label: '药品入库', type: 'success' },
+  import_data: { label: '导入数据', type: '' },
+  backup: { label: '数据库备份', type: '' }
 }
 
 const actionLabel = (type) => actionTypeMap[type]?.label || type
@@ -127,13 +151,30 @@ const actionTagType = (type) => actionTypeMap[type]?.type || 'info'
 const parsedChanges = (row) => {
   try {
     const details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details
-    if (details && Array.isArray(details.changes) && details.changes.length > 0) {
-      return details.changes
+    if (!details || !details.changes) return null
+
+    const changes = details.changes
+    // changes 是对象: {"chief_complaint": {"old": "...", "new": "..."}}
+    if (typeof changes === 'object' && !Array.isArray(changes)) {
+      return Object.entries(changes).map(([field, vals]) => ({
+        field: fieldNames[field] || field,
+        old_value: vals.old || '',
+        new_value: vals.new || ''
+      }))
     }
     return null
   } catch {
     return null
   }
+}
+
+const fieldNames = {
+  chief_complaint: '主诉',
+  present_illness: '现病史',
+  past_history: '既往史',
+  physical_exam: '体格检查',
+  doctor_advice: '医生留言',
+  special_note: '特殊备注'
 }
 
 const formatDetails = (details) => {
@@ -158,8 +199,9 @@ const fetchData = async () => {
     if (filters.end_date) params.end_date = filters.end_date
 
     const res = await request.get('/admin/operation-logs', { params })
-    tableData.value = res.data?.items || res.items || []
-    pagination.total = res.data?.total || res.total || 0
+    // 后端返回格式: {"data": [...], "meta": {...}}, axiox 解包后 res = 整个 body
+    tableData.value = res.data || []
+    pagination.total = res.meta?.total || 0
   } catch (err) {
     ElMessage.error(err.msg || '获取运营日志失败')
   } finally {

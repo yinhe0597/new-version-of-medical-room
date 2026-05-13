@@ -62,19 +62,20 @@
       <div v-if="showHistory" class="history-section">
         <el-divider content-position="left">就诊历史</el-divider>
         <el-table :data="visitHistory" v-loading="historyLoading" stripe size="small">
-          <el-table-column prop="date" label="就诊时间" width="160" />
-          <el-table-column prop="diagnosis" label="诊断" min-width="150" show-overflow-tooltip />
-          <el-table-column prop="total_amount" label="金额" width="90">
+          <el-table-column prop="date" label="就诊时间" width="150" />
+          <el-table-column prop="doctor_name" label="接诊医生" width="90" />
+          <el-table-column prop="diagnosis" label="诊断" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="total_amount" label="金额" width="80">
             <template #default="scope">¥{{ (scope.row.total_amount || 0).toFixed(2) }}</template>
           </el-table-column>
-          <el-table-column prop="status" label="状态" width="100">
+          <el-table-column prop="status" label="状态" width="95">
             <template #default="scope">
               <el-tag :type="getStatusType(scope.row.status)" size="small">
                 {{ getStatusText(scope.row.status) }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="100">
+          <el-table-column label="操作" width="60">
             <template #default="scope">
               <el-button size="small" type="primary" link @click="openCaseReview(scope.row.visit_id)">详情</el-button>
             </template>
@@ -87,7 +88,7 @@
     </el-card>
 
     <!-- 病例复盘弹窗 -->
-    <el-dialog v-model="caseDialogVisible" title="病例详情" width="800px">
+    <el-dialog v-model="caseDialogVisible" title="病例详情" width="840px">
       <div v-loading="caseLoading" v-if="caseDetail" class="case-review">
         <el-descriptions border :column="2" title="患者信息">
           <el-descriptions-item label="姓名">{{ caseDetail.patient?.name || '-' }}</el-descriptions-item>
@@ -96,6 +97,30 @@
           <el-descriptions-item label="状态">{{ getStatusText(caseDetail.status) }}</el-descriptions-item>
           <el-descriptions-item label="医生">{{ caseDetail.doctor_name }}</el-descriptions-item>
         </el-descriptions>
+
+        <!-- 状态流转时间线 -->
+        <div v-if="caseDetail.status_timeline && caseDetail.status_timeline.length > 0" style="margin-top:16px;">
+          <div style="font-weight:bold;margin-bottom:10px;">状态流转</div>
+          <el-timeline>
+            <el-timeline-item
+              v-for="(step, idx) in caseDetail.status_timeline"
+              :key="idx"
+              :timestamp="step.timestamp"
+              :type="timelineType(step.status)"
+              placement="top"
+              size="small"
+            >
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <span>
+                  <strong>{{ step.actor }}</strong> {{ step.label }}
+                  <span v-if="step.amount" style="color:#f56c6c;"> ¥{{ step.amount }}</span>
+                </span>
+                <el-tag v-if="step.reason" type="danger" size="small">{{ step.reason }}</el-tag>
+              </div>
+            </el-timeline-item>
+          </el-timeline>
+        </div>
+
         <el-descriptions border :column="1" title="电子病历" direction="vertical" style="margin-top:16px;">
           <el-descriptions-item label="主诉">{{ caseDetail.chief_complaint || '无' }}</el-descriptions-item>
           <el-descriptions-item label="现病史">{{ caseDetail.present_illness || '无' }}</el-descriptions-item>
@@ -118,6 +143,19 @@
             <el-table-column label="金额" width="80">
               <template #default="scope">¥{{ (scope.row.amount || 0).toFixed(2) }}</template>
             </el-table-column>
+          </el-table>
+        </div>
+        <!-- 病历修改记录 -->
+        <div style="margin-top:12px;text-align:right;">
+          <el-button size="small" type="info" link @click="showEditHistory = !showEditHistory">
+            {{ showEditHistory ? '收起修改记录' : '查看修改记录' }}
+          </el-button>
+        </div>
+        <div v-if="showEditHistory" style="margin-top:8px;">
+          <el-table :data="editHistory" v-loading="editHistoryLoading" border stripe size="small" max-height="200">
+            <el-table-column prop="timestamp" label="修改时间" width="150" />
+            <el-table-column prop="user_name" label="操作人" width="80" />
+            <el-table-column prop="summary" label="摘要" min-width="120" />
           </el-table>
         </div>
       </div>
@@ -205,7 +243,7 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import request from '@/api/request'
@@ -233,6 +271,14 @@ const historyLoading = ref(false)
 const caseDialogVisible = ref(false)
 const caseLoading = ref(false)
 const caseDetail = ref(null)
+const showEditHistory = ref(false)
+const editHistory = ref([])
+const editHistoryLoading = ref(false)
+
+const timelineType = (status) => {
+  const map = { pending: '', nurse_verified: 'primary', completed: 'success', rejected: 'danger', revoked: 'info' }
+  return map[status] || 'info'
+}
 
 const getStatusType = (status) => {
   const map = { pending: 'warning', nurse_verified: 'info', completed: 'success', rejected: 'danger', revoked: 'info' }
@@ -264,9 +310,12 @@ const toggleHistory = () => {
 }
 
 const openCaseReview = async (visitId) => {
+  currentVisitId = visitId
   caseDialogVisible.value = true
   caseLoading.value = true
   caseDetail.value = null
+  showEditHistory.value = false
+  editHistory.value = []
   try {
     const res = await request.get(`/doctor/visits/${visitId}`)
     caseDetail.value = res.data
@@ -277,6 +326,29 @@ const openCaseReview = async (visitId) => {
     caseLoading.value = false
   }
 }
+
+const fetchEditHistory = async () => {
+  if (!currentVisitId) return
+  editHistoryLoading.value = true
+  try {
+    const res = await request.get(`/doctor/visits/${currentVisitId}/revisions`)
+    editHistory.value = res.data || []
+  } catch {
+    editHistory.value = []
+  } finally {
+    editHistoryLoading.value = false
+  }
+}
+
+// track current visit id for revision history
+let currentVisitId = null
+
+// watch edit history toggle to fetch data lazily
+watch(showEditHistory, (val) => {
+  if (val && editHistory.value.length === 0) {
+    fetchEditHistory()
+  }
+})
 
 const escapeHtml = (value) => {
   return String(value ?? '')

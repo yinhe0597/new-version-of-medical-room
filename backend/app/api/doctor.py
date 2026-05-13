@@ -385,7 +385,9 @@ def update_patient(id):
 @role_required('doctor')
 def get_patient_history(patient_id):
     patient = Patient.query.get_or_404(patient_id)
-    visits = patient.visits.order_by(Visit.timestamp.desc()).all()
+    visits = patient.visits.options(
+        db.joinedload(Visit.doctor)
+    ).order_by(Visit.timestamp.desc()).all()
 
     data = []
     for visit in visits:
@@ -396,6 +398,7 @@ def get_patient_history(patient_id):
             "chief_complaint": visit.chief_complaint,
             "total_amount": visit.total_amount,
             "status": visit.status,
+            "doctor_name": visit.doctor.real_name if visit.doctor else '-',
         })
 
     return jsonify({"data": data}), 200
@@ -760,16 +763,15 @@ def get_visit_history():
 @role_required('doctor')
 def get_doctor_visit_detail(visit_id):
     user_id = get_jwt_identity()
-    # Preload patient, items and drug information to avoid N+1 queries
+    # Preload patient, items, doctor, payment and audit info to avoid N+1 queries
     visit = Visit.query.options(
         db.joinedload(Visit.patient),
+        db.joinedload(Visit.doctor),
         db.joinedload(Visit.verifier),
         db.joinedload(Visit.rejector),
+        db.joinedload(Visit.revoker),
+        db.joinedload(Visit.payment).joinedload(Payment.nurse),
     ).get_or_404(visit_id)
-
-    # Ensure doctor can only view their own visits (or maybe allow viewing others? For now restrict to own)
-    if visit.doctor_id != int(user_id):
-        return jsonify({"msg": "Unauthorized to view this visit"}), 403
 
     items_query = visit.items
     if hasattr(items_query, "options"):
@@ -793,6 +795,52 @@ def get_doctor_visit_detail(visit_id):
             "amount": item.amount,
             "is_scattered": item.is_scattered
         })
+
+    # 构建状态流转时间线
+    status_timeline = []
+
+    if visit.timestamp:
+        status_timeline.append({
+            "status": "pending",
+            "label": "开方",
+            "timestamp": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M:%S") or "",
+            "actor": visit.doctor.real_name if visit.doctor else "医生",
+        })
+    if visit.verified_at:
+        status_timeline.append({
+            "status": "nurse_verified",
+            "label": "审核通过",
+            "timestamp": _format_local_dt(visit.verified_at, "%Y-%m-%d %H:%M:%S") or "",
+            "actor": visit.verifier.real_name if visit.verifier else "护士",
+        })
+    if visit.rejected_at:
+        entry = {
+            "status": "rejected",
+            "label": "驳回",
+            "timestamp": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") or "",
+            "actor": visit.rejector.real_name if visit.rejector else "护士",
+        }
+        if visit.reject_reason:
+            entry["reason"] = visit.reject_reason
+        status_timeline.append(entry)
+    if visit.status == 'completed' and visit.payment:
+        status_timeline.append({
+            "status": "completed",
+            "label": "执行收费",
+            "timestamp": _format_local_dt(visit.payment.payment_date, "%Y-%m-%d %H:%M:%S") or "",
+            "actor": visit.payment.nurse.real_name if visit.payment.nurse else "护士",
+            "amount": visit.payment.amount,
+        })
+    if visit.revoked_at:
+        entry = {
+            "status": "revoked",
+            "label": "撤销",
+            "timestamp": _format_local_dt(visit.revoked_at, "%Y-%m-%d %H:%M:%S") or "",
+            "actor": visit.revoker.real_name if visit.revoker else "护士",
+        }
+        if visit.revoke_reason:
+            entry["reason"] = visit.revoke_reason
+        status_timeline.append(entry)
 
     return jsonify({
         "data": {
@@ -825,8 +873,9 @@ def get_doctor_visit_detail(visit_id):
             "rejected_by": visit.rejected_by,
             "rejected_by_name": visit.rejector.real_name if visit.rejector else None,
             "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
-            "doctor_name": User.query.get(visit.doctor_id).real_name if visit.doctor_id else '-',
-            "items": items
+            "doctor_name": visit.doctor.real_name if visit.doctor else '-',
+            "items": items,
+            "status_timeline": status_timeline,
         }
     }), 200
 

@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-MIT-yellow?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.4-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.5-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -171,6 +171,15 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.5（2026-05-13）📋🔄
+
+- 📋 **运营日志全面补全**：修复前端数据提取与变更记录展示缺陷；护士端 8 个核心操作（审核通过/驳回、改价、入库、库存调整、执行收费、撤销交易、新增项目耗材）新增审计记录；管理端药品编辑、人员编辑、批量导入操作可追溯
+- 🔄 **就诊历史增强**：医生可查看任意患者就诊记录（移除硬权限校验）；新增 `status_timeline` 状态流转时间线（待处理→审核/驳回→完成/撤销），前端以 `el-timeline` 可视化展示；就诊历史表格增加"接诊医生"列；病历详情新增修改记录查看入口
+
+> 📝 详细变更：[开发日志](docs/dev-log.md#-20260513)
+
+---
 
 ### 🏷️ open0.0.4（2026-05-11）🔐✨🩹
 
