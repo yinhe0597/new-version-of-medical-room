@@ -514,7 +514,12 @@ const validatePrescription = () => {
       return false
     }
     if (item.type === 1) {
-      // 允许 -- 空选项，不强制校验
+      const f = ['usage', 'dosage', 'frequency', 'timing']
+      const allBlank = f.every(k => !item[k] || item[k] === '--')
+      if (allBlank) {
+        ElMessage.warning(`第${i + 1}行请至少填写用法、用量、频次、时间中的一项`)
+        return false
+      }
     }
   }
   return true
