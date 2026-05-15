@@ -567,10 +567,9 @@ def create_visit():
 
         is_intravenous = bool(item.get('is_intravenous', False))
         if (drug.type == 1 or drug.type is None) and not is_intravenous:
-            for f in ["usage", "dosage", "frequency", "timing"]:
-                val = (item.get(f) or "").strip()
-                if not val:
-                    return jsonify({"msg": f"Missing {f}", "field": f, "item_index": idx}), 400
+            vals = {f: (item.get(f) or "").strip() for f in ["usage", "dosage", "frequency", "timing"]}
+            if not any(vals.values()):
+                return jsonify({"msg": "请至少填写用法、用量、频次、时间中的一项", "field": "prescription", "item_index": idx}), 400
         if is_intravenous:
             if not (item.get('infusion_dosage_value') is not None and item.get('infusion_dosage_unit')):
                 return jsonify({"msg": "静脉给药需填写用量数值和单位", "field": "infusion_dosage", "item_index": idx}), 400

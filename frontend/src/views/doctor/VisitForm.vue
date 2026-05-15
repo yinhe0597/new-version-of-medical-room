@@ -975,8 +975,12 @@ const validatePrescription = () => {
       return false
     }
     if (item.type === 1) {
-      // usage/dosage/frequency/timing可为空（--选项），但不能全部为空时判定为未填写
-      // 允许个别为空，不做强制校验
+      const f = ['usage', 'dosage', 'frequency', 'timing']
+      const allBlank = f.every(k => !item[k] || item[k] === '--')
+      if (allBlank) {
+        ElMessage.warning(`第${i + 1}行请至少填写用法、用量、频次、时间中的一项`)
+        return false
+      }
     }
   }
   // 校验静脉给药配伍
