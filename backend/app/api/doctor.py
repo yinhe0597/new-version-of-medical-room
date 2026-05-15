@@ -565,11 +565,17 @@ def create_visit():
         if days <= 0:
             return jsonify({"msg": "Invalid days", "field": "days", "item_index": idx}), 400
 
-        if drug.type == 1 or drug.type is None:
+        is_intravenous = bool(item.get('is_intravenous', False))
+        if (drug.type == 1 or drug.type is None) and not is_intravenous:
             for f in ["usage", "dosage", "frequency", "timing"]:
                 val = (item.get(f) or "").strip()
                 if not val:
                     return jsonify({"msg": f"Missing {f}", "field": f, "item_index": idx}), 400
+        if is_intravenous:
+            if not (item.get('infusion_dosage_value') is not None and item.get('infusion_dosage_unit')):
+                return jsonify({"msg": "静脉给药需填写用量数值和单位", "field": "infusion_dosage", "item_index": idx}), 400
+            if not (item.get('infusion_method') or "").strip():
+                return jsonify({"msg": "静脉给药需选择给药方式", "field": "infusion_method", "item_index": idx}), 400
 
         if (drug.type == 1 or drug.type is None) and drug.stock_group_code:
             group = DrugStockGroup.query.filter_by(group_code=drug.stock_group_code).first()
@@ -595,6 +601,7 @@ def create_visit():
 
             item_amount = round(quantity * unit_price, 2)
             total_amount += item_amount
+            is_intravenous = bool(item.get('is_intravenous', False))
             drug_items.append({
                 "drug": drug,
                 "quantity": quantity,
@@ -607,6 +614,11 @@ def create_visit():
                 "amount": item_amount,
                 "is_scattered": False,
                 "purchase_cost": purchase_cost,
+                "is_intravenous": is_intravenous,
+                "infusion_group": item.get("infusion_group"),
+                "infusion_dosage_value": item.get("infusion_dosage_value"),
+                "infusion_dosage_unit": item.get("infusion_dosage_unit"),
+                "infusion_method": item.get("infusion_method"),
             })
             continue
 
@@ -633,6 +645,7 @@ def create_visit():
         item_amount = round(quantity * unit_price, 2)
         total_amount += item_amount
 
+        is_intravenous2 = bool(item.get('is_intravenous', False))
         drug_items.append({
             "drug": drug,
             "quantity": quantity,
@@ -644,7 +657,12 @@ def create_visit():
             "price_at_visit": unit_price,
             "amount": item_amount,
             "is_scattered": is_scattered,
-            "purchase_cost": purchase_cost
+            "purchase_cost": purchase_cost,
+            "is_intravenous": is_intravenous2,
+            "infusion_group": item.get("infusion_group"),
+            "infusion_dosage_value": item.get("infusion_dosage_value"),
+            "infusion_dosage_unit": item.get("infusion_dosage_unit"),
+            "infusion_method": item.get("infusion_method"),
         })
 
     # Create Visit
@@ -686,7 +704,12 @@ def create_visit():
             new_price=item['price_at_visit'],
             new_amount=item['amount'],
             is_scattered=item['is_scattered'],
-            purchase_cost=item['purchase_cost']
+            purchase_cost=item['purchase_cost'],
+            is_intravenous=item.get('is_intravenous', False),
+            infusion_group=item.get('infusion_group'),
+            infusion_dosage_value=item.get('infusion_dosage_value'),
+            infusion_dosage_unit=item.get('infusion_dosage_unit'),
+            infusion_method=item.get('infusion_method'),
         )
         db.session.add(p_item)
 
@@ -793,7 +816,12 @@ def get_doctor_visit_detail(visit_id):
             "quantity": item.quantity,
             "price_at_visit": item.price_at_visit,
             "amount": item.amount,
-            "is_scattered": item.is_scattered
+            "is_scattered": item.is_scattered,
+            "is_intravenous": item.is_intravenous,
+            "infusion_group": item.infusion_group,
+            "infusion_dosage_value": item.infusion_dosage_value,
+            "infusion_dosage_unit": item.infusion_dosage_unit,
+            "infusion_method": item.infusion_method,
         })
 
     # 构建状态流转时间线

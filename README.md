@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.5-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.6-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -66,6 +66,8 @@
 | 🩺 **医生端** | 历史病例 | 搜索患者后直接查看该患者所有就诊记录和病历详情 |
 | 🩺 **医生端** | 病历修改 | 支持修改历史病历并追踪修改记录 |
 | 🩺 **医生端** | 零散用药 | 自动计算总用量，支持半片/半粒等特殊用量 |
+| 🩺 **医生端** | 静脉给药配伍 | 独立配伍管理，溶质+溶液绑定不混淆，自定义用量数值/单位/给药方式 |
+| 🩺 **医生端** | 用法用量空白选项 | 用法/用量/频次/时间均新增 `--` 空选项，适配药膏等无需用法用量的场景 |
 | 💊 **护士端** | 处方处置 | 审核确认、收费执行、驳回操作 |
 | 💊 **护士端** | 撤销交易 | 误操作可撤销（终态标记），自动还原库存 |
 | 💊 **护士端** | 智能盘库 | 自定义阈值预警，散装药品快速筛选 |
@@ -187,6 +189,17 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.6（2026-05-15）💉🔧
+
+- 💉 **静脉给药配伍功能**：医生端新增"静脉给药"独立区域，勾选后可创建多个配伍组，每个配伍绑定溶质+溶液药品不混淆；静脉药品用量支持自定义数值（如 200）+ 单位选择（ml/g/mg/μg/U/IU）+ 给药方式（静脉滴注/静脉推注/输液泵/微量泵），无需填写餐前餐后、每日几次等选项
+- 🔧 **用法用量空白选项**：用法/用量/频次/服药时间四个下拉框均新增 `--` 空选项（值为空），适配药膏、外用药等无需用法用量的场景；前后端校验同步放松，允许普通药品个别字段为空
+- 🗄️ **数据模型扩展**：PrescriptionItem 新增 `is_intravenous`、`infusion_group`、`infusion_dosage_value`、`infusion_dosage_unit`、`infusion_method` 五个字段，自动列迁移机制同步更新
+- 🖥️ **护士端适配**：处方执行页面 `formatUsageLine` 对静脉给药药品显示"配伍N / 用量 / 给药方式"格式
+
+> 📝 详细变更：[开发日志](docs/dev-log.md#-20260515)
+
+---
 
 ### 🏷️ open0.0.5（2026-05-13）📋🔄
 
