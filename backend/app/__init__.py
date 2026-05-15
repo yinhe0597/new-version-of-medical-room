@@ -76,6 +76,11 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "prescription_item", "modify_reason", "TEXT")
     _ensure_sqlite_column(app, "prescription_item", "is_scattered", "BOOLEAN DEFAULT 0")
     _ensure_sqlite_column(app, "prescription_item", "purchase_cost", "FLOAT DEFAULT 0.0")
+    _ensure_sqlite_column(app, "prescription_item", "is_intravenous", "BOOLEAN DEFAULT 0")
+    _ensure_sqlite_column(app, "prescription_item", "infusion_group", "INTEGER")
+    _ensure_sqlite_column(app, "prescription_item", "infusion_dosage_value", "FLOAT")
+    _ensure_sqlite_column(app, "prescription_item", "infusion_dosage_unit", "VARCHAR(10)")
+    _ensure_sqlite_column(app, "prescription_item", "infusion_method", "VARCHAR(50)")
 
     # drug 表新增列
     _ensure_sqlite_column(app, "drug", "type", "INTEGER DEFAULT 1")

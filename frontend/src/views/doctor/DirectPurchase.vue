@@ -134,12 +134,13 @@
                   <el-option v-for="item in usageOptions" :key="item" :label="item" :value="item" />
                 </el-select>
                 <el-select v-model="scope.row.dosage" placeholder="用量" size="small" style="width: 80px" allow-create filterable default-first-option>
-                  <el-option v-for="item in dosageOptions" :key="item" :label="item" :value="item" />
+                  <el-option v-for="item in dosageOptionsWithBlank" :key="item" :label="item" :value="item" />
                 </el-select>
                 <el-select v-model="scope.row.frequency" placeholder="频次" size="small" style="width: 80px" allow-create filterable default-first-option>
                   <el-option v-for="item in frequencyOptions" :key="item" :label="item" :value="item" />
                 </el-select>
                 <el-select v-model="scope.row.timing" placeholder="时间" size="small" style="width: 80px" allow-create filterable default-first-option>
+                  <el-option label="--" value="--" />
                   <el-option label="餐前" value="餐前" />
                   <el-option label="餐后" value="餐后" />
                   <el-option label="餐中" value="餐中" />
@@ -374,7 +375,7 @@ const prescriptionItems = ref([])
 const checkContraindications = ref(false)
 const consultationFee = ref(0.00) // 单独购药默认诊察费为0
 
-const usageOptions = ref(['口服', '外用', '静脉注射', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
+const usageOptions = ref(['--', '口服', '外用', '静脉注射', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
 const buildDosageOptions = () => {
   const out = []
   const push = (v) => {
@@ -397,7 +398,8 @@ const buildDosageOptions = () => {
 }
 
 const dosageOptions = ref(buildDosageOptions())
-const frequencyOptions = ref(['每日1次', '每日2次', '每日3次', '每日4次', '每4小时1次', '每6小时1次', '每8小时1次', '每12小时1次', '必要时', '睡前'])
+const dosageOptionsWithBlank = computed(() => ['--', ...buildDosageOptions()])
+const frequencyOptions = ref(['--', '每日1次', '每日2次', '每日3次', '每日4次', '每4小时1次', '每6小时1次', '每8小时1次', '每12小时1次', '必要时', '睡前'])
 
 const submitting = ref(false)
 
@@ -512,10 +514,7 @@ const validatePrescription = () => {
       return false
     }
     if (item.type === 1) {
-      if (!item.usage || !item.dosage || !item.frequency || !item.timing) {
-        ElMessage.warning(`第${i + 1}行请完善用法用量信息`)
-        return false
-      }
+      // 允许 -- 空选项，不强制校验
     }
   }
   return true
@@ -538,12 +537,13 @@ const submitPrescription = async () => {
       items: prescriptionItems.value.map(item => ({
         drug_id: item.id,
         quantity: item.quantity,
-        usage: item.usage,
-        dosage: item.dosage,
-        frequency: item.frequency,
-        timing: item.timing,
+        usage: item.usage === '--' ? '' : item.usage,
+        dosage: item.dosage === '--' ? '' : item.dosage,
+        frequency: item.frequency === '--' ? '' : item.frequency,
+        timing: item.timing === '--' ? '' : item.timing,
         days: item.days,
-        is_scattered: item.is_scattered || false
+        is_scattered: item.is_scattered || false,
+        is_intravenous: false
       }))
     }
     

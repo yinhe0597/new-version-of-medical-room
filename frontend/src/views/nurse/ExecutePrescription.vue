@@ -373,6 +373,12 @@ const safeText = (val) => {
 
 const formatUsageLine = (row) => {
   if (!row) return '-'
+  if (row.is_intravenous) {
+    const parts = [`配伍${row.infusion_group || '?'}`]
+    if (row.infusion_dosage_value) parts.push(`${row.infusion_dosage_value}${row.infusion_dosage_unit || ''}`)
+    if (row.infusion_method) parts.push(row.infusion_method)
+    return parts.join(' / ')
+  }
   return `${safeText(row.usage)} / ${safeText(row.dosage)} / ${safeText(row.frequency)} / ${safeText(row.timing)}`
 }
 

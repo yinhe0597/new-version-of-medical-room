@@ -139,7 +139,7 @@
                       filterable
                       default-first-option
                     >
-                      <el-option v-for="item in dosageOptions" :key="item" :label="item" :value="item" />
+                      <el-option v-for="item in dosageOptionsWithBlank" :key="item" :label="item" :value="item" />
                     </el-select>
 
                     <el-select
@@ -163,11 +163,7 @@
                       filterable
                       default-first-option
                     >
-                      <el-option label="餐前" value="餐前" />
-                      <el-option label="餐后" value="餐后" />
-                      <el-option label="餐中" value="餐中" />
-                      <el-option label="空腹" value="空腹" />
-                      <el-option label="睡前" value="睡前" />
+                      <el-option v-for="item in timingOptions" :key="item" :label="item" :value="item" />
                     </el-select>
                     </div>
                     <div v-else>
@@ -216,6 +212,80 @@
                 </template>
               </el-table-column>
             </el-table>
+
+            <!-- 静脉给药配伍区域 -->
+            <div style="margin-top: 16px;">
+              <el-checkbox v-model="intravenousMode" style="margin-bottom: 8px;">
+                <span style="font-weight: bold;">静脉给药（勾选后独立配伍）</span>
+              </el-checkbox>
+              <div v-if="intravenousMode" style="border: 1px solid #e4e7ed; border-radius: 4px; padding: 12px; background: #fafbfc;">
+                <div v-for="(group, gi) in compatGroups" :key="group.id" style="margin-bottom: 12px; border: 1px dashed #c0c4cc; border-radius: 4px; padding: 10px;">
+                  <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px;">
+                    <span style="font-weight: bold; color: #409EFF;">配伍 {{ gi + 1 }}</span>
+                    <el-button type="danger" link size="small" @click="removeCompatGroup(gi)">删除配伍</el-button>
+                  </div>
+                  <div style="margin-bottom: 8px;">
+                    <el-select
+                      :model-value="null"
+                      filterable
+                      remote
+                      reserve-keyword
+                      placeholder="搜索药品添加到本配伍"
+                      :remote-method="searchIvDrugs"
+                      :loading="ivDrugSearchLoading"
+                      style="width: 100%"
+                      @change="(val) => { handleIvDrugSelect(gi, val); }"
+                      @clear="selectedIvDrugId = null"
+                    >
+                      <el-option
+                        v-for="item in ivDrugOptions"
+                        :key="item.option_id"
+                        :label="`${item.name} [${item.specification}] (${item.option_label}) - ¥${item.display_price.toFixed(2)}`"
+                        :value="item.option_id"
+                      />
+                    </el-select>
+                  </div>
+                  <el-table :data="group.items" border size="small" v-if="group.items.length">
+                    <el-table-column prop="name" label="药品名称" min-width="100" />
+                    <el-table-column prop="specification" label="规格" width="100" />
+                    <el-table-column label="数量" width="100">
+                      <template #default="scope">
+                        <el-input-number v-model="scope.row.quantity" :min="1" :max="999" size="small" style="width: 80px" />
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="用量数值" width="120">
+                      <template #default="scope">
+                        <el-input-number v-model="scope.row.infusion_dosage_value" :min="0.1" :precision="1" size="small" style="width: 100px" placeholder="如200" />
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="单位" width="80">
+                      <template #default="scope">
+                        <el-select v-model="scope.row.infusion_dosage_unit" size="small" style="width: 70px">
+                          <el-option v-for="u in infusionUnitOptions" :key="u" :label="u" :value="u" />
+                        </el-select>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="给药方式" width="140">
+                      <template #default="scope">
+                        <el-select v-model="scope.row.infusion_method" size="small" style="width: 120px">
+                          <el-option v-for="m in infusionMethodOptions" :key="m" :label="m" :value="m" />
+                        </el-select>
+                      </template>
+                    </el-table-column>
+                    <el-table-column prop="price" label="单价" width="70">
+                      <template #default="scope">{{ scope.row.price.toFixed(2) }}</template>
+                    </el-table-column>
+                    <el-table-column label="操作" width="60">
+                      <template #default="scope">
+                        <el-button type="danger" link @click="removeIvItemFromGroup(gi, scope.$index)">删除</el-button>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                  <div v-if="!group.items.length" style="color: #909399; font-size: 13px; text-align: center; padding: 10px;">请在搜索框中搜索药品添加到本配伍</div>
+                </div>
+                <el-button type="primary" link @click="createCompatGroup">+ 创建配伍</el-button>
+              </div>
+            </div>
 
             <!-- 特殊计量与用法备注 -->
             <el-form-item label="特殊计量与用法备注" style="margin-top: 12px;">
@@ -268,7 +338,8 @@
 
       <div style="margin-top: 20px;">
         <div style="font-size: 16px; font-weight: bold; margin-bottom: 10px;">处方明细</div>
-        <el-table :data="prescriptionItems" border stripe size="small">
+        <!-- 普通药品 -->
+        <el-table :data="prescriptionItems" border stripe size="small" v-if="prescriptionItems.length">
           <el-table-column prop="name" label="药品名称" min-width="140" />
           <el-table-column prop="specification" label="规格" width="120" />
           <el-table-column label="用法" min-width="220">
@@ -287,6 +358,27 @@
             <template #default="scope">¥ {{ (Math.round(scope.row.price * scope.row.quantity * 100) / 100).toFixed(2) }}</template>
           </el-table-column>
         </el-table>
+        <!-- 静脉给药配伍 -->
+        <div v-if="intravenousMode && compatGroups.some(g => g.items.length)" style="margin-top: 12px;">
+          <div style="font-weight: bold; margin-bottom: 6px; color: #409EFF;">静脉给药配伍</div>
+          <div v-for="(group, gi) in compatGroups" :key="group.id" v-show="group.items.length" style="margin-bottom: 10px; border: 1px solid #d9ecff; border-radius: 4px; padding: 8px; background: #ecf5ff;">
+            <div style="font-weight: bold; font-size: 13px; margin-bottom: 4px;">配伍 {{ gi + 1 }}</div>
+            <el-table :data="group.items" border stripe size="small">
+              <el-table-column prop="name" label="药品名称" min-width="140" />
+              <el-table-column prop="specification" label="规格" width="120" />
+              <el-table-column label="用量" min-width="120">
+                <template #default="scope">
+                  {{ scope.row.infusion_dosage_value }}{{ scope.row.infusion_dosage_unit }}
+                </template>
+              </el-table-column>
+              <el-table-column prop="infusion_method" label="给药方式" width="120" />
+              <el-table-column prop="quantity" label="数量" width="80" />
+              <el-table-column label="单价" width="90">
+                <template #default="scope">¥ {{ scope.row.price.toFixed(2) }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+        </div>
       </div>
 
       <div class="confirm-totals">
@@ -398,8 +490,31 @@ const drugOptions = ref([])
 const selectedDrugId = ref(null)
 const prescriptionItems = ref([])
 
+// 静脉给药模式
+const intravenousMode = ref(false)
+const ivItems = ref([])
+const ivDrugOptions = ref([])
+const selectedIvDrugId = ref(null)
+const ivDrugSearchLoading = ref(false)
+
+// 配伍列表 [{id:1, items:[]}, {id:2, items:[]}]
+const compatGroups = ref([])
+let nextCompatId = 1
+
+const createCompatGroup = () => {
+  compatGroups.value.push({ id: nextCompatId++, items: [] })
+}
+const removeCompatGroup = (idx) => {
+  compatGroups.value.splice(idx, 1)
+}
+const removeIvItemFromGroup = (groupIdx, itemIdx) => {
+  compatGroups.value[groupIdx].items.splice(itemIdx, 1)
+}
+
 // 预设选项数据
-const usageOptions = ref(['口服', '外用', '静脉注射', '静脉滴注', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
+const usageOptions = ref(['--', '口服', '外用', '静脉注射', '静脉滴注', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
+const infusionMethodOptions = ref(['静脉滴注', '静脉推注', '静脉输液泵', '微量泵'])
+const infusionUnitOptions = ref(['ml', 'g', 'mg', 'μg', 'U', 'IU'])
 const buildDosageOptions = () => {
   const out = []
   const push = (v) => {
@@ -422,7 +537,9 @@ const buildDosageOptions = () => {
 }
 
 const dosageOptions = ref(buildDosageOptions())
-const frequencyOptions = ref(['每日1次', '每日2次', '每日3次', '每日4次', '每4小时1次', '每6小时1次', '每8小时1次', '每12小时1次', '必要时', '睡前'])
+const dosageOptionsWithBlank = computed(() => ['--', ...buildDosageOptions()])
+const frequencyOptions = ref(['--', '每日1次', '每日2次', '每日3次', '每日4次', '每4小时1次', '每6小时1次', '每8小时1次', '每12小时1次', '必要时', '睡前'])
+const timingOptions = ['--', '餐前', '餐后', '餐中', '空腹', '睡前']
 
 // 提交状态
 const submitting = ref(false)
@@ -491,11 +608,16 @@ const totalAmount = computed(() => {
   const drugTotal = prescriptionItems.value.reduce((sum, item) => {
     return sum + Math.round(item.price * item.quantity * 100) / 100
   }, 0)
-  return Math.round((drugTotal + visitForm.value.consultation_fee) * 100) / 100
+  const ivTotal = compatGroups.value.reduce((sum, g) =>
+    sum + g.items.reduce((gs, iv) => gs + Math.round(iv.price * iv.quantity * 100) / 100, 0), 0)
+  return Math.round((drugTotal + ivTotal + visitForm.value.consultation_fee) * 100) / 100
 })
 
 const drugTotalAmount = computed(() => {
-  return prescriptionItems.value.reduce((sum, item) => sum + Math.round(item.price * item.quantity * 100) / 100, 0)
+  const drugTotal = prescriptionItems.value.reduce((sum, item) => sum + Math.round(item.price * item.quantity * 100) / 100, 0)
+  const ivTotal = compatGroups.value.reduce((sum, g) =>
+    sum + g.items.reduce((gs, iv) => gs + Math.round(iv.price * iv.quantity * 100) / 100, 0), 0)
+  return Math.round((drugTotal + ivTotal) * 100) / 100
 })
 
 const loadRejectedVisitAsDraft = async () => {
@@ -514,11 +636,13 @@ const loadRejectedVisitAsDraft = async () => {
     visitForm.value.consultation_fee = Number(detail.consultation_fee || 8)
 
     const draftItems = Array.isArray(detail.items) ? detail.items : []
-    prescriptionItems.value = draftItems.map((item, idx) => {
+    const normalItems = []
+    const ivItems = {}
+    draftItems.forEach((item, idx) => {
       const quantity = Number(item.quantity || 1)
       const totalAmount = Number(item.amount || 0)
       const unitPrice = Number(item.price_at_visit || (quantity > 0 ? totalAmount / quantity : 0))
-      return {
+      const row = {
         id: item.drug_id,
         option_id: `draft-${idx}-${item.drug_id}-${item.is_scattered ? 1 : 0}`,
         name: item.drug_name,
@@ -532,9 +656,28 @@ const loadRejectedVisitAsDraft = async () => {
         dosage: item.dosage || '',
         frequency: item.frequency || '',
         timing: item.timing || '',
-        days: Number(item.days || 1) > 0 ? Number(item.days || 1) : 1
+        days: Number(item.days || 1) > 0 ? Number(item.days || 1) : 1,
+        is_intravenous: !!item.is_intravenous,
+        infusion_group: item.infusion_group || null,
+        infusion_dosage_value: item.infusion_dosage_value ?? null,
+        infusion_dosage_unit: item.infusion_dosage_unit || '',
+        infusion_method: item.infusion_method || ''
+      }
+      if (item.is_intravenous) {
+        const gid = item.infusion_group || 0
+        if (!ivItems[gid]) ivItems[gid] = []
+        ivItems[gid].push(row)
+      } else {
+        normalItems.push(row)
       }
     })
+    prescriptionItems.value = normalItems
+    if (Object.keys(ivItems).length > 0) {
+      intravenousMode.value = true
+      Object.keys(ivItems).forEach(gid => {
+        compatGroups.value.push({ id: Number(gid) || (nextCompatId++), items: ivItems[gid] })
+      })
+    }
 
     ElMessage.success('已载入被驳回处方，可重新修改后提交')
   } catch (error) {
@@ -701,6 +844,63 @@ const removeDrug = (index) => {
   prescriptionItems.value.splice(index, 1)
 }
 
+// 静脉给药：搜索药品
+const searchIvDrugs = async (query) => {
+  ivDrugSearchLoading.value = true
+  try {
+    const res = await request.get('/doctor/drugs/search', {
+      params: { keyword: query }
+    })
+    const options = []
+    ;(res.data || []).forEach(d => {
+      if (d.variant_type === 'retail') {
+        options.push({ ...d, option_id: `${d.id}:variant`, option_label: '零散', display_price: d.price, is_scattered: false, maxStock: d.stock })
+        return
+      }
+      if (d.variant_type === 'pack') {
+        options.push({ ...d, option_id: `${d.id}:variant`, option_label: '整装', display_price: d.price, is_scattered: false, maxStock: d.stock })
+        return
+      }
+      if (d.variant_type === 'service' || d.variant_type === 'consumable') return
+      options.push({ ...d, option_id: `${d.id}:whole`, option_label: '整装', display_price: d.price, is_scattered: false, maxStock: d.stock })
+      if (d.has_scattered && d.scattered_price != null) {
+        const conv = d.conversion_rate || 1
+        options.push({ ...d, option_id: `${d.id}:scattered`, option_label: '零散', display_price: d.scattered_price, is_scattered: true, maxStock: (d.stock || 0) * conv })
+      }
+    })
+    ivDrugOptions.value = options
+  } catch (error) {
+    console.error(error)
+  } finally {
+    ivDrugSearchLoading.value = false
+  }
+}
+
+// 静脉给药：添加药品到指定配伍
+const handleIvDrugSelect = (groupIdx, val) => {
+  const drug = ivDrugOptions.value.find(item => item.option_id === val)
+  if (!drug) return
+  const group = compatGroups.value[groupIdx]
+  if (group.items.find(item => item.option_id === drug.option_id)) {
+    ElMessage.warning('该配伍中已存在此药品')
+    return
+  }
+  group.items.push({
+    id: drug.id,
+    option_id: drug.option_id,
+    name: drug.name,
+    type: drug.type,
+    specification: drug.specification,
+    price: Math.round(drug.display_price * 100) / 100,
+    maxStock: drug.maxStock,
+    is_scattered: drug.is_scattered,
+    quantity: 1,
+    infusion_dosage_value: null,
+    infusion_dosage_unit: 'ml',
+    infusion_method: '静脉滴注'
+  })
+}
+
 // 监听处方项目变化，自动计算零散药物数量
 watch(
   prescriptionItems,
@@ -761,7 +961,9 @@ const validatePrescription = () => {
     ElMessage.warning('请填写诊断信息')
     return false
   }
-  if (!Array.isArray(prescriptionItems.value) || prescriptionItems.value.length === 0) {
+  const hasNormal = Array.isArray(prescriptionItems.value) && prescriptionItems.value.length > 0
+  const hasIv = intravenousMode.value && compatGroups.value.some(g => g.items.length > 0)
+  if (!hasNormal && !hasIv) {
     ElMessage.warning('请至少添加一条处方明细')
     return false
   }
@@ -773,22 +975,34 @@ const validatePrescription = () => {
       return false
     }
     if (item.type === 1) {
-      const required = [
-        { key: 'usage', label: '用法' },
-        { key: 'dosage', label: '用量' },
-        { key: 'frequency', label: '频次' },
-        { key: 'timing', label: '时间' }
-      ]
-      for (const r of required) {
-        if (!String(item[r.key] || '').trim()) {
-          ElMessage.warning(`第${i + 1}行请填写${r.label}`)
+      // usage/dosage/frequency/timing可为空（--选项），但不能全部为空时判定为未填写
+      // 允许个别为空，不做强制校验
+    }
+  }
+  // 校验静脉给药配伍
+  if (intravenousMode.value) {
+    for (let gi = 0; gi < compatGroups.value.length; gi++) {
+      const group = compatGroups.value[gi]
+      if (!group.items.length) continue
+      for (let ii = 0; ii < group.items.length; ii++) {
+        const iv = group.items[ii]
+        const qty = Number(iv.quantity)
+        if (!Number.isFinite(qty) || qty <= 0) {
+          ElMessage.warning(`配伍${gi + 1} 第${ii + 1}行数量不合法`)
           return false
         }
-      }
-      const days = Number(item.days)
-      if (!Number.isFinite(days) || days <= 0) {
-        ElMessage.warning(`第${i + 1}行天数不合法`)
-        return false
+        if (iv.infusion_dosage_value == null || isNaN(Number(iv.infusion_dosage_value)) || Number(iv.infusion_dosage_value) <= 0) {
+          ElMessage.warning(`配伍${gi + 1} 第${ii + 1}行请填写用量数值`)
+          return false
+        }
+        if (!String(iv.infusion_dosage_unit || '').trim()) {
+          ElMessage.warning(`配伍${gi + 1} 第${ii + 1}行请选择单位`)
+          return false
+        }
+        if (!String(iv.infusion_method || '').trim()) {
+          ElMessage.warning(`配伍${gi + 1} 第${ii + 1}行请选择给药方式`)
+          return false
+        }
       }
     }
   }
@@ -805,19 +1019,45 @@ const confirmSubmit = async () => {
   if (!validatePrescription()) return
   submitting.value = true
   try {
+    // 普通药品提交时，'--'转为空字符串
+    const blankVal = (v) => (v === '--' ? '' : v)
+    const normalItems = prescriptionItems.value.map(item => ({
+      drug_id: item.id,
+      quantity: item.quantity,
+      usage: blankVal(item.usage),
+      dosage: blankVal(item.dosage),
+      frequency: blankVal(item.frequency),
+      timing: blankVal(item.timing),
+      days: item.days,
+      is_scattered: item.is_scattered || false,
+      is_intravenous: false
+    }))
+    const ivItemsPayload = []
+    if (intravenousMode.value) {
+      compatGroups.value.forEach(group => {
+        group.items.forEach(item => {
+          ivItemsPayload.push({
+            drug_id: item.id,
+            quantity: item.quantity,
+            usage: '',
+            dosage: '',
+            frequency: '',
+            timing: '',
+            days: 1,
+            is_scattered: item.is_scattered || false,
+            is_intravenous: true,
+            infusion_group: group.id,
+            infusion_dosage_value: item.infusion_dosage_value,
+            infusion_dosage_unit: item.infusion_dosage_unit,
+            infusion_method: item.infusion_method
+          })
+        })
+      })
+    }
     const payload = {
       patient_id: patientId,
       ...visitForm.value,
-      items: prescriptionItems.value.map(item => ({
-        drug_id: item.id,
-        quantity: item.quantity,
-        usage: item.usage,
-        dosage: item.dosage,
-        frequency: item.frequency,
-        timing: item.timing,
-        days: item.days,
-        is_scattered: item.is_scattered || false
-      }))
+      items: [...normalItems, ...ivItemsPayload]
     }
     
     await request.post('/doctor/visits', payload)

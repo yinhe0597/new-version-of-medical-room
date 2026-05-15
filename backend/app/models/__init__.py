@@ -171,6 +171,13 @@ class PrescriptionItem(db.Model):
     is_scattered = db.Column(db.Boolean, default=False)
     purchase_cost = db.Column(db.Float, default=0.0)
 
+    # 静脉给药配伍支持
+    is_intravenous = db.Column(db.Boolean, default=False)
+    infusion_group = db.Column(db.Integer, nullable=True)
+    infusion_dosage_value = db.Column(db.Float, nullable=True)
+    infusion_dosage_unit = db.Column(db.String(10), nullable=True)
+    infusion_method = db.Column(db.String(50), nullable=True)
+
     drug = db.relationship('Drug')
     modifier = db.relationship('User', foreign_keys=[modified_by])
 
