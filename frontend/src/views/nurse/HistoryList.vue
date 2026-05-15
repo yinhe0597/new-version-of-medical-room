@@ -38,7 +38,7 @@
           </el-tag>
         </template>
       </el-table-column>
-      <el-table-column label="操作" width="140">
+      <el-table-column label="操作" width="180">
         <template #default="scope">
           <el-button
             v-if="scope.row.status === 'completed'"
@@ -56,11 +56,20 @@
           >
             查看详情
           </el-button>
+          <el-button
+            v-if="scope.row.status === 'completed' && scope.row.payment_id"
+            type="success"
+            link
+            @click="openReceipt(scope.row)"
+          >
+            打印小票
+          </el-button>
         </template>
       </el-table-column>
       <template #empty>暂无历史记录</template>
     </el-table>
 
+    <!-- 编辑处置对话框 -->
     <el-dialog v-model="showDetail" title="编辑处置情况" width="580px">
       <div v-if="currentRow" class="detail-info">
         <el-descriptions :column="2" border>
@@ -100,6 +109,49 @@
         <el-button @click="showDetail = false">关闭</el-button>
       </template>
     </el-dialog>
+
+    <!-- 收费票据对话框 -->
+    <el-dialog v-model="showReceipt" title="收费票据" width="400px" center>
+      <div v-loading="receiptLoading" class="receipt-preview" id="receipt-print-area">
+        <h3 style="text-align: center">校医务室收费凭证</h3>
+        <p>时间: {{ receiptRow?.paid_at }}</p>
+        <p>单号: {{ receiptRow?.payment_id }}</p>
+        <hr/>
+        <p>姓名: {{ receiptVisit?.patient?.name }} ({{ receiptVisit?.patient?.student_id }})</p>
+        <p>诊断: {{ receiptVisit?.diagnosis || '无' }}</p>
+
+        <div class="prescription-print-info">
+          <p><strong>处方明细：</strong></p>
+          <div v-for="item in receiptVisit?.items" :key="item.item_id" class="item-line">
+            - {{ item.drug_name }} ({{ item.specification }}) x{{ item.quantity }}
+            <br v-if="item.type === 1" />
+            <span v-if="item.type === 1">&nbsp;&nbsp;用法: {{ formatUsageLine(item) }}</span>
+          </div>
+        </div>
+
+        <div v-if="receiptVisit?.doctor_advice" class="advice-print-info" style="margin-top: 10px; padding: 5px; border: 1px solid #eee;">
+          <p><strong>医生小贴士：</strong></p>
+          <p>{{ receiptVisit.doctor_advice }}</p>
+        </div>
+
+        <div v-if="receiptVisit?.special_note" style="margin-top: 10px; padding: 5px; border: 1px solid #e6a23c; background: #fdf6ec;">
+          <p><strong>特殊配药备注：</strong></p>
+          <p>{{ receiptVisit.special_note }}</p>
+        </div>
+
+        <hr/>
+        <p v-if="receiptRow?.payment_original_amount">应收: ¥ {{ receiptRow?.payment_original_amount.toFixed(2) }}</p>
+        <p v-if="receiptRow?.payment_original_amount">优惠类型: 职工优惠</p>
+        <p>{{ receiptRow?.payment_original_amount ? '实收' : '金额' }}: ¥ {{ (receiptRow?.payment_amount || 0).toFixed(2) }}</p>
+        <p>支付方式: {{ getPaymentMethodText(receiptRow?.payment_method) }}</p>
+        <hr/>
+        <p style="text-align: center">盖章有效</p>
+      </div>
+      <template #footer>
+        <el-button @click="showReceipt = false">关闭</el-button>
+        <el-button type="primary" @click="printReceipt">打印</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -115,6 +167,12 @@ const searchName = ref('')
 const filterStatus = ref('')
 const showDetail = ref(false)
 const currentRow = ref(null)
+
+// 票据相关
+const showReceipt = ref(false)
+const receiptLoading = ref(false)
+const receiptRow = ref(null)
+const receiptVisit = ref(null)
 
 const filteredList = computed(() => {
   let list = historyList.value
@@ -167,6 +225,57 @@ const openDetail = (row) => {
   showDetail.value = true
 }
 
+const openReceipt = async (row) => {
+  receiptRow.value = row
+  receiptLoading.value = true
+  showReceipt.value = true
+  try {
+    const res = await request.get(`/nurse/visits/${row.visit_id}`)
+    receiptVisit.value = res.data
+  } catch (error) {
+    ElMessage.error(error.msg || '获取处方详情失败')
+    showReceipt.value = false
+  } finally {
+    receiptLoading.value = false
+  }
+}
+
+const printReceipt = async () => {
+  const pid = receiptRow.value?.payment_id
+  if (pid) {
+    try {
+      await request.put(`/nurse/payments/${pid}/print`)
+    } catch (error) {
+      console.error(error)
+    }
+  }
+  window.print()
+  showReceipt.value = false
+}
+
+const getPaymentMethodText = (val) => {
+  const map = { 'cash': '现金', 'card': '一卡通', 'other': '其他' }
+  return map[val] || val
+}
+
+const safeText = (val) => {
+  const s = String(val == null ? '' : val).trim()
+  if (!s) return '-'
+  if (s.includes('?')) return '-'
+  return s
+}
+
+const formatUsageLine = (row) => {
+  if (!row) return '-'
+  if (row.is_intravenous) {
+    const parts = [`配伍${row.infusion_group || '?'}`]
+    if (row.infusion_dosage_value) parts.push(`${row.infusion_dosage_value}${row.infusion_dosage_unit || ''}`)
+    if (row.infusion_method) parts.push(row.infusion_method)
+    return parts.join(' / ')
+  }
+  return `${safeText(row.usage)} / ${safeText(row.dosage)} / ${safeText(row.frequency)} / ${safeText(row.timing)}`
+}
+
 const handleRevoke = () => {
   const visitId = currentRow.value.visit_id
   ElMessageBox.prompt(
@@ -212,5 +321,17 @@ onMounted(() => {
 }
 .revoke-info {
   margin-top: 16px;
+}
+.receipt-preview {
+  line-height: 1.6;
+}
+.receipt-preview p {
+  margin: 4px 0;
+}
+.receipt-preview .item-line {
+  margin: 2px 0 2px 10px;
+}
+.advice-print-info {
+  font-size: 13px;
 }
 </style>
