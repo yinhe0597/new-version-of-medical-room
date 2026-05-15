@@ -21,8 +21,8 @@ lerna-debug.log*
 
 # Build files
 build/
+build_temp/
 dist/
-build/
 *.local
 backend-java/target/
 
