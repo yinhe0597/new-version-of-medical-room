@@ -33,15 +33,52 @@
       </div>
     </el-card>
 
+    <!-- 我的挂单 -->
+    <el-card v-if="myParkedList.length > 0" class="parked-card">
+      <template #header>
+        <div class="card-header">
+          <span>我的挂单 <el-tag type="warning" size="small" effect="plain">{{ myParkedList.length }}</el-tag></span>
+          <el-button size="small" link @click="loadMyParkedList" :loading="parkedLoading">刷新</el-button>
+        </div>
+      </template>
+      <el-table :data="myParkedList" v-loading="parkedLoading" stripe size="small">
+        <el-table-column prop="patient_name" label="患者" width="100" />
+        <el-table-column prop="student_id" label="学号" width="110">
+          <template #default="scope">{{ scope.row.student_id || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="chief_complaint" label="主诉" min-width="160" show-overflow-tooltip>
+          <template #default="scope">{{ scope.row.chief_complaint || '(暂无)' }}</template>
+        </el-table-column>
+        <el-table-column prop="diagnosis" label="诊断" min-width="120" show-overflow-tooltip>
+          <template #default="scope">{{ scope.row.diagnosis || '-' }}</template>
+        </el-table-column>
+        <el-table-column prop="item_count" label="项目" width="60" align="center">
+          <template #default="scope">{{ scope.row.item_count || 0 }}</template>
+        </el-table-column>
+        <el-table-column prop="updated_at" label="更新时间" width="150" />
+        <el-table-column prop="expires_at" label="过期时间" width="150" />
+        <el-table-column label="操作" width="160" fixed="right">
+          <template #default="scope">
+            <el-button size="small" type="primary" link @click="continueParkedRow(scope.row)">继续接诊</el-button>
+            <el-button size="small" type="danger" link @click="deleteParkedRow(scope.row)">删除</el-button>
+          </template>
+        </el-table-column>
+      </el-table>
+    </el-card>
+
     <!-- 患者信息展示 -->
     <el-card v-if="patient" class="info-card">
       <template #header>
         <div class="card-header">
-          <span>患者信息</span>
+          <span>
+            患者信息
+            <el-tag v-if="parkedVisit" type="warning" size="small" style="margin-left:8px;">该患者有挂单</el-tag>
+          </span>
           <div>
             <el-button @click="toggleHistory">
               {{ showHistory ? '收起历史' : '查看就诊历史' }}
             </el-button>
+            <el-button v-if="parkedVisit" type="warning" @click="continueParkedVisit">继续挂单接诊</el-button>
             <el-button type="primary" @click="handleStartVisit">开始接诊</el-button>
           </div>
         </div>
@@ -243,7 +280,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch } from 'vue'
+import { ref, computed, watch, onMounted, onActivated } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import request from '@/api/request'
@@ -274,6 +311,81 @@ const caseDetail = ref(null)
 const showEditHistory = ref(false)
 const editHistory = ref([])
 const editHistoryLoading = ref(false)
+
+// 挂单相关
+const myParkedList = ref([])
+const parkedLoading = ref(false)
+const parkedVisit = ref(null) // 当前选中患者的挂单（若有）
+
+const loadMyParkedList = async () => {
+  parkedLoading.value = true
+  try {
+    const res = await request.get('/doctor/parked-visits')
+    myParkedList.value = Array.isArray(res.data) ? res.data : []
+  } catch (e) {
+    myParkedList.value = []
+  } finally {
+    parkedLoading.value = false
+  }
+}
+
+const checkPatientParked = async (patientId) => {
+  if (!patientId) {
+    parkedVisit.value = null
+    return
+  }
+  try {
+    const res = await request.get(`/doctor/patient/${patientId}/parked-visit`)
+    parkedVisit.value = res.data || null
+  } catch (e) {
+    parkedVisit.value = null
+  }
+}
+
+const continueParkedVisit = () => {
+  if (!parkedVisit.value || !patient.value) return
+  router.push({
+    path: '/doctor/visit',
+    query: {
+      patient_id: patient.value.id,
+      patient_name: patient.value.name,
+      parked_id: parkedVisit.value.id
+    }
+  })
+}
+
+const continueParkedRow = (row) => {
+  router.push({
+    path: '/doctor/visit',
+    query: {
+      patient_id: row.patient_id,
+      patient_name: row.patient_name,
+      parked_id: row.id
+    }
+  })
+}
+
+const deleteParkedRow = async (row) => {
+  try {
+    await ElMessageBox.confirm(`确定删除「${row.patient_name}」的挂单？删除后无法恢复。`, '删除挂单', {
+      type: 'warning',
+      confirmButtonText: '确定删除',
+      cancelButtonText: '取消'
+    })
+  } catch {
+    return
+  }
+  try {
+    await request.delete(`/doctor/parked-visits/${row.id}`)
+    ElMessage.success('已删除挂单')
+    if (patient.value && parkedVisit.value && parkedVisit.value.id === row.id) {
+      parkedVisit.value = null
+    }
+    loadMyParkedList()
+  } catch (e) {
+    ElMessage.error(e?.msg || '删除失败')
+  }
+}
 
 const timelineType = (status) => {
   const map = { pending: '', nurse_verified: 'primary', completed: 'success', rejected: 'danger', revoked: 'info' }
@@ -347,6 +459,16 @@ let currentVisitId = null
 watch(showEditHistory, (val) => {
   if (val && editHistory.value.length === 0) {
     fetchEditHistory()
+  }
+})
+
+onMounted(() => {
+  loadMyParkedList()
+})
+onActivated(() => {
+  loadMyParkedList()
+  if (patient.value && patient.value.id) {
+    checkPatientParked(patient.value.id)
   }
 })
 
@@ -497,6 +619,10 @@ const handleSelect = (item) => {
   searchKeyword.value = item.student_id || item.name || ''
   showHistory.value = false
   visitHistory.value = []
+  parkedVisit.value = null
+  if (item && item.id) {
+    checkPatientParked(item.id)
+  }
 }
 
 const handleEnter = () => {
@@ -640,6 +766,12 @@ const openCreateForm = (keyword) => {
   margin: 0 auto;
 }
 .search-card {
+  margin-bottom: 20px;
+}
+.parked-card {
+  margin-bottom: 20px;
+}
+.info-card {
   margin-bottom: 20px;
 }
 .search-box {

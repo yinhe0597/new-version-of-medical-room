@@ -311,6 +311,7 @@
               </el-form>
               <div class="buttons">
                 <el-button @click="resetForm">重置</el-button>
+                <el-button type="warning" @click="parkVisit" :loading="parking">{{ parkedId ? '更新挂单' : '挂单' }}</el-button>
                 <el-button type="primary" @click="openSubmitConfirm" :loading="submitting">提交处方</el-button>
               </div>
             </div>
@@ -438,6 +439,8 @@ const patientId = route.query.patient_id
 const patientName = route.query.patient_name
 const studentId = route.query.student_id
 const sourceVisitId = route.query.source_visit_id
+const parkedId = ref(route.query.parked_id ? Number(route.query.parked_id) : null)
+const parking = ref(false)
 
 const diagnosisSearch = ref('')
 
@@ -512,7 +515,7 @@ const removeIvItemFromGroup = (groupIdx, itemIdx) => {
 }
 
 // 预设选项数据
-const usageOptions = ref(['--', '口服', '外用', '静脉注射', '静脉滴注', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
+const usageOptions = ref(['--', '口服', '嚼服', '冲泡', '冲服', '舌下含服', '外用', '静脉注射', '静脉滴注', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
 const infusionMethodOptions = ref(['静脉滴注', '静脉推注', '静脉输液泵', '微量泵'])
 const infusionUnitOptions = ref(['ml', 'g', 'mg', 'μg', 'U', 'IU'])
 const buildDosageOptions = () => {
@@ -693,8 +696,70 @@ onMounted(async () => {
   }
   // Load default drugs
   await searchDrugs('')
+  // 优先加载挂单草稿，其次才是驳回草稿
+  if (parkedId.value) {
+    const loaded = await loadParkedDraft(parkedId.value)
+    if (loaded) return
+  }
   await loadRejectedVisitAsDraft()
 })
+
+const loadParkedDraft = async (id) => {
+  try {
+    const res = await request.get(`/doctor/parked-visits/${id}`)
+    const d = res.data || {}
+    visitForm.value = {
+      chief_complaint: d.chief_complaint || '',
+      present_illness: d.present_illness || '',
+      past_history: d.past_history || '无',
+      physical_exam: d.physical_exam || '',
+      diagnosis: d.diagnosis || '',
+      doctor_advice: d.doctor_advice || '',
+      special_note: d.special_note || '',
+      consultation_fee: d.consultation_fee || 0
+    }
+    quickMode.value = !!d.quick_mode
+    prescriptionItems.value = Array.isArray(d.items) ? d.items : []
+    ElMessage.success('已恢复挂单草稿')
+    return true
+  } catch (error) {
+    if (error && error.status === 410) {
+      ElMessage.warning('该挂单已过期，已自动清理')
+    } else {
+      ElMessage.error((error && error.msg) || '加载挂单失败')
+    }
+    parkedId.value = null
+    return false
+  }
+}
+
+const parkVisit = async () => {
+  if (intravenousMode.value && compatGroups.value.some(g => g.items.length > 0)) {
+    ElMessage.warning('静脉配伍不支持挂单，请先关闭静脉给药或清空配伍')
+    return
+  }
+  if (!patientId) {
+    ElMessage.error('缺少患者信息')
+    return
+  }
+  parking.value = true
+  try {
+    const payload = {
+      patient_id: patientId,
+      ...visitForm.value,
+      quick_mode: quickMode.value,
+      items: prescriptionItems.value
+    }
+    const res = await request.post('/doctor/parked-visits', payload)
+    parkedId.value = res.data && res.data.parked_id
+    ElMessage.success('已挂单，可随后继续接诊')
+    router.push('/doctor/patient')
+  } catch (error) {
+    ElMessage.error((error && error.msg) || '挂单失败')
+  } finally {
+    parking.value = false
+  }
+}
 
 const goBack = () => {
   router.push('/doctor/patient')
@@ -1062,6 +1127,9 @@ const confirmSubmit = async () => {
       patient_id: patientId,
       ...visitForm.value,
       items: [...normalItems, ...ivItemsPayload]
+    }
+    if (parkedId.value) {
+      payload.parked_id = parkedId.value
     }
     
     await request.post('/doctor/visits', payload)

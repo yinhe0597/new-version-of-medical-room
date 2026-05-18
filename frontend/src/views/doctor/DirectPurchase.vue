@@ -375,7 +375,7 @@ const prescriptionItems = ref([])
 const checkContraindications = ref(false)
 const consultationFee = ref(0.00) // 单独购药默认诊察费为0
 
-const usageOptions = ref(['--', '口服', '外用', '静脉注射', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
+const usageOptions = ref(['--', '口服', '嚼服', '冲泡', '冲服', '舌下含服', '外用', '静脉注射', '肌肉注射', '皮下注射', '雾化吸入', '含服', '外敷', '滴眼', '滴耳', '滴鼻'])
 const buildDosageOptions = () => {
   const out = []
   const push = (v) => {
