@@ -75,6 +75,14 @@
           </el-card>
         </el-col>
         <el-col :span="4">
+          <el-card shadow="hover" class="bg-cyan">
+            <div class="stat-item">
+              <div class="label">耗材收入</div>
+              <div class="value">¥ {{ (stats.consumable_revenue || 0).toFixed(2) }}</div>
+            </div>
+          </el-card>
+        </el-col>
+        <el-col :span="4">
           <el-card shadow="hover" class="bg-orange">
             <div class="stat-item">
               <div class="label">诊察费收入</div>
@@ -115,6 +123,9 @@
         <el-table-column prop="service_amount" label="诊疗项目" width="110">
           <template #default="scope">¥ {{ (scope.row.service_amount || 0).toFixed(2) }}</template>
         </el-table-column>
+        <el-table-column prop="consumable_amount" label="耗材" width="100">
+          <template #default="scope">¥ {{ (scope.row.consumable_amount || 0).toFixed(2) }}</template>
+        </el-table-column>
         <el-table-column prop="consultation_fee" label="诊察费" width="100">
           <template #default="scope">¥ {{ (scope.row.consultation_fee || 0).toFixed(2) }}</template>
         </el-table-column>
@@ -153,6 +164,7 @@ const stats = ref({
   drug_revenue: 0,
   service_revenue: 0,
   consultation_revenue: 0,
+  consumable_revenue: 0,
   total_cost: 0,
   total_profit: 0,
   details: []
@@ -281,6 +293,10 @@ onMounted(() => {
 .bg-teal {
   background-color: #e8f7f4;
   color: #0f766e;
+}
+.bg-cyan {
+  background-color: #e0f7fa;
+  color: #00838f;
 }
 .bg-gray {
   background-color: #f5f7fa;

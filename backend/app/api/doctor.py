@@ -417,7 +417,7 @@ def search_drugs():
     drugs = query.limit(20).all()
     data = []
     for drug in drugs:
-        if (drug.type == 1 or drug.type is None) and (drug.stock or 0) <= 0:
+        if (drug.type in (1, 3) or drug.type is None) and (drug.stock or 0) <= 0:
             if drug.variant_type in ["retail", "pack"] or drug.has_scattered:
                 continue
         data.append({
@@ -576,7 +576,7 @@ def create_visit():
             if not (item.get('infusion_method') or "").strip():
                 return jsonify({"msg": "静脉给药需选择给药方式", "field": "infusion_method", "item_index": idx}), 400
 
-        if (drug.type == 1 or drug.type is None) and drug.stock_group_code:
+        if (drug.type in (1, 3) or drug.type is None) and drug.stock_group_code:
             group = DrugStockGroup.query.filter_by(group_code=drug.stock_group_code).first()
             if group is None:
                 return jsonify({"msg": "Stock group not found"}), 400

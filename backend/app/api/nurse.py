@@ -204,7 +204,7 @@ def inbound_stock():
 
     user_id = get_jwt_identity()
 
-    if item_type != 1:
+    if item_type == 2:
         specification = (data.get("specification") or "").strip()
         unit = (data.get("unit") or "").strip() or "次"
         try:
@@ -842,6 +842,8 @@ def _compute_monthly_report(start_date_str, end_date_str):
         result.append({
             "drug_id": drug.id,
             "drug_name": drug.name,
+            "type": drug.type,
+            "variant_type": drug.variant_type,
             "specification": drug.specification,
             "purchase_price": purchase_price,
             "unit": drug.unit,
@@ -906,13 +908,14 @@ def export_monthly_report():
     ws = wb.active
     ws.title = "月度盘点报表"
 
-    headers = ["序号", "药品名称", "规格", "购进价", "单位", "上月盘点数（期初）", "入库数", "出库数", "盘点调整", "现存数（期末）", "本月进药金额"]
+    headers = ["序号", "名称", "类型", "规格", "购进价", "单位", "上月盘点数（期初）", "入库数", "出库数", "盘点调整", "现存数（期末）", "本月进药金额"]
     ws.append(headers)
 
     for idx, item in enumerate(data, 1):
         ws.append([
             idx,
             item["drug_name"],
+            "耗材" if item.get("type") == 3 else "药品",
             item["specification"],
             item["purchase_price"],
             item["unit"],

@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.6-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.7-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -190,6 +190,26 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.7（2026-05-16）💉📊🔧🛡️
+
+**耗材库存全链路修复：**
+- 🐛 **护士入库耗材修复（严重）**：修复 `inbound_stock` 函数中 `if item_type != 1` 条件错误捕获 type=3 耗材并创建为 type=2 诊疗项目的严重 Bug，原 `if item_type == 3` 代码块为死代码从未执行
+- 🔧 **类型变更联动**：管理员修改药品类型时自动同步 `variant_type` 和散装字段（type=3 → consumable，type=2 → service）
+- 📊 **月度报表区分耗材**：报表 API、前端表格、Excel 导出均新增“类型”列，区分药品/耗材
+- 💉 **医生端耗材校验**：药品搜索零库存过滤、库存组校验条件补充 type=3 耗材
+- 💰 **营收统计耗材展示**：新增“耗材收入”汇总卡片和明细表格列
+
+**系统稳定性增强：**
+- 🛡️ **解决系统自动退出问题**：禁用 Windows Console QuickEdit 模式（点击控制台不再冻结进程）
+- 🚀 **生产级服务器**：使用 waitress 多线程 WSGI 服务器替代 Flask 开发服务器
+- 🔄 **崩溃自动重启**：服务器异常退出后自动重启（最多 5 次）
+- 🌐 **前端断线检测**：网络中断时显示提示，每 5 秒心跳检测，服务恢复后自动通知
+- 📝 **日志轮转**：单文件 5MB，保留 5 个备份，防止日志无限增长
+
+> 📝 详细变更：[开发日志-open0.0.7.md](docs/开发日志-open0.0.7.md)
+
+---
 
 ### 🏷️ open0.0.6（2026-05-15）💉🔧🖨️
 
