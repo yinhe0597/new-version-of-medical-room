@@ -3,6 +3,7 @@ Flask-SQLAlchemy
 Flask-Migrate
 python-dotenv
 Flask-JWT-Extended
+Flask-CORS
 pymysql
 cryptography
 pandas
@@ -11,3 +12,4 @@ pypinyin
 numpy
 openpyxl
 requests
+waitress

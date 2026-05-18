@@ -140,7 +140,13 @@
           <el-table :data="monthlyData" stripe style="width: 100%" v-loading="monthlyLoading" 
                     show-summary :summary-method="getMonthlySummaries">
             <el-table-column type="index" label="序号" width="60" />
-            <el-table-column prop="drug_name" label="药品名称" min-width="150" />
+            <el-table-column prop="drug_name" label="名称" min-width="150" />
+            <el-table-column label="类型" width="80">
+              <template #default="scope">
+                <el-tag v-if="scope.row.type === 3" type="info" size="small">耗材</el-tag>
+                <el-tag v-else size="small">药品</el-tag>
+              </template>
+            </el-table-column>
             <el-table-column prop="specification" label="规格" width="120" />
             <el-table-column prop="purchase_price" label="购进价" width="90" />
             <el-table-column prop="unit" label="单位" width="80" />

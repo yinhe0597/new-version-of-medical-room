@@ -578,7 +578,21 @@ def update_drug(id):
             return jsonify({"msg": "Grouped stock item cannot change specification/unit"}), 400
 
     if 'name' in data: drug.name = data['name']
-    if 'type' in data: drug.type = data['type']
+    if 'type' in data:
+        drug.type = data['type']
+        # 类型变更时同步更新variant_type和相关字段
+        if data['type'] == 3:
+            drug.variant_type = 'consumable'
+            drug.has_scattered = False
+            drug.scattered_price = None
+            drug.conversion_rate = None
+        elif data['type'] == 2:
+            drug.variant_type = 'service'
+            drug.has_scattered = False
+            drug.scattered_price = None
+            drug.conversion_rate = None
+        elif data['type'] == 1 and drug.variant_type in ('service', 'consumable'):
+            drug.variant_type = None
     if 'specification' in data: drug.specification = data['specification']
     if 'unit' in data: drug.unit = data['unit']
     if 'purchase_price' in data: drug.purchase_price = float(data['purchase_price'])

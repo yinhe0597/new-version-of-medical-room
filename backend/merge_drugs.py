@@ -53,8 +53,8 @@ def merge_duplicate_drugs():
             print(f"\nProcessing '{name}' [{spec}]: Keep ID {primary_drug.id}, Merge {len(duplicate_drugs)} duplicates")
             
             for dup_drug in duplicate_drugs:
-                # 1. Add stock to the primary drug (if it's a physical drug, type=1)
-                if primary_drug.type == 1 and dup_drug.stock > 0:
+                # 1. Add stock to the primary drug (if it's a physical drug, type=1 or type=3)
+                if primary_drug.type in (1, 3) and dup_drug.stock > 0:
                     primary_drug.stock += dup_drug.stock
                 
                 # 2. Update any PrescriptionItem that references the duplicate drug
