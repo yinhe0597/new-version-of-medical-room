@@ -7,6 +7,7 @@ VISIT_STATUS_NURSE_VERIFIED = "nurse_verified"
 VISIT_STATUS_COMPLETED = "completed"
 VISIT_STATUS_REJECTED = "rejected"
 VISIT_STATUS_REVOKED = "revoked"
+VISIT_STATUS_PAUSED = "paused"  # 仅前端 UI 使用，不进入 Visit 状态机
 
 VISIT_ALLOWED_STATUS_TRANSITIONS = {
     VISIT_STATUS_PENDING: {VISIT_STATUS_NURSE_VERIFIED, VISIT_STATUS_REJECTED},
@@ -242,6 +243,41 @@ class DailyStockSnapshot(db.Model):
 
     drug = db.relationship('Drug')
     __table_args__ = (db.UniqueConstraint('drug_id', 'date'),)
+
+class ParkedVisit(db.Model):
+    """医生挂单草稿表：保存未提交的就诊与处方草稿，支持高峰期暂停与恢复。"""
+    __tablename__ = 'parked_visit'
+    __table_args__ = (
+        db.UniqueConstraint('patient_id', 'doctor_id', name='uq_parked_visit_patient_doctor'),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    patient_id = db.Column(db.Integer, db.ForeignKey('patient.id'), nullable=False, index=True)
+    doctor_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+
+    chief_complaint = db.Column(db.Text)
+    present_illness = db.Column(db.Text)
+    past_history = db.Column(db.Text)
+    physical_exam = db.Column(db.Text)
+    diagnosis = db.Column(db.Text)
+    doctor_advice = db.Column(db.Text)
+    special_note = db.Column(db.Text)
+    consultation_fee = db.Column(db.Float, default=0.0)
+
+    # 处方明细草稿，前端 prescriptionItems 数组的 JSON 序列化
+    items_json = db.Column(db.Text)
+    quick_mode = db.Column(db.Boolean, default=False)
+
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+
+    patient = db.relationship('Patient')
+    doctor = db.relationship('User')
+
+    def __repr__(self):
+        return f'<ParkedVisit {self.id} patient={self.patient_id} doctor={self.doctor_id}>'
+
 
 class OperationLog(db.Model):
     id = db.Column(db.Integer, primary_key=True)

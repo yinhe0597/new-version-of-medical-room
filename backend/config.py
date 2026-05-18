@@ -41,3 +41,15 @@ class Config:
         if isinstance(SQLALCHEMY_DATABASE_URI, str) and SQLALCHEMY_DATABASE_URI.startswith("mysql")
         else {"pool_pre_ping": True}
     )
+
+    # 挂单（草稿就诊）过期时长，默认 12 小时
+    try:
+        PARKED_VISIT_TTL_HOURS = int(os.environ.get("PARKED_VISIT_TTL_HOURS", "12"))
+    except (TypeError, ValueError):
+        PARKED_VISIT_TTL_HOURS = 12
+    # 挂单过期清理任务调度间隔（分钟）
+    try:
+        PARKED_VISIT_CLEAN_INTERVAL_MINUTES = int(os.environ.get("PARKED_VISIT_CLEAN_INTERVAL_MINUTES", "30"))
+    except (TypeError, ValueError):
+        PARKED_VISIT_CLEAN_INTERVAL_MINUTES = 30
+    SCHEDULER_API_ENABLED = False

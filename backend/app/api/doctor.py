@@ -2,14 +2,16 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, Payment, VISIT_STATUS_PENDING
+from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, Payment, ParkedVisit, VISIT_STATUS_PENDING
 import json
 from backend.app.utils.decorators import role_required
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import math
 import time
 import re
+from flask import current_app
 from sqlalchemy import or_, case
+from sqlalchemy.exc import IntegrityError
 from pypinyin import pinyin, Style
 
 
@@ -714,6 +716,17 @@ def create_visit():
 
     db.session.commit()
 
+    # 如代码提交源于挂单草稿，同步删除对应 ParkedVisit
+    parked_id = data.get('parked_id')
+    if parked_id:
+        try:
+            pv = ParkedVisit.query.filter_by(id=parked_id, doctor_id=int(get_jwt_identity())).first()
+            if pv:
+                db.session.delete(pv)
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
+
     # 检查是否为临时人员就诊
     patient = Patient.query.get(patient_id)
     if patient and patient.is_temporary:
@@ -1106,3 +1119,204 @@ def delete_text_template(template_id):
     db.session.delete(tpl)
     db.session.commit()
     return jsonify({"msg": "Template deleted successfully"}), 200
+
+
+# ===================== 挂单（草稿就诊）接口 =====================
+
+def _parked_ttl_hours():
+    try:
+        return int(current_app.config.get('PARKED_VISIT_TTL_HOURS', 12))
+    except (TypeError, ValueError):
+        return 12
+
+
+def _serialize_parked(pv):
+    try:
+        items = json.loads(pv.items_json) if pv.items_json else []
+    except Exception:
+        items = []
+    patient = pv.patient
+    return {
+        "id": pv.id,
+        "patient_id": pv.patient_id,
+        "patient_name": getattr(patient, 'name', None),
+        "student_id": getattr(patient, 'student_id', None),
+        "chief_complaint": pv.chief_complaint or "",
+        "present_illness": pv.present_illness or "",
+        "past_history": pv.past_history or "",
+        "physical_exam": pv.physical_exam or "",
+        "diagnosis": pv.diagnosis or "",
+        "doctor_advice": pv.doctor_advice or "",
+        "special_note": pv.special_note or "",
+        "consultation_fee": pv.consultation_fee or 0,
+        "items": items,
+        "item_count": len(items) if isinstance(items, list) else 0,
+        "quick_mode": bool(pv.quick_mode),
+        "created_at": _format_local_dt(pv.created_at),
+        "updated_at": _format_local_dt(pv.updated_at),
+        "expires_at": _format_local_dt(pv.expires_at),
+        "status": "paused",
+    }
+
+
+@bp.route('/doctor/parked-visits', methods=['POST'])
+@jwt_required()
+@role_required('doctor')
+def create_or_update_parked_visit():
+    """创建或覆盖挂单草稿。同一医生+同一患者唯一。"""
+    data = request.get_json() or {}
+    patient_id = data.get('patient_id')
+    if not patient_id:
+        return jsonify({"msg": "Missing patient_id", "field": "patient_id"}), 400
+
+    try:
+        doctor_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    if not Patient.query.get(patient_id):
+        return jsonify({"msg": "Patient not found"}), 404
+
+    items = data.get('items') or []
+    if not isinstance(items, list):
+        return jsonify({"msg": "items must be a list"}), 400
+
+    ttl_hours = _parked_ttl_hours()
+    now = datetime.utcnow()
+    expires_at = now + timedelta(hours=ttl_hours)
+
+    # 行锁：防止同一医生+患者并发写入
+    try:
+        pv = (
+            db.session.query(ParkedVisit)
+            .filter_by(patient_id=patient_id, doctor_id=doctor_id)
+            .with_for_update()
+            .first()
+        )
+    except Exception:
+        # SQLite 不支持 SELECT FOR UPDATE，退化为普通查询
+        db.session.rollback()
+        pv = ParkedVisit.query.filter_by(patient_id=patient_id, doctor_id=doctor_id).first()
+
+    try:
+        consultation_fee = float(data.get('consultation_fee') or 0)
+    except (TypeError, ValueError):
+        consultation_fee = 0.0
+
+    payload = dict(
+        chief_complaint=data.get('chief_complaint') or '',
+        present_illness=data.get('present_illness') or '',
+        past_history=data.get('past_history') or '',
+        physical_exam=data.get('physical_exam') or '',
+        diagnosis=data.get('diagnosis') or '',
+        doctor_advice=data.get('doctor_advice') or '',
+        special_note=data.get('special_note') or '',
+        consultation_fee=consultation_fee,
+        items_json=json.dumps(items, ensure_ascii=False),
+        quick_mode=bool(data.get('quick_mode')),
+        expires_at=expires_at,
+    )
+
+    if pv:
+        for k, v in payload.items():
+            setattr(pv, k, v)
+    else:
+        pv = ParkedVisit(patient_id=patient_id, doctor_id=doctor_id, **payload)
+        db.session.add(pv)
+
+    try:
+        db.session.commit()
+    except IntegrityError:
+        # 并发写入遇到唯一约束冲突，重读后以更新逻辑入库
+        db.session.rollback()
+        pv = ParkedVisit.query.filter_by(patient_id=patient_id, doctor_id=doctor_id).first()
+        if not pv:
+            return jsonify({"msg": "Failed to save parked visit"}), 500
+        for k, v in payload.items():
+            setattr(pv, k, v)
+        db.session.commit()
+
+    return jsonify({"data": {"parked_id": pv.id, "expires_at": _format_local_dt(pv.expires_at)}}), 201
+
+
+@bp.route('/doctor/parked-visits', methods=['GET'])
+@jwt_required()
+@role_required('doctor')
+def list_parked_visits():
+    """当前医生的全部有效挂单。"""
+    try:
+        doctor_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    now = datetime.utcnow()
+    rows = (
+        ParkedVisit.query
+        .filter(ParkedVisit.doctor_id == doctor_id, ParkedVisit.expires_at > now)
+        .order_by(ParkedVisit.updated_at.desc())
+        .all()
+    )
+    return jsonify({"data": [_serialize_parked(pv) for pv in rows]})
+
+
+@bp.route('/doctor/parked-visits/<int:parked_id>', methods=['GET'])
+@jwt_required()
+@role_required('doctor')
+def get_parked_visit(parked_id):
+    try:
+        doctor_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    pv = ParkedVisit.query.filter_by(id=parked_id, doctor_id=doctor_id).first()
+    if not pv:
+        return jsonify({"msg": "Parked visit not found"}), 404
+    if pv.expires_at and pv.expires_at <= datetime.utcnow():
+        # 已过期：顺手清理并返回 410
+        try:
+            db.session.delete(pv)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return jsonify({"msg": "Parked visit expired"}), 410
+    return jsonify({"data": _serialize_parked(pv)})
+
+
+@bp.route('/doctor/parked-visits/<int:parked_id>', methods=['DELETE'])
+@jwt_required()
+@role_required('doctor')
+def delete_parked_visit(parked_id):
+    try:
+        doctor_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    pv = ParkedVisit.query.filter_by(id=parked_id, doctor_id=doctor_id).first()
+    if not pv:
+        return jsonify({"msg": "Parked visit not found"}), 404
+    db.session.delete(pv)
+    db.session.commit()
+    return jsonify({"msg": "Parked visit deleted"})
+
+
+@bp.route('/doctor/patient/<int:patient_id>/parked-visit', methods=['GET'])
+@jwt_required()
+@role_required('doctor')
+def get_patient_parked_visit(patient_id):
+    """查询当前医生在该患者上是否有有效挂单。"""
+    try:
+        doctor_id = int(get_jwt_identity())
+    except (ValueError, TypeError):
+        return jsonify({"msg": "Invalid user identity"}), 401
+
+    pv = ParkedVisit.query.filter_by(patient_id=patient_id, doctor_id=doctor_id).first()
+    if not pv:
+        return jsonify({"data": None})
+    if pv.expires_at and pv.expires_at <= datetime.utcnow():
+        try:
+            db.session.delete(pv)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        return jsonify({"data": None})
+    return jsonify({"data": _serialize_parked(pv)})

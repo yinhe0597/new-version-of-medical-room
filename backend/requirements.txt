@@ -13,3 +13,4 @@ numpy
 openpyxl
 requests
 waitress
+Flask-APScheduler

@@ -11,6 +11,29 @@ db = SQLAlchemy()
 migrate = Migrate()
 jwt = JWTManager()
 
+# 挂单过期清理任务调度器（Flask-APScheduler）
+try:
+    from flask_apscheduler import APScheduler
+    scheduler = APScheduler()
+except Exception:  # pragma: no cover - 依赖未安装时不阻断启动
+    scheduler = None
+
+
+def _clean_expired_parked_visits(app):
+    """清理过期挂单记录。"""
+    try:
+        from datetime import datetime
+        with app.app_context():
+            from backend.app.models import ParkedVisit
+            now = datetime.utcnow()
+            ParkedVisit.query.filter(ParkedVisit.expires_at <= now).delete(synchronize_session=False)
+            db.session.commit()
+    except Exception:
+        try:
+            db.session.rollback()
+        except Exception:
+            pass
+
 def _ensure_sqlite_column(app, table_name, column_name, column_def):
     uri = app.config.get("SQLALCHEMY_DATABASE_URI") or ""
     if not isinstance(uri, str) or not uri.startswith("sqlite"):
@@ -112,6 +135,30 @@ def create_app(config_class=None):
                 db.create_all()
     except Exception:
         pass
+
+    # 启动挂单过期清理调度（仅初始化一次）
+    if scheduler is not None and not getattr(scheduler, '_yws_started', False):
+        try:
+            scheduler.init_app(app)
+            scheduler.start()
+            interval_minutes = int(app.config.get('PARKED_VISIT_CLEAN_INTERVAL_MINUTES', 30) or 30)
+            scheduler.add_job(
+                id='clean_expired_parked_visits',
+                func=_clean_expired_parked_visits,
+                args=[app],
+                trigger='interval',
+                minutes=interval_minutes,
+                replace_existing=True,
+            )
+            scheduler._yws_started = True
+            # 启动时立即执行一次清理
+            try:
+                _clean_expired_parked_visits(app)
+            except Exception:
+                pass
+        except Exception:
+            # 调度器初始化失败不应阻断应用启动
+            pass
 
     # 静态文件和前端文件支持
     def _get_dist_dir():

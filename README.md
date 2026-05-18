@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.7-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.8-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -190,6 +190,12 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.8（2026-05-18）💊
+
+- 💊 **医生端用法选项扩展**：处方开具与单独购药界面的用法下拉菜单新增"冲泡"、"嚼服"、"冲服"、"舌下含服"四个选项，两个页面选项保持同步一致
+
+---
 
 ### 🏷️ open0.0.7（2026-05-16）💉📊🔧🛡️
 
