@@ -307,6 +307,27 @@ onMounted(() => {
 })
 </script>
 
+<style>
+@media print {
+  body * {
+    visibility: hidden !important;
+  }
+  #receipt-print-area, #receipt-print-area * {
+    visibility: visible !important;
+  }
+  #receipt-print-area {
+    position: absolute !important;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+  .el-overlay, .el-dialog {
+    position: absolute !important;
+    visibility: visible !important;
+  }
+}
+</style>
+
 <style scoped>
 .history-list-container {
   padding: 20px;
