@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.8-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.9-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -190,6 +190,14 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.9（2026-05-20）🖨️🔄📱
+
+- 🖨️ **修复打印小票重复问题**：护士端历史诊疗记录打印小票时不再重复打印多份，`@media print` 样式仅显示票据区域
+- 🔄 **医生端刷新库存按钮**：处方开立界面新增"刷新库存"按钮，库存补充后点击可立即获取最新库存数据
+- 📱 **手机号格式校验**：医生接诊补充手机号弹窗增加11位数字格式校验，不符合时阻止提交并明确提示
+
+---
 
 ### 🏷️ open0.0.8（2026-05-18）💊
 
