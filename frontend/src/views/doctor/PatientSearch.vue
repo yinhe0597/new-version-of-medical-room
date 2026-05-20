@@ -703,6 +703,10 @@ const submitPhone = async () => {
     ElMessage.warning('请输入手机号码')
     return
   }
+  if (!/^1\d{10}$/.test(tempPhone.value.trim())) {
+    ElMessage.warning('手机号码格式不正确，应为1开头的11位数字')
+    return
+  }
   
   updatingPhone.value = true
   try {

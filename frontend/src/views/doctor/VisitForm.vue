@@ -79,7 +79,7 @@
         <div class="right-panel">
           <el-card class="box-card" header="处方开立">
             <!-- 药品搜索 -->
-            <div class="drug-search">
+            <div class="drug-search" style="display: flex; gap: 8px; align-items: center;">
               <el-select
                 v-model="selectedDrugId"
                 filterable
@@ -88,7 +88,7 @@
                 placeholder="输入药品或项目名称搜索"
                 :remote-method="searchDrugs"
                 :loading="loadingDrugs"
-                style="width: 100%"
+                style="flex: 1"
                 @change="handleDrugSelect"
               >
                 <el-option
@@ -103,6 +103,7 @@
                   </span>
                 </el-option>
               </el-select>
+              <el-button :icon="Refresh" @click="refreshStock" :loading="refreshingStock" title="刷新库存">刷新库存</el-button>
             </div>
 
             <!-- 已选药品列表 -->
@@ -431,6 +432,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import request from '@/api/request'
 import { ElMessage } from 'element-plus'
+import { Refresh } from '@element-plus/icons-vue'
 
 const route = useRoute()
 const router = useRouter()
@@ -795,6 +797,17 @@ const handleDiagnosisSelect = (item) => {
   }
   // Clear the search input after selecting
   diagnosisSearch.value = ''
+}
+
+const refreshingStock = ref(false)
+const refreshStock = async () => {
+  refreshingStock.value = true
+  try {
+    await searchDrugs('')
+    ElMessage.success('库存已刷新')
+  } finally {
+    refreshingStock.value = false
+  }
 }
 
 const searchDrugs = async (query) => {
