@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.9-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.10-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -190,6 +190,19 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.10（2026-05-21）💉🔧
+
+**耗材管理流程纳管流转增强：**
+- 🐛 **医生端单独购药耗材识别修复（严重）**：修复 `DirectPurchase.vue` 搜索结果中耗材 `variant_type='consumable'` 未被识别、被错误标记为"整装"的问题，新增 consumable 专用分支
+- 🐛 **医生端单独购药耗材库存显示（严重）**：搜索下拉补充 type=3 耗材的库存数量显示，与 VisitForm.vue 对齐
+- 🐛 **医生端单独购药耗材数量限制（严重）**：处方明细数量上限补充 type=3 耗材的 maxStock 限制，防止超库存开方
+- 🔧 **耗材用法显示文案修正**：VisitForm 与 DirectPurchase 处方明细中，耗材不再误显示"诊疗项目"，改为"耗材 (按数量使用)"
+- 🔧 **管理员新增药品/耗材补充 base_name**：admin `create_drug` 添加 `base_name` 字段，与护士端入库路径数据一致
+
+> 📝 详细变更：[开发日志-open0.0.10.md](docs/开发日志-open0.0.10.md)
+
+---
 
 ### 🏷️ open0.0.9（2026-05-20）🖨️🔄📱
 

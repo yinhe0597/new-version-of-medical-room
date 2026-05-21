@@ -156,6 +156,7 @@
             <el-table-column prop="adjustment" label="盘点调整" width="100" />
             <el-table-column prop="closing_stock" label="现存数" width="100" />
             <el-table-column prop="inbound_amount" label="本月进药金额" width="120" />
+            <el-table-column prop="current_stock_amount" label="现库存金额" width="120" />
           </el-table>
         </el-card>
       </el-tab-pane>
@@ -552,7 +553,7 @@ const getMonthlySummaries = ({ columns, data }) => {
       sums[index] = '合计'
       return
     }
-    if (['opening_stock', 'inbound', 'outbound', 'adjustment', 'closing_stock', 'inbound_amount'].includes(column.property)) {
+    if (['opening_stock', 'inbound', 'outbound', 'adjustment', 'closing_stock', 'inbound_amount', 'current_stock_amount'].includes(column.property)) {
       sums[index] = data.reduce((sum, row) => sum + (Number(row[column.property]) || 0), 0)
     } else {
       sums[index] = ''
