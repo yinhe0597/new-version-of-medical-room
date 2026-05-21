@@ -120,6 +120,36 @@
 
 **影响**：医生端病例详情接口恢复正常，新旧就诊记录均可成功加载完整病历与状态流转时间线；前端不再弹出"获取详情失败"错误提示。
 
+## 2026/05/22
+
+### 打印小票重复问题彻底修复
+
+**背景**：
+护士在历史诊疗记录中点击"打印小票"时，浏览器打印预览显示多页完全相同的小票内容。该问题在 open0.0.9 中曾尝试修复（通过 `@media print` 隐藏非票据区域），但修复不彻底，问题依旧存在。
+
+**问题根因**：
+之前的 `@media print` 使用 `body * { visibility: hidden !important; }` 来隐藏非打印内容。`visibility: hidden` 仅让元素不可见，但**元素仍占据页面布局空间**。历史诊疗记录列表中的 `el-table` 数据量大时，打印会跨越多页；而票据区域 `#receipt-print-area` 被设为 `position: absolute; top: 0`，导致它在**每一页的顶部都重复渲染**，形成"多页相同内容"的现象。
+
+**修复方案**：
+弃用 `visibility: hidden` 方案，改为使用 `display: none !important` 彻底隐藏 `#app`（Vue 应用根容器），使非打印内容完全不占用页面空间。Element Plus 的 `el-dialog` 默认 `teleport` 到 `body`，`.el-overlay` 不在 `#app` 内部，因此得以保留。同时补充 `ExecutePrescription.vue` 中完全缺失的 `@media print` 样式。
+
+**修改点**：
+
+1. **前端 `HistoryList.vue`**（`@media print` 重写）：
+   - `#app { display: none !important; }` —— 彻底隐藏主应用，不占用打印空间
+   - `.el-overlay` —— 保留并去除背景遮罩、改为 `position: static`
+   - `.el-dialog` —— 改为 `position: static`，去除阴影和边距，宽度 100%
+   - `.el-dialog__header`、`.el-dialog__footer`、`.el-dialog__headerbtn` —— 隐藏标题栏和按钮区
+   - `#receipt-print-area` —— 改为 `position: static`，避免 absolute 跨页重复
+
+2. **前端 `ExecutePrescription.vue`**（新增 `@media print`）：
+   - 同一套打印样式，解决结算页面打印小票时同样可能重复的问题
+
+**影响**：
+护士端历史诊疗记录和处方执行页面的打印小票功能均只输出单页票据，不再重复。向后兼容：未触发打印时页面正常展示，无影响。
+
+---
+
 ### 护士端历史诊疗记录打印小票
 
 **背景**：
