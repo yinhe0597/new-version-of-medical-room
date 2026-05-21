@@ -168,7 +168,7 @@
                     </el-select>
                     </div>
                     <div v-else>
-                      <span style="color: #909399; font-size: 12px;">诊疗项目 (无需填写用法)</span>
+                      <span style="color: #909399; font-size: 12px;">{{ scope.row.type === 3 ? '耗材 (按数量使用)' : '诊疗项目 (无需填写用法)' }}</span>
                     </div>
                   </template>
                 </el-table-column>

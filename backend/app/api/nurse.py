@@ -853,6 +853,7 @@ def _compute_monthly_report(start_date_str, end_date_str):
             "adjustment": adjustment,
             "closing_stock": closing_stock,
             "inbound_amount": round(purchase_price * inbound, 2),
+            "current_stock_amount": round(purchase_price * closing_stock, 2),
         })
 
     return result, None
@@ -908,7 +909,7 @@ def export_monthly_report():
     ws = wb.active
     ws.title = "月度盘点报表"
 
-    headers = ["序号", "名称", "类型", "规格", "购进价", "单位", "上月盘点数（期初）", "入库数", "出库数", "盘点调整", "现存数（期末）", "本月进药金额"]
+    headers = ["序号", "名称", "类型", "规格", "购进价", "单位", "上月盘点数（期初）", "入库数", "出库数", "盘点调整", "现存数（期末）", "本月进药金额", "现库存金额"]
     ws.append(headers)
 
     for idx, item in enumerate(data, 1):
@@ -925,6 +926,7 @@ def export_monthly_report():
             item["adjustment"],
             item["closing_stock"],
             item["inbound_amount"],
+            item["current_stock_amount"],
         ])
 
     output = io.BytesIO()

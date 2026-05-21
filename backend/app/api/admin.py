@@ -528,6 +528,7 @@ def create_drug():
 
     drug = Drug(
         name=data['name'],
+        base_name=data['name'],
         type=drug_type,
         specification=data['specification'],
         unit=data['unit'],

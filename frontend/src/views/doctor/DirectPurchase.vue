@@ -117,7 +117,7 @@
             >
               <span style="float: left">{{ item.name }}</span>
               <span style="float: right; color: #8492a6; font-size: 13px">
-                {{ item.specification }} | {{ item.type === 1 ? '库存: ' + item.stock + ' | ' : '' }}{{ item.option_label }}: ¥{{ item.display_price.toFixed(2) }}
+                {{ item.specification }} | {{ (item.type === 1 || item.type === 3) ? '库存: ' + item.stock + ' | ' : '' }}{{ item.option_label }}: ¥{{ item.display_price.toFixed(2) }}
               </span>
             </el-option>
           </el-select>
@@ -149,13 +149,13 @@
                 </el-select>
               </div>
               <div v-else>
-                <span style="color: #909399; font-size: 12px;">无需填写用法</span>
+                <span style="color: #909399; font-size: 12px;">{{ scope.row.type === 3 ? '耗材 (按数量使用)' : '诊疗项目 (无需填写用法)' }}</span>
               </div>
             </template>
           </el-table-column>
           <el-table-column label="数量" width="120">
             <template #default="scope">
-              <el-input-number v-model="scope.row.quantity" :min="1" :max="scope.row.type === 1 ? (scope.row.maxStock > 0 ? scope.row.maxStock : 999) : 999" size="small" style="width: 100px" />
+              <el-input-number v-model="scope.row.quantity" :min="1" :max="(scope.row.type === 1 || scope.row.type === 3) ? (scope.row.maxStock > 0 ? scope.row.maxStock : 999) : 999" size="small" style="width: 100px" />
             </template>
           </el-table-column>
           <el-table-column label="单价" width="80">
@@ -430,6 +430,17 @@ const searchDrugs = async (query) => {
           display_price: d.price,
           is_scattered: false,
           maxStock: d.variant_type === 'service' ? 999 : d.stock
+        })
+        return
+      }
+      if (d.variant_type === 'consumable') {
+        options.push({
+          ...d,
+          option_id: `${d.id}:consumable`,
+          option_label: '耗材',
+          display_price: d.price,
+          is_scattered: false,
+          maxStock: d.stock
         })
         return
       }
