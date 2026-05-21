@@ -191,7 +191,11 @@ npm run dev
 
 ## 📋 更新日志
 
-### 🏷️ open0.0.10（2026-05-21）💉🔧
+### 🏷️ open0.0.10（2026-05-21）💉🔧🖨️
+
+**打印小票重复问题彻底修复：**
+- 🖨️ **修复 `@media print` 打印多页相同内容**：弃用 `visibility: hidden`（隐藏但占空间）方案，改为 `display: none` 彻底隐藏 `#app`，仅保留票据区域；`#receipt-print-area` 改为 `position: static`，避免 absolute 定位导致跨页重复
+- 🖨️ **补充 `ExecutePrescription.vue` 打印样式**：结算页面打印小票新增完整的 `@media print` 控制，与历史记录页保持一致
 
 **耗材管理流程纳管流转增强：**
 - 🐛 **医生端单独购药耗材识别修复（严重）**：修复 `DirectPurchase.vue` 搜索结果中耗材 `variant_type='consumable'` 未被识别、被错误标记为"整装"的问题，新增 consumable 专用分支

@@ -309,20 +309,49 @@ onMounted(() => {
 
 <style>
 @media print {
-  body * {
-    visibility: hidden !important;
+  /* 彻底隐藏主应用容器，不占用打印页面空间 */
+  #app {
+    display: none !important;
   }
-  #receipt-print-area, #receipt-print-area * {
-    visibility: visible !important;
+
+  /* Element Plus Dialog 默认 teleport 到 body，保留 overlay */
+  .el-overlay {
+    display: block !important;
+    position: static !important;
+    background: transparent !important;
   }
+
+  .el-overlay-dialog {
+    position: static !important;
+  }
+
+  .el-dialog {
+    position: static !important;
+    box-shadow: none !important;
+    margin: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+  }
+
+  /* 隐藏对话框标题、关闭按钮、底部按钮 */
+  .el-dialog__header,
+  .el-dialog__footer,
+  .el-dialog__headerbtn {
+    display: none !important;
+  }
+
+  .el-dialog__body {
+    padding: 10px !important;
+  }
+
+  /* 票据打印区域 */
   #receipt-print-area {
-    position: absolute !important;
-    left: 0;
-    top: 0;
+    visibility: visible !important;
+    position: static !important;
     width: 100%;
   }
-  .el-overlay, .el-dialog {
-    position: absolute !important;
+
+  #receipt-print-area * {
     visibility: visible !important;
   }
 }
