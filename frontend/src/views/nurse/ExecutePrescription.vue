@@ -532,7 +532,20 @@ const handleExecute = async () => {
 const printReceipt = async () => {
   try {
     await request.put(`/nurse/payments/${receiptData.value.payment_id}/print`)
-    window.print()
+    const printArea = document.getElementById('receipt-print-area')
+    if (!printArea) return
+    const printWindow = window.open('', '_blank', 'width=400,height=600')
+    if (!printWindow) {
+      ElMessage.warning('请允许弹出窗口以完成打印')
+      return
+    }
+    printWindow.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>收费凭证</title><style>body{font-family:'Courier New',Courier,monospace;padding:10px;line-height:1.6;margin:0}p{margin:4px 0}.item-line{margin:2px 0 2px 10px;font-size:12px;line-height:1.4}.advice-print-info{font-size:13px}h3{text-align:center}hr{border:none;border-top:1px dashed #999;margin:8px 0}</style></head><body>${printArea.innerHTML}</body></html>`)
+    printWindow.document.close()
+    printWindow.focus()
+    setTimeout(() => {
+      printWindow.print()
+      printWindow.close()
+    }, 300)
     showReceipt.value = false
     router.push('/nurse/pending')
   } catch (error) {
@@ -624,56 +637,6 @@ onMounted(() => {
   fetchDetail()
 })
 </script>
-
-<style>
-@media print {
-  /* 彻底隐藏主应用容器，不占用打印页面空间 */
-  #app {
-    display: none !important;
-  }
-
-  /* Element Plus Dialog 默认 teleport 到 body，保留 overlay */
-  .el-overlay {
-    display: block !important;
-    position: static !important;
-    background: transparent !important;
-  }
-
-  .el-overlay-dialog {
-    position: static !important;
-  }
-
-  .el-dialog {
-    position: static !important;
-    box-shadow: none !important;
-    margin: 0 !important;
-    width: 100% !important;
-    max-width: 100% !important;
-  }
-
-  /* 隐藏对话框标题、关闭按钮、底部按钮 */
-  .el-dialog__header,
-  .el-dialog__footer,
-  .el-dialog__headerbtn {
-    display: none !important;
-  }
-
-  .el-dialog__body {
-    padding: 10px !important;
-  }
-
-  /* 票据打印区域 */
-  #receipt-print-area {
-    visibility: visible !important;
-    position: static !important;
-    width: 100%;
-  }
-
-  #receipt-print-area * {
-    visibility: visible !important;
-  }
-}
-</style>
 
 <style scoped>
 .execute-container {
