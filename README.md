@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.10-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.11-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -70,6 +70,7 @@
 | 🩺 **医生端** | 静脉给药配伍 | 独立配伍管理，溶质+溶液绑定不混淆，自定义用量数值/单位/给药方式 |
 | 🩺 **医生端** | 用法用量空白选项 | 用法/用量/频次/时间均新增 `--` 空选项，适配药膏等无需用法用量的场景 |
 | 💊 **护士端** | 处方处置 | 审核确认、收费执行、驳回操作 |
+| 💊 **护士端** | 历史诊疗记录 | 全员可见（不限经手护士），支持按护士/医生/日期范围多维筛选，团队协作更高效 |
 | 💊 **护士端** | 撤销交易 | 误操作可撤销（终态标记），自动还原库存 |
 | 💊 **护士端** | 智能盘库 | 自定义阈值预警，散装药品快速筛选 |
 | 💊 **护士端** | 库存管理 | 药品/耗材统一库存、整散联合盘点、月度报表、出入库记录 |
@@ -190,6 +191,20 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.11（2026-05-27）👥🔍
+
+**护士端历史诊疗权限放开与筛选增强：**
+- 👥 **历史记录全员可见**：移除"仅当前护士经手记录"限制，所有护士均可查看系统全部历史诊疗记录，团队协作不再有信息孤岛
+- 🔍 **护士筛选**：新增护士姓名下拉选择，可精确筛选特定护士经手的历史记录
+- 👨‍⚕️ **医生筛选**：新增医生姓名下拉选择，可按开立医生筛选处方
+- 📅 **日期范围筛选**：新增就诊时间范围选择器，支持按时间段查询
+- 🔀 **自由组合**：支持护士+医生+日期范围的任意组合筛选，快速定位目标记录
+- 📋 **医护人员列表**：新增 `staff-list` 接口，下拉选项自动加载所有医护人员
+
+> 📝 详细变更：[开发日志-open0.0.11.md](docs/开发日志-open0.0.11.md)
+
+---
 
 ### 🏷️ open0.0.10（2026-05-22）💉🔧🖨️
 
