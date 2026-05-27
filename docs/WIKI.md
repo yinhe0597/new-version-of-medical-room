@@ -503,7 +503,8 @@ DiagnosisDict          TextTemplate          OperationLog
 | GET | `/nurse/inventory/records` | 库存操作记录 |
 | GET | `/nurse/inventory/monthly-report` | 月度盘点报表 |
 | POST | `/nurse/inbound` | 药品入库 |
-| GET | `/nurse/my-history` | 经手历史记录 |
+| GET | `/nurse/my-history` | 历史诊疗记录（所有护士可见，支持 nurse_id / doctor_id / date_from / date_to 筛选） |
+| GET | `/nurse/staff-list` | 获取医护人员列表（筛选下拉用） |
 | GET | `/nurse/services/search` | 诊疗项目搜索 |
 | GET | `/nurse/drug-names/search` | 药品名称搜索 |
 | PUT | `/nurse/payments/<id>/print` | 标记票据已打印 |

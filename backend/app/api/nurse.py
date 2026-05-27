@@ -1618,30 +1618,51 @@ def list_drugs():
 @bp.route('/nurse/my-history', methods=['GET'])
 @role_required('nurse')
 def get_my_history():
-    """获取当前护士经手的所有历史处方记录"""
-    user_id = int(get_jwt_identity())
+    """获取历史处方记录（所有护士可见），支持按护士、医生、日期范围筛选"""
+    # 可选的筛选参数
+    nurse_id = request.args.get('nurse_id', type=int, default=None)
+    doctor_id = request.args.get('doctor_id', type=int, default=None)
+    date_from = request.args.get('date_from', default=None)
+    date_to = request.args.get('date_to', default=None)
 
-    # 子查询：通过 Payment 表找到 nurse_id 对应的 visit_id
-    payment_visit_ids = db.session.query(Payment.visit_id).filter(Payment.nurse_id == user_id).subquery()
+    query = Visit.query.options(
+        db.joinedload(Visit.patient),
+        db.joinedload(Visit.doctor),
+        db.joinedload(Visit.payment),
+    )
 
-    visits = (
-        Visit.query
-        .filter(
+    # 护士筛选：通过 verified_by / rejected_by / revoked_by / payment.nurse_id 关联
+    if nurse_id is not None:
+        payment_visit_ids = db.session.query(Payment.visit_id).filter(Payment.nurse_id == nurse_id).subquery()
+        query = query.filter(
             or_(
-                Visit.verified_by == user_id,
-                Visit.rejected_by == user_id,
-                Visit.revoked_by == user_id,
+                Visit.verified_by == nurse_id,
+                Visit.rejected_by == nurse_id,
+                Visit.revoked_by == nurse_id,
                 Visit.id.in_(payment_visit_ids)
             )
         )
-        .options(
-            db.joinedload(Visit.patient),
-            db.joinedload(Visit.doctor),
-            db.joinedload(Visit.payment),
-        )
-        .order_by(Visit.timestamp.desc())
-        .all()
-    )
+
+    # 医生筛选
+    if doctor_id is not None:
+        query = query.filter(Visit.doctor_id == doctor_id)
+
+    # 日期范围筛选
+    if date_from:
+        try:
+            dt_from = datetime.strptime(date_from, '%Y-%m-%d')
+            query = query.filter(Visit.timestamp >= dt_from)
+        except ValueError:
+            pass
+    if date_to:
+        try:
+            # 包含 date_to 当天全天
+            dt_to = datetime.strptime(date_to, '%Y-%m-%d') + timedelta(days=1)
+            query = query.filter(Visit.timestamp < dt_to)
+        except ValueError:
+            pass
+
+    visits = query.order_by(Visit.timestamp.desc()).all()
 
     data = []
     for visit in visits:
@@ -1653,6 +1674,7 @@ def get_my_history():
             "created_at": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
             "diagnosis": _normalize_diagnosis_text_for_output(visit.diagnosis) if visit.diagnosis else "",
             "doctor_name": visit.doctor.real_name if visit.doctor else "未知",
+            "doctor_id": visit.doctor_id,
             "total_amount": visit.total_amount,
             "status": visit.status,
             "payment_method": payment.payment_method if payment else None,
@@ -1668,6 +1690,22 @@ def get_my_history():
         })
 
     return jsonify({"data": data}), 200
+
+
+@bp.route('/nurse/staff-list', methods=['GET'])
+@role_required('nurse')
+def get_nurse_staff_list():
+    """返回护士和医生列表，用于前端筛选下拉"""
+    users = User.query.filter(User.role.in_(["doctor", "nurse"])).order_by(User.role.asc(), User.real_name.asc()).all()
+    doctors = []
+    nurses = []
+    for u in users:
+        item = {"id": u.id, "real_name": u.real_name}
+        if u.role == "doctor":
+            doctors.append(item)
+        elif u.role == "nurse":
+            nurses.append(item)
+    return jsonify({"data": {"doctors": doctors, "nurses": nurses}}), 200
 
 
 @bp.route('/nurse/visits/<int:visit_id>/revoke', methods=['POST'])

@@ -3,14 +3,51 @@
     <h2>历史诊疗记录</h2>
 
     <div class="filter-bar">
+      <el-select
+        v-model="filterNurseId"
+        placeholder="全体护士"
+        clearable
+        style="width: 160px"
+      >
+        <el-option label="全体护士" :value="null" />
+        <el-option
+          v-for="n in nurseOptions"
+          :key="n.id"
+          :label="n.real_name"
+          :value="n.id"
+        />
+      </el-select>
+      <el-select
+        v-model="filterDoctorId"
+        placeholder="全体医生"
+        clearable
+        style="width: 160px"
+      >
+        <el-option label="全体医生" :value="null" />
+        <el-option
+          v-for="d in doctorOptions"
+          :key="d.id"
+          :label="d.real_name"
+          :value="d.id"
+        />
+      </el-select>
+      <el-date-picker
+        v-model="dateRange"
+        type="daterange"
+        range-separator="至"
+        start-placeholder="开始日期"
+        end-placeholder="结束日期"
+        value-format="YYYY-MM-DD"
+        style="width: 280px"
+      />
       <el-input
         v-model="searchName"
         placeholder="搜索患者姓名"
         :prefix-icon="Search"
         clearable
-        style="width: 220px"
+        style="width: 200px"
       />
-      <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 150px">
+      <el-select v-model="filterStatus" placeholder="全部状态" clearable style="width: 140px">
         <el-option label="全部" value="" />
         <el-option label="待处理" value="pending" />
         <el-option label="已审核" value="nurse_verified" />
@@ -18,6 +55,7 @@
         <el-option label="已驳回" value="rejected" />
         <el-option label="已撤销" value="revoked" />
       </el-select>
+      <el-button type="primary" @click="fetchHistory">查询</el-button>
     </div>
 
     <el-table :data="filteredList" v-loading="loading" stripe style="width: 100%">
@@ -165,6 +203,11 @@ const loading = ref(false)
 const historyList = ref([])
 const searchName = ref('')
 const filterStatus = ref('')
+const filterNurseId = ref(null)
+const filterDoctorId = ref(null)
+const dateRange = ref(null)
+const nurseOptions = ref([])
+const doctorOptions = ref([])
 const showDetail = ref(false)
 const currentRow = ref(null)
 
@@ -208,10 +251,28 @@ const getStatusTagType = (status) => {
   return map[status] ?? 'info'
 }
 
+const fetchStaffList = async () => {
+  try {
+    const res = await request.get('/nurse/staff-list')
+    const { doctors, nurses } = res.data || {}
+    doctorOptions.value = doctors || []
+    nurseOptions.value = nurses || []
+  } catch (error) {
+    console.error('获取医护人员列表失败', error)
+  }
+}
+
 const fetchHistory = async () => {
   loading.value = true
   try {
-    const res = await request.get('/nurse/my-history')
+    const params = {}
+    if (filterNurseId.value != null) params.nurse_id = filterNurseId.value
+    if (filterDoctorId.value != null) params.doctor_id = filterDoctorId.value
+    if (dateRange.value) {
+      params.date_from = dateRange.value[0]
+      params.date_to = dateRange.value[1]
+    }
+    const res = await request.get('/nurse/my-history', { params })
     historyList.value = res.data || []
   } catch (error) {
     ElMessage.error(error.msg || '获取历史记录失败')
@@ -316,6 +377,7 @@ const handleRevoke = () => {
 }
 
 onMounted(() => {
+  fetchStaffList()
   fetchHistory()
 })
 </script>
