@@ -662,7 +662,7 @@ def _compute_monthly_report(start_date_str, end_date_str):
     drugs = Drug.query.filter(
         Drug.status == 1,
         or_(Drug.type.in_([1, 3]), Drug.type.is_(None))
-    ).all()
+    ).order_by(Drug.monthly_sort_order.asc().nullslast()).all()
 
     if not drugs:
         return [], None
@@ -1618,12 +1618,18 @@ def list_drugs():
 @bp.route('/nurse/my-history', methods=['GET'])
 @role_required('nurse')
 def get_my_history():
-    """获取历史处方记录（所有护士可见），支持按护士、医生、日期范围筛选"""
+    """获取历史处方记录（所有护士可见），支持按护士、医生、日期范围、患者姓名、状态筛选及分页"""
     # 可选的筛选参数
     nurse_id = request.args.get('nurse_id', type=int, default=None)
     doctor_id = request.args.get('doctor_id', type=int, default=None)
     date_from = request.args.get('date_from', default=None)
     date_to = request.args.get('date_to', default=None)
+    search_name = request.args.get('search_name', default=None)
+    status = request.args.get('status', default=None)
+
+    # 分页参数
+    page = request.args.get('page', 1, type=int)
+    per_page = request.args.get('size', 20, type=int)
 
     query = Visit.query.options(
         db.joinedload(Visit.patient),
@@ -1662,7 +1668,17 @@ def get_my_history():
         except ValueError:
             pass
 
-    visits = query.order_by(Visit.timestamp.desc()).all()
+    # 患者姓名搜索（服务器端）
+    if search_name:
+        query = query.join(Visit.patient).filter(Patient.name.contains(search_name))
+
+    # 状态筛选（服务器端）
+    if status:
+        query = query.filter(Visit.status == status)
+
+    # 分页查询
+    pagination = query.order_by(Visit.timestamp.desc()).paginate(page=page, per_page=per_page, error_out=False)
+    visits = pagination.items
 
     data = []
     for visit in visits:
@@ -1689,7 +1705,33 @@ def get_my_history():
             "revoke_reason": visit.revoke_reason,
         })
 
-    return jsonify({"data": data}), 200
+    return jsonify({
+        "data": data,
+        "meta": {
+            "page": page,
+            "per_page": per_page,
+            "total": pagination.total
+        }
+    }), 200
+
+
+@bp.route('/nurse/drugs/sort-order', methods=['PUT'])
+@role_required(['nurse', 'admin'])
+def update_drug_sort_order():
+    """保存月度盘点药品排序顺序"""
+    req = request.get_json() or {}
+    order_list = req.get('order', [])
+
+    if not isinstance(order_list, list):
+        return jsonify({"msg": "order must be a list of drug_ids"}), 400
+
+    for idx, drug_id in enumerate(order_list):
+        drug = Drug.query.get(drug_id)
+        if drug:
+            drug.monthly_sort_order = idx
+
+    db.session.commit()
+    return jsonify({"msg": "排序已保存"}), 200
 
 
 @bp.route('/nurse/staff-list', methods=['GET'])

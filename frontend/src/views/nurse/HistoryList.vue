@@ -55,10 +55,10 @@
         <el-option label="已驳回" value="rejected" />
         <el-option label="已撤销" value="revoked" />
       </el-select>
-      <el-button type="primary" @click="fetchHistory">查询</el-button>
+      <el-button type="primary" @click="handleSearch">查询</el-button>
     </div>
 
-    <el-table :data="filteredList" v-loading="loading" stripe style="width: 100%">
+    <el-table :data="historyList" v-loading="loading" stripe style="width: 100%">
       <el-table-column prop="created_at" label="就诊时间" width="180" />
       <el-table-column prop="patient_name" label="患者姓名" width="120" />
       <el-table-column prop="student_id" label="学号" width="150" />
@@ -106,6 +106,18 @@
       </el-table-column>
       <template #empty>暂无历史记录</template>
     </el-table>
+
+    <div class="pagination" v-if="total > 0">
+      <el-pagination
+        v-model:current-page="currentPage"
+        v-model:page-size="pageSize"
+        :total="total"
+        :page-sizes="[10, 20, 50, 100]"
+        layout="total, sizes, prev, pager, next"
+        @current-change="handlePageChange"
+        @size-change="handleSizeChange"
+      />
+    </div>
 
     <!-- 编辑处置对话框 -->
     <el-dialog v-model="showDetail" title="编辑处置情况" width="580px">
@@ -194,7 +206,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, onMounted } from 'vue'
 import request from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
@@ -211,23 +223,16 @@ const doctorOptions = ref([])
 const showDetail = ref(false)
 const currentRow = ref(null)
 
+// 分页
+const currentPage = ref(1)
+const pageSize = ref(20)
+const total = ref(0)
+
 // 票据相关
 const showReceipt = ref(false)
 const receiptLoading = ref(false)
 const receiptRow = ref(null)
 const receiptVisit = ref(null)
-
-const filteredList = computed(() => {
-  let list = historyList.value
-  if (searchName.value) {
-    const keyword = searchName.value.trim().toLowerCase()
-    list = list.filter(item => item.patient_name && item.patient_name.toLowerCase().includes(keyword))
-  }
-  if (filterStatus.value) {
-    list = list.filter(item => item.status === filterStatus.value)
-  }
-  return list
-})
 
 const getStatusText = (status) => {
   const map = {
@@ -265,20 +270,46 @@ const fetchStaffList = async () => {
 const fetchHistory = async () => {
   loading.value = true
   try {
-    const params = {}
+    const params = {
+      page: currentPage.value,
+      size: pageSize.value
+    }
     if (filterNurseId.value != null) params.nurse_id = filterNurseId.value
     if (filterDoctorId.value != null) params.doctor_id = filterDoctorId.value
     if (dateRange.value) {
       params.date_from = dateRange.value[0]
       params.date_to = dateRange.value[1]
     }
+    if (searchName.value) {
+      params.search_name = searchName.value.trim()
+    }
+    if (filterStatus.value) {
+      params.status = filterStatus.value
+    }
     const res = await request.get('/nurse/my-history', { params })
     historyList.value = res.data || []
+    total.value = res.meta ? res.meta.total : 0
   } catch (error) {
     ElMessage.error(error.msg || '获取历史记录失败')
   } finally {
     loading.value = false
   }
+}
+
+const handleSearch = () => {
+  currentPage.value = 1
+  fetchHistory()
+}
+
+const handlePageChange = (val) => {
+  currentPage.value = val
+  fetchHistory()
+}
+
+const handleSizeChange = (val) => {
+  pageSize.value = val
+  currentPage.value = 1
+  fetchHistory()
 }
 
 const openDetail = (row) => {
@@ -390,6 +421,11 @@ onMounted(() => {
   display: flex;
   gap: 12px;
   margin-bottom: 16px;
+}
+.pagination {
+  margin-top: 16px;
+  display: flex;
+  justify-content: flex-end;
 }
 .detail-info {
   margin-bottom: 10px;
