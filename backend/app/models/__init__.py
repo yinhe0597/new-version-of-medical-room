@@ -89,6 +89,7 @@ class Drug(db.Model):
     stock_group_code = db.Column(db.String(36), index=True, nullable=True)
     unit_amount = db.Column(db.Integer, nullable=True)
     base_name = db.Column(db.String(128), nullable=True)
+    monthly_sort_order = db.Column(db.Integer, nullable=True)
 
     def __repr__(self):
         return f'<Drug/Item {self.name}>'
