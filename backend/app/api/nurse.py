@@ -961,12 +961,13 @@ def get_visit_detail(visit_id):
     for item in items_list:
         unit_price = item.new_price if item.new_price is not None else item.price_at_visit
         amount = item.new_amount if item.new_amount is not None else item.amount
+        drug = item.drug
         items.append({
             "item_id": item.id,
-            "drug_name": item.drug.name,
-            "type": item.drug.type,
-            "specification": item.drug.specification,
-            "conversion_rate": item.drug.conversion_rate,
+            "drug_name": drug.name if drug else "（已删除药品）",
+            "type": drug.type if drug else None,
+            "specification": drug.specification if drug else "",
+            "conversion_rate": drug.conversion_rate if drug else 1,
             "usage": item.usage,
             "dosage": item.dosage,
             "frequency": item.frequency,
@@ -980,7 +981,7 @@ def get_visit_detail(visit_id):
             "infusion_dosage_value": item.infusion_dosage_value,
             "infusion_dosage_unit": item.infusion_dosage_unit,
             "infusion_method": item.infusion_method,
-            "stock": item.drug.stock,
+            "stock": drug.stock if drug else 0,
             "original_price": item.original_price,
             "original_amount": item.original_amount,
             "new_price": item.new_price,
@@ -991,12 +992,21 @@ def get_visit_detail(visit_id):
             "modify_reason": item.modify_reason,
         })
 
+    # 读取小票快照（支付执行时保存的 JSON 快照）
+    payment = Payment.query.filter_by(visit_id=visit.id).first()
+    receipt_snapshot = None
+    if payment and payment.receipt_snapshot:
+        try:
+            receipt_snapshot = json.loads(payment.receipt_snapshot)
+        except (json.JSONDecodeError, TypeError):
+            receipt_snapshot = None
+
     return jsonify({
         "data": {
             "visit_id": visit.id,
             "patient": {
-                "name": visit.patient.name,
-                "student_id": visit.patient.student_id,
+                "name": visit.patient.name if visit.patient else "未知",
+                "student_id": visit.patient.student_id if visit.patient else "",
             },
             "doctor_name": visit.doctor.real_name if visit.doctor else "Unknown",
             "created_at": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
@@ -1012,6 +1022,7 @@ def get_visit_detail(visit_id):
             "verified_at": _format_local_dt(visit.verified_at, "%Y-%m-%d %H:%M:%S") if visit.verified_at else None,
             "rejected_by": visit.rejected_by,
             "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
+            "receipt_snapshot": receipt_snapshot,
         }
     }), 200
 
@@ -1504,6 +1515,34 @@ def execute_visit(visit_id):
         )
         db.session.add(payment)
 
+        # 生成小票数据快照
+        snapshot = {
+            "patient_name": visit.patient.name if visit.patient else "未知",
+            "patient_student_id": visit.patient.student_id if visit.patient else "",
+            "diagnosis": visit.diagnosis or "",
+            "doctor_advice": visit.doctor_advice or "",
+            "special_note": visit.special_note or "",
+            "items": []
+        }
+        for item in visit.items:
+            drug = item.drug
+            snapshot["items"].append({
+                "drug_name": drug.name if drug else "（已删除药品）",
+                "type": drug.type if drug else None,
+                "specification": drug.specification if drug else "",
+                "quantity": item.quantity,
+                "usage": item.usage,
+                "dosage": item.dosage,
+                "frequency": item.frequency,
+                "timing": item.timing,
+                "is_intravenous": item.is_intravenous,
+                "infusion_group": item.infusion_group,
+                "infusion_dosage_value": item.infusion_dosage_value,
+                "infusion_dosage_unit": item.infusion_dosage_unit,
+                "infusion_method": item.infusion_method,
+            })
+        payment.receipt_snapshot = json.dumps(snapshot, ensure_ascii=False)
+
         visit.status = VISIT_STATUS_COMPLETED
 
         log = OperationLog(
@@ -1540,9 +1579,13 @@ def execute_visit(visit_id):
 @role_required('nurse')
 def mark_printed(payment_id):
     payment = Payment.query.get_or_404(payment_id)
-    payment.receipt_printed = True
-    db.session.commit()
-    return jsonify({"msg": "Receipt marked as printed"}), 200
+    try:
+        payment.receipt_printed = True
+        db.session.commit()
+        return jsonify({"msg": "Receipt marked as printed"}), 200
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({"msg": f"标记打印失败: {str(e)}"}), 500
 
 @bp.route('/nurse/drugs', methods=['GET'])
 @role_required(['nurse', 'admin'])

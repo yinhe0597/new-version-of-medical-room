@@ -215,6 +215,7 @@ class Payment(db.Model):
     receipt_printed = db.Column(db.Boolean, default=False)
     is_employee_discount = db.Column(db.Boolean, default=False)  # 是否职工优惠
     original_amount = db.Column(db.Float, nullable=True)  # 原始应收金额（优惠前）
+    receipt_snapshot = db.Column(db.Text, nullable=True)  # 小票数据快照（JSON）
 
     def __repr__(self):
         return f'<Payment {self.id}>'

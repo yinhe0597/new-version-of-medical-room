@@ -120,6 +120,7 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "payment", "receipt_printed", "BOOLEAN DEFAULT 0")
     _ensure_sqlite_column(app, "payment", "is_employee_discount", "BOOLEAN DEFAULT 0")
     _ensure_sqlite_column(app, "payment", "original_amount", "FLOAT")
+    _ensure_sqlite_column(app, "payment", "receipt_snapshot", "TEXT")
 
     from backend.app.api import bp as api_bp
     app.register_blueprint(api_bp, url_prefix='/api')
