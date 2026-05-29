@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.12-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.13-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -191,6 +191,18 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.13（2026-05-29）📝🔧
+
+**小票快照持久化 & 打印功能修复：**
+- 📝 **小票快照持久化**：支付执行时将小票数据（患者信息、诊断、药品明细、用法用量）以 JSON 快照保存至 `payment` 表，即使药品被删除也能正常查看和打印历史小票
+- 🔧 **空安全修复**：`GET /nurse/visits/<id>` 中对已删除药品 `item.drug` 为 None 的场景做 null 安全检查，提供兜底值
+- 🛡️ **标记打印接口增强**：`PUT /nurse/payments/<id>/print` 添加 try/except 异常处理
+- 💬 **前端错误提示**：打印标记失败时不再静默吞错误，改为 `ElMessage.warning` 提示用户
+
+> 📝 详细变更：[开发日志-open0.0.13.md](docs/开发日志-open0.0.13.md)
+
+---
 
 ### 🏷️ open0.0.12（2026-05-28）🚀🔢
 

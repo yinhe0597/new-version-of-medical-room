@@ -323,7 +323,19 @@ const openReceipt = async (row) => {
   showReceipt.value = true
   try {
     const res = await request.get(`/nurse/visits/${row.visit_id}`)
-    receiptVisit.value = res.data
+    if (res.data.receipt_snapshot) {
+      // 优先使用执行时保存的小票快照（即使药品已删除也能正常显示）
+      const s = res.data.receipt_snapshot
+      receiptVisit.value = {
+        patient: { name: s.patient_name, student_id: s.patient_student_id },
+        diagnosis: s.diagnosis,
+        doctor_advice: s.doctor_advice,
+        special_note: s.special_note,
+        items: s.items,
+      }
+    } else {
+      receiptVisit.value = res.data
+    }
   } catch (error) {
     ElMessage.error(error.msg || '获取处方详情失败')
     showReceipt.value = false
@@ -339,6 +351,7 @@ const printReceipt = async () => {
       await request.put(`/nurse/payments/${pid}/print`)
     } catch (error) {
       console.error(error)
+      ElMessage.warning(error.msg || '标记打印状态失败，但将继续打印')
     }
   }
   const printArea = document.getElementById('receipt-print-area')
