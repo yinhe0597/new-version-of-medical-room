@@ -1,10 +1,53 @@
 # 开发日志 open0.0.13（2026-05-29）
 
-## 版本主题：小票打印空安全修复 + 小票快照持久化
+## 版本主题：小票打印 500 错误根因排查修复 + 小票快照持久化
 
-### 功能背景
+---
 
-护士端"历史诊疗记录"页面点击任意患者的"打印小票"按钮时，系统弹出"服务器内部错误，请稍后重试"的警告提示。根因是 `GET /nurse/visits/<id>` 接口在遍历处方项时直接访问 `item.drug.name`，若该药品已被从数据库中删除，`item.drug` 为 `None` 导致 `AttributeError`，被全局异常处理器捕获后返回 500。
+## 零、真实根因排查——`drug.monthly_sort_order` 缺少 DDL 迁移（关键修复）
+
+### 问题现象
+
+护士端"历史诊疗记录"页面点击**任意患者**的"打印小票"按钮，系统均弹出"服务器内部错误，请稍后重试"的警告提示。**关键特征：影响所有人，与药品是否被删除无关。**
+
+### 排查过程
+
+1. **第一轮误判**：怀疑 `item.drug` 空指针（药品被删除场景），添加空安全保护 → ❌ 问题依旧
+2. **第二轮深入排查**：
+   - 直接通过 curl 调用 `GET /api/nurse/visits/157` 复现
+   - 查看 `run_prod.py` 全局异常处理器捕获的异常栈
+   - **真实根因锁定**：
+     ```
+     sqlalchemy.exc.OperationalError:
+     (sqlite3.OperationalError) no such column: drug_1.monthly_sort_order
+     ```
+
+### 根因分析
+
+| 要素 | 说明 |
+|------|------|
+| 触发代码 | `get_visit_detail` 中的 `db.joinedload(PrescriptionItem.drug)` |
+| 机制 | SQLAlchemy 的 `joinedload` 生成 SELECT 查询时，包含 `drug` 表的 **所有列** |
+| 缺失列 | `monthly_sort_order` — 在 `Drug` 模型中定义（open0.0.12 药品排序功能） |
+| 缺失原因 | `_ensure_sqlite_column(app, "drug", "monthly_sort_order", "INTEGER")` **从未在 `__init__.py` 中注册** |
+| 影响范围 | 所有 SQLAlchemy 通过 `joinedload` 加载 `Drug` 关联的查询，包括但不限于 `GET /nurse/visits/<id>` |
+
+### 修复
+
+**文件：** `backend/app/__init__.py` 第 118 行
+
+```python
+# 新增 — drug 表 monthly_sort_order 列自动迁移
+_ensure_sqlite_column(app, "drug", "monthly_sort_order", "INTEGER")
+```
+
+启动时 `create_app()` 自动检测并执行 `ALTER TABLE drug ADD COLUMN monthly_sort_order INTEGER`，旧数据库无感升级。
+
+### 经验教训
+
+- ⚠️ 模型定义与 DDL 迁移注册必须同步。`Drug` 模型新增字段后，`__init__.py` 中必须有对应的 `_ensure_sqlite_column` 调用。
+- 🔍 全局异常处理会吞掉关键错误信息，排查 500 错误时应先查看 `logs/` 目录下的日志文件或控制台输出。
+- 💡 "影响所有人" 是系统性错误的特征，应与数据相关的偶发错误区分。
 
 ---
 
@@ -111,7 +154,7 @@
 | 文件 | 说明 |
 |------|------|
 | `backend/app/models/__init__.py` | `Payment` 模型新增 `receipt_snapshot` TEXT 列 |
-| `backend/app/__init__.py` | 注册 `payment.receipt_snapshot` 自动 DDL 迁移 |
+| `backend/app/__init__.py` | **关键：注册 `drug.monthly_sort_order` 自动 DDL 迁移（真实根因修复）** + 注册 `payment.receipt_snapshot` 自动 DDL 迁移 |
 | `backend/app/api/nurse.py` | `execute_visit` 新增快照生成逻辑；`get_visit_detail` 读取并返回快照 + 空安全修复；`mark_printed` 添加异常处理 |
 | `frontend/src/views/nurse/HistoryList.vue` | `openReceipt` 优先使用快照数据；`printReceipt` 错误提示增强 |
 | `run_prod.py` | 版本号更新 open0.0.12 → open0.0.13 |
@@ -145,3 +188,5 @@
 | 空安全保护（item.drug 为 None 场景） | ✅ 有兜底值 |
 | 快照优先逻辑（新记录） | ✅ 使用快照 |
 | 回退逻辑（旧记录无快照） | ✅ 使用实时数据 |
+| **真实根因修复验证**：curl GET /api/nurse/visits/157 | ✅ HTTP 200，正确返回数据 |
+| **打包后首次启动迁移验证**：自动执行 ALTER TABLE drug ADD COLUMN | ✅ 通过 |

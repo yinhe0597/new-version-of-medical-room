@@ -192,11 +192,12 @@ npm run dev
 
 ## 📋 更新日志
 
-### 🏷️ open0.0.13（2026-05-29）📝🔧
+### 🏷️ open0.0.13（2026-05-29）🐛📝🛡️
 
-**小票快照持久化 & 打印功能修复：**
+**小票打印 500 错误根因修复 & 小票快照持久化：**
+- 🐛 **【关键修复】`drug.monthly_sort_order` 缺少 DDL 迁移** — `Drug` 模型定义了 `monthly_sort_order` 字段（open0.0.12 药品排序功能），但 `_ensure_sqlite_column` 迁移注册遗漏，导致 SQLAlchemy `joinedload` 查询报 `sqlite3.OperationalError: no such column: drug_1.monthly_sort_order`，影响所有加载 `Drug` 关联的接口（**此为打印小票 500 错误的真实根因**）
 - 📝 **小票快照持久化**：支付执行时将小票数据（患者信息、诊断、药品明细、用法用量）以 JSON 快照保存至 `payment` 表，即使药品被删除也能正常查看和打印历史小票
-- 🔧 **空安全修复**：`GET /nurse/visits/<id>` 中对已删除药品 `item.drug` 为 None 的场景做 null 安全检查，提供兜底值
+- 🛡️ **空安全增强**：`GET /nurse/visits/<id>` 中对已删除药品 `item.drug` 为 None 的场景做 null 安全检查，提供兜底值
 - 🛡️ **标记打印接口增强**：`PUT /nurse/payments/<id>/print` 添加 try/except 异常处理
 - 💬 **前端错误提示**：打印标记失败时不再静默吞错误，改为 `ElMessage.warning` 提示用户
 
