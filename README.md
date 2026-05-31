@@ -10,7 +10,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.13-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.14-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -191,6 +191,15 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.14（2026-05-31）🔄
+
+**已撤销就诊记录"重新开方"功能：**
+- 🔄 **撤销处方重新开方**：医生端历史就诊记录中，已撤销（revoked）记录旁新增"重新开方"按钮，点击后载入原处方内容（药品、用法用量、诊断）到开方界面，医生可修改后重新提交，复用被撤销处方的药品明细，避免重复录入
+
+> 📝 详细变更：[开发日志-open0.0.14.md](docs/开发日志-open0.0.14.md)
+
+---
 
 ### 🏷️ open0.0.13（2026-05-29）🐛📝🛡️
 
@@ -441,7 +450,7 @@ npm run dev
 ## 📝 V2.0.0 关键用法速记（医生端）
 
 - **模板快捷填入**：在接诊页"主诉/体格检查/医生贴士"输入框末尾输入 `##`，弹出模板列表，点选即可插入。
-- **重新开方**：在"历史就诊记录"中，状态为"已驳回"的记录，操作列点击"重新开方"，会载入原处方草稿供修改并重新提交给护士审核。
+- **重新开方**：在"历史就诊记录"中，状态为"已驳回"或"已撤销"的记录，操作列点击"重新开方"，会载入原处方草稿供修改并重新提交给护士审核。
 
 ---
 

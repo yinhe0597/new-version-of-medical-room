@@ -684,7 +684,7 @@ const loadRejectedVisitAsDraft = async () => {
       })
     }
 
-    ElMessage.success('已载入被驳回处方，可重新修改后提交')
+    ElMessage.success('已载入历史处方，可重新修改后提交')
   } catch (error) {
     ElMessage.error(error.msg || '载入历史处方失败')
   }
