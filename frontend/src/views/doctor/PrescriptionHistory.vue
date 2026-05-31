@@ -47,7 +47,7 @@
               修改病历
             </el-button>
             <el-button
-              v-if="scope.row.status === 'rejected'"
+              v-if="scope.row.status === 'rejected' || scope.row.status === 'revoked'"
               size="small"
               type="warning"
               link
