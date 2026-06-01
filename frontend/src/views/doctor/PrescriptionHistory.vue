@@ -156,7 +156,8 @@
           <el-input v-model="supplementForm.chief_complaint" type="textarea" :rows="2" placeholder="请填写主诉"></el-input>
         </el-form-item>
         <el-form-item label="现病史">
-          <el-input v-model="supplementForm.present_illness" type="textarea" :rows="3" placeholder="请填写现病史"></el-input>
+          <el-input v-model="supplementForm.present_illness" type="textarea" :rows="3" placeholder="请填写现病史（输入##可调用模板）"
+            @input="onSuppTemplateInput('present_illness')"></el-input>
         </el-form-item>
         <el-form-item label="既往史（过敏史）">
           <el-input v-model="supplementForm.past_history" type="textarea" :rows="2" placeholder="请填写既往史"></el-input>
@@ -171,6 +172,30 @@
       <template #footer>
         <el-button @click="supplementDialogVisible = false" :disabled="supplementSubmitting">取消</el-button>
         <el-button type="primary" @click="submitSupplement" :loading="supplementSubmitting">保存</el-button>
+      </template>
+    </el-dialog>
+
+    <!-- 病历模板选择弹窗 -->
+    <el-dialog v-model="suppTemplateDialogVisible" title="选择现病史模板" width="700px">
+      <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 12px;">
+        <el-input v-model="suppTemplateKeyword" placeholder="搜索模板标题/内容" clearable
+          @keyup.enter="loadSuppTemplates" />
+        <el-button @click="loadSuppTemplates" :loading="suppTemplateLoading">查询</el-button>
+      </div>
+      <el-table :data="suppTemplateList" border stripe size="small" v-loading="suppTemplateLoading"
+        @row-click="applySuppTemplate">
+        <el-table-column prop="title" label="标题" width="200" />
+        <el-table-column label="内容">
+          <template #default="scope">
+            <div style="white-space: pre-wrap; word-break: break-word; max-height: 120px; overflow: hidden;">
+              {{ scope.row.content }}
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column prop="updated_at" label="更新时间" width="160" />
+      </el-table>
+      <template #footer>
+        <el-button @click="suppTemplateDialogVisible = false">关闭</el-button>
       </template>
     </el-dialog>
   </div>
@@ -234,6 +259,13 @@ const supplementForm = ref({
   physical_exam: '',
   doctor_advice: ''
 })
+
+// 病历模板选择
+const suppTemplateDialogVisible = ref(false)
+const suppTemplateLoading = ref(false)
+const suppTemplateList = ref([])
+const suppTemplateKeyword = ref('')
+const suppTemplateFieldKey = ref('')
 
 const fetchHistory = async () => {
   loading.value = true
@@ -406,6 +438,44 @@ const submitSupplement = async () => {
   } finally {
     supplementSubmitting.value = false
   }
+}
+
+const onSuppTemplateInput = (fieldKey) => {
+  if (suppTemplateDialogVisible.value) return
+  const value = String(supplementForm.value[fieldKey] || '')
+  if (!value.endsWith('##')) return
+  suppTemplateFieldKey.value = fieldKey
+  suppTemplateKeyword.value = ''
+  suppTemplateDialogVisible.value = true
+  loadSuppTemplates()
+}
+
+const loadSuppTemplates = async () => {
+  suppTemplateLoading.value = true
+  try {
+    const res = await request.get('/doctor/templates', {
+      params: {
+        category: 'present_illness',
+        q: suppTemplateKeyword.value.trim()
+      }
+    })
+    suppTemplateList.value = res.data || []
+  } catch (error) {
+    ElMessage.error(error.msg || '加载模板失败')
+  } finally {
+    suppTemplateLoading.value = false
+  }
+}
+
+const applySuppTemplate = (row) => {
+  const fieldKey = suppTemplateFieldKey.value
+  if (!fieldKey) return
+  const content = String((row && row.content) || '')
+  const value = String(supplementForm.value[fieldKey] || '')
+  const base = value.endsWith('##') ? value.slice(0, -2) : value
+  const prefix = base && !base.endsWith('\n') ? `${base}\n` : base
+  supplementForm.value[fieldKey] = `${prefix}${content}`
+  suppTemplateDialogVisible.value = false
 }
 
 const reopenPrescription = (row) => {
