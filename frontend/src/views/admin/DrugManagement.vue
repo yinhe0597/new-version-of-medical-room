@@ -118,6 +118,16 @@
             <el-radio :label="3">耗材</el-radio>
           </el-radio-group>
         </el-form-item>
+        <el-form-item label="存放位置">
+          <div style="display: flex; gap: 8px;">
+            <el-select v-model="storageLetter" placeholder="字母" clearable style="width: 80px;" @change="onStorageLetterChange">
+              <el-option v-for="l in locationLetters" :key="l" :label="l" :value="l" />
+            </el-select>
+            <el-select v-model="storageNumber" placeholder="数字" clearable :disabled="!storageLetter" style="width: 80px;" @change="onStorageNumberChange">
+              <el-option v-for="n in locationNumbers" :key="n" :label="String(n)" :value="n" />
+            </el-select>
+          </div>
+        </el-form-item>
         <el-form-item label="名称" prop="name">
           <el-input v-model="form.name" placeholder="如：阿莫西林 或 小换药"></el-input>
         </el-form-item>
@@ -292,10 +302,32 @@ const form = ref({
   variant_type: null,
   stock_group_code: null,
   unit_amount: null,
-  base_name: null
+  base_name: null,
+  storage_location: null
 })
 
 const isGroupedStock = computed(() => Boolean(form.value && form.value.stock_group_code))
+
+// 存放位置级联选择
+const locationLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
+const locationNumbers = Array.from({ length: 20 }, (_, i) => i + 1)
+const storageLetter = ref(null)
+const storageNumber = ref(null)
+
+const syncStorageLocation = () => {
+  if (storageLetter.value && storageNumber.value) {
+    form.value.storage_location = storageLetter.value + String(storageNumber.value).padStart(2, '0')
+  } else {
+    form.value.storage_location = null
+  }
+}
+
+const onStorageLetterChange = () => {
+  if (!storageLetter.value) storageNumber.value = null
+  syncStorageLocation()
+}
+
+const onStorageNumberChange = () => { syncStorageLocation() }
 
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -390,8 +422,11 @@ const openCreateDialog = () => {
     variant_type: null,
     stock_group_code: null,
     unit_amount: null,
-    base_name: null
+    base_name: null,
+    storage_location: null
   }
+  storageLetter.value = null
+  storageNumber.value = null
   dialogVisible.value = true
 }
 
@@ -408,7 +443,16 @@ const openEditDialog = (row) => {
     stock_group_code: null,
     unit_amount: null,
     base_name: null,
+    storage_location: null,
     ...row
+  }
+  const loc = row.storage_location
+  if (loc && /^[A-Z]\d{2}$/.test(loc)) {
+    storageLetter.value = loc[0]
+    storageNumber.value = parseInt(loc.slice(1), 10)
+  } else {
+    storageLetter.value = null
+    storageNumber.value = null
   }
   showCorrectionForm.value = false
   showInboundForm.value = false

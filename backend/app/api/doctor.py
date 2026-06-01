@@ -416,6 +416,7 @@ def search_drugs():
             (Drug.specification.contains(keyword))
         )
 
+    query = query.order_by(Drug.storage_location.asc().nullslast())
     drugs = query.limit(20).all()
     data = []
     for drug in drugs:
