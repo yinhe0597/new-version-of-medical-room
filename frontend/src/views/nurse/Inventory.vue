@@ -107,23 +107,6 @@
           <template #header>
             <div class="card-header">
               <span>月度库存对比报表</span>
-              <div style="display: flex; gap: 8px;">
-                <el-button
-                  v-if="!sortingMode"
-                  type="info"
-                  size="small"
-                  @click="enterSortMode"
-                  :disabled="monthlyData.length === 0"
-                >
-                  排序管理
-                </el-button>
-                <template v-if="sortingMode">
-                  <el-button type="primary" size="small" @click="saveSortOrder" :loading="savingSort">
-                    保存排序
-                  </el-button>
-                  <el-button size="small" @click="cancelSortMode">取消</el-button>
-                </template>
-              </div>
             </div>
           </template>
 
@@ -156,26 +139,6 @@
 
           <el-table :data="monthlyData" stripe style="width: 100%" v-loading="monthlyLoading" 
                     show-summary :summary-method="getMonthlySummaries">
-            <el-table-column v-if="sortingMode" label="排序" width="80">
-              <template #default="scope">
-                <div style="display: flex; gap: 4px;">
-                  <el-button 
-                    size="small" 
-                    :disabled="scope.$index === 0" 
-                    @click="moveRowUp(scope.$index)"
-                  >
-                    上移
-                  </el-button>
-                  <el-button 
-                    size="small" 
-                    :disabled="scope.$index === monthlyData.length - 1" 
-                    @click="moveRowDown(scope.$index)"
-                  >
-                    下移
-                  </el-button>
-                </div>
-              </template>
-            </el-table-column>
             <el-table-column type="index" label="序号" width="60" />
             <el-table-column prop="drug_name" label="名称" min-width="150" />
             <el-table-column label="类型" width="80">
@@ -363,10 +326,6 @@ const monthlyStartDate = ref('')
 const monthlyEndDate = ref('')
 const monthlyData = ref([])
 const monthlyLoading = ref(false)
-const sortingMode = ref(false)
-const savingSort = ref(false)
-let originalMonthlyData = [] // 保存原始排序用于取消时恢复
-
 // Smart Inventory
 const smartDialogVisible = ref(false)
 const smartResult = ref(null)
@@ -563,48 +522,6 @@ const fetchMonthlyReport = async () => {
   }
 }
 
-const enterSortMode = () => {
-  originalMonthlyData = [...monthlyData.value]
-  sortingMode.value = true
-}
-
-const cancelSortMode = () => {
-  monthlyData.value = originalMonthlyData
-  sortingMode.value = false
-}
-
-const moveRowUp = (index) => {
-  if (index <= 0) return
-  const arr = monthlyData.value
-  const temp = arr[index - 1]
-  arr[index - 1] = arr[index]
-  arr[index] = temp
-  monthlyData.value = [...arr]
-}
-
-const moveRowDown = (index) => {
-  const arr = monthlyData.value
-  if (index >= arr.length - 1) return
-  const temp = arr[index + 1]
-  arr[index + 1] = arr[index]
-  arr[index] = temp
-  monthlyData.value = [...arr]
-}
-
-const saveSortOrder = async () => {
-  savingSort.value = true
-  try {
-    const drugIds = monthlyData.value.map(row => row.drug_id)
-    await request.put('/nurse/drugs/sort-order', { order: drugIds })
-    ElMessage.success('排序已保存')
-    sortingMode.value = false
-  } catch (error) {
-    ElMessage.error(error.msg || '保存排序失败')
-  } finally {
-    savingSort.value = false
-  }
-}
-
 const exportMonthlyReport = () => {
   if (!monthlyStartDate.value || !monthlyEndDate.value) {
     ElMessage.warning('请选择日期范围')
@@ -629,14 +546,8 @@ const exportMonthlyReport = () => {
 
 // 合计行方法
 const getMonthlySummaries = ({ columns, data }) => {
-  const hasSortCol = sortingMode.value
   const sums = []
   columns.forEach((column, index) => {
-    // 排序管理列（第一个无 prop 列且排序模式激活时）跳过
-    if (hasSortCol && !column.property && index === 0) {
-      sums[index] = ''
-      return
-    }
     // 序号列（第一个无 prop 列）显示"合计"
     if (!column.property) {
       sums[index] = '合计'

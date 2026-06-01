@@ -471,7 +471,7 @@ def get_drugs():
     per_page = request.args.get('size', 20, type=int)
     keyword = request.args.get('keyword', '')
 
-    query = Drug.query.order_by(Drug.id.desc())
+    query = Drug.query.order_by(Drug.storage_location.asc().nullslast())
     if keyword:
         query = query.filter(Drug.name.contains(keyword))
 
@@ -497,7 +497,8 @@ def get_drugs():
             "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None,
             "variant_type": drug.variant_type,
             "stock_group_code": drug.stock_group_code,
-            "unit_amount": drug.unit_amount
+            "unit_amount": drug.unit_amount,
+            "storage_location": drug.storage_location
         })
 
     return jsonify({
@@ -542,6 +543,7 @@ def create_drug():
         batch_no=data.get('batch_no'),
         inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None,
         variant_type="consumable" if drug_type == 3 else None,
+        storage_location=data.get('storage_location'),
     )
     db.session.add(drug)
     db.session.commit()
@@ -605,6 +607,7 @@ def update_drug(id):
     if 'status' in data: drug.status = int(data['status'])
     if 'batch_no' in data: drug.batch_no = data['batch_no'] or None
     if 'inbound_at' in data: drug.inbound_at = datetime.fromisoformat(data['inbound_at']) if data['inbound_at'] else None
+    if 'storage_location' in data: drug.storage_location = data['storage_location'] or None
 
     db.session.commit()
 

@@ -662,7 +662,7 @@ def _compute_monthly_report(start_date_str, end_date_str):
     drugs = Drug.query.filter(
         Drug.status == 1,
         or_(Drug.type.in_([1, 3]), Drug.type.is_(None))
-    ).order_by(Drug.monthly_sort_order.asc().nullslast()).all()
+    ).order_by(Drug.storage_location.asc().nullslast()).all()
 
     if not drugs:
         return [], None
@@ -1626,6 +1626,7 @@ def list_drugs():
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('size', 20, type=int)
+    query = query.order_by(Drug.storage_location.asc().nullslast())
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     data = []
     for drug in pagination.items:
@@ -1645,7 +1646,8 @@ def list_drugs():
             "has_scattered": drug.has_scattered,
             "scattered_price": drug.scattered_price,
             "conversion_rate": drug.conversion_rate,
-            "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None
+            "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None,
+            "storage_location": drug.storage_location
         })
 
     return jsonify({
@@ -1756,25 +1758,6 @@ def get_my_history():
             "total": pagination.total
         }
     }), 200
-
-
-@bp.route('/nurse/drugs/sort-order', methods=['PUT'])
-@role_required(['nurse', 'admin'])
-def update_drug_sort_order():
-    """保存月度盘点药品排序顺序"""
-    req = request.get_json() or {}
-    order_list = req.get('order', [])
-
-    if not isinstance(order_list, list):
-        return jsonify({"msg": "order must be a list of drug_ids"}), 400
-
-    for idx, drug_id in enumerate(order_list):
-        drug = Drug.query.get(drug_id)
-        if drug:
-            drug.monthly_sort_order = idx
-
-    db.session.commit()
-    return jsonify({"msg": "排序已保存"}), 200
 
 
 @bp.route('/nurse/staff-list', methods=['GET'])
