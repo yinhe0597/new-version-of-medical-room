@@ -854,6 +854,7 @@ def _compute_monthly_report(start_date_str, end_date_str):
             "closing_stock": closing_stock,
             "inbound_amount": round(purchase_price * inbound, 2),
             "current_stock_amount": round(purchase_price * closing_stock, 2),
+            "storage_location": drug.storage_location,
         })
 
     return result, None
