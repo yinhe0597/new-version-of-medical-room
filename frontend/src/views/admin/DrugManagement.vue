@@ -122,13 +122,12 @@
           </el-radio-group>
         </el-form-item>
         <el-form-item label="存放位置">
-          <div style="display: flex; gap: 8px;">
+          <div style="display: flex; gap: 8px; align-items: center;">
             <el-select v-model="storageLetter" placeholder="字母" clearable style="width: 80px;" @change="onStorageLetterChange">
               <el-option v-for="l in locationLetters" :key="l" :label="l" :value="l" />
             </el-select>
-            <el-select v-model="storageNumber" placeholder="数字" clearable :disabled="!storageLetter" style="width: 80px;" @change="onStorageNumberChange">
-              <el-option v-for="n in locationNumbers" :key="n" :label="String(n)" :value="n" />
-            </el-select>
+            <span style="color: #909399;" v-if="storageLetter">+</span>
+            <el-input v-model="storageSuffix" placeholder="编号/备注（如1-2、散、库房）" clearable :disabled="!storageLetter" style="width: 200px;" @input="onStorageSuffixChange" />
           </div>
         </el-form-item>
         <el-form-item label="名称" prop="name">
@@ -313,24 +312,24 @@ const isGroupedStock = computed(() => Boolean(form.value && form.value.stock_gro
 
 // 存放位置级联选择
 const locationLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
-const locationNumbers = Array.from({ length: 20 }, (_, i) => i + 1)
 const storageLetter = ref(null)
-const storageNumber = ref(null)
+const storageSuffix = ref('')
 
 const syncStorageLocation = () => {
-  if (storageLetter.value && storageNumber.value) {
-    form.value.storage_location = storageLetter.value + String(storageNumber.value).padStart(2, '0')
+  const suffix = storageSuffix.value.trim()
+  if (storageLetter.value && suffix) {
+    form.value.storage_location = storageLetter.value + suffix
   } else {
     form.value.storage_location = null
   }
 }
 
 const onStorageLetterChange = () => {
-  if (!storageLetter.value) storageNumber.value = null
+  if (!storageLetter.value) storageSuffix.value = ''
   syncStorageLocation()
 }
 
-const onStorageNumberChange = () => { syncStorageLocation() }
+const onStorageSuffixChange = () => { syncStorageLocation() }
 
 const rules = {
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
@@ -429,7 +428,7 @@ const openCreateDialog = () => {
     storage_location: null
   }
   storageLetter.value = null
-  storageNumber.value = null
+  storageSuffix.value = ''
   dialogVisible.value = true
 }
 
@@ -450,12 +449,12 @@ const openEditDialog = (row) => {
     ...row
   }
   const loc = row.storage_location
-  if (loc && /^[A-Z]\d{2}$/.test(loc)) {
+  if (loc && /^[A-Z]/.test(loc)) {
     storageLetter.value = loc[0]
-    storageNumber.value = parseInt(loc.slice(1), 10)
+    storageSuffix.value = loc.slice(1)
   } else {
     storageLetter.value = null
-    storageNumber.value = null
+    storageSuffix.value = ''
   }
   showCorrectionForm.value = false
   showInboundForm.value = false
