@@ -173,3 +173,35 @@
 | 月度盘点报表按位置排序 | ✅ 同上 |
 | 旧月度排序管理功能已移除 | ✅ 前后端代码全部删除 |
 | git diff 统计 | ✅ 7 files, +58/-116 |
+
+---
+
+## 七、编译部署路径修复（2026-06-02 补充）
+
+### 问题描述
+
+编译输出目录 `yws20260601` 部署后，发现"修改病历现病史模板"和"药品存放位置"两项功能均未生效。经排查，源码和前端构建产物均正确无误。
+
+### 根因
+
+后端 `_get_dist_dir()` 函数在 `APP_ROOT` 下只查找 `dist/` 目录来服务前端文件，而编译组装时前端文件被复制到了 `frontend/` 目录。路径不匹配导致 Flask 完全不服务最新前端文件，浏览器展示的是旧缓存页面。
+
+```python
+# 修复前：仅检查 dist/
+d = os.path.join(app_root, 'dist')
+
+# 修复后：依次检查 dist/ 和 frontend/
+for candidate in ('dist', 'frontend'):
+    d = os.path.join(app_root, candidate)
+    if os.path.isdir(d):
+        return d
+```
+
+### 修复内容
+
+| 项目 | 说明 |
+|------|------|
+| 输出目录 | `yws20260601/frontend/` → `yws20260601/dist/` |
+| 后端代码 | `_get_dist_dir()` 兼容 `dist/` 和 `frontend/` 两种命名 |
+| EXE 重新打包 | 包含路径修复的新版 |
+| Git 提交 | `d384b0c` fix: _get_dist_dir 同时检查 dist/ 和 frontend/ 目录 |
