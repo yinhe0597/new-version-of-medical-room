@@ -140,6 +140,9 @@
           <el-table :data="monthlyData" stripe style="width: 100%" v-loading="monthlyLoading" 
                     show-summary :summary-method="getMonthlySummaries">
             <el-table-column type="index" label="序号" width="60" />
+            <el-table-column prop="storage_location" label="存放位置" width="90">
+              <template #default="scope">{{ scope.row.storage_location || '-' }}</template>
+            </el-table-column>
             <el-table-column prop="drug_name" label="名称" min-width="150" />
             <el-table-column label="类型" width="80">
               <template #default="scope">
