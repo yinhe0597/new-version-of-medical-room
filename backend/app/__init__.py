@@ -172,9 +172,11 @@ def create_app(config_class=None):
         # Fallback: relative to APP_ROOT (for onefile mode or dev)
         app_root = os.environ.get('APP_ROOT', '')
         if app_root:
-            d = os.path.join(app_root, 'dist')
-            if os.path.isdir(d):
-                return d
+            # 先尝试 dist/，再尝试 frontend/（兼容旧编译输出目录结构）
+            for candidate in ('dist', 'frontend'):
+                d = os.path.join(app_root, candidate)
+                if os.path.isdir(d):
+                    return d
         # Dev environment fallback
         return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist')
 
