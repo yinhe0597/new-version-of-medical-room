@@ -14,8 +14,8 @@
         <el-table-column prop="real_name" label="真实姓名" />
         <el-table-column prop="role" label="角色">
           <template #default="scope">
-            <el-tag :type="scope.row.role === 'doctor' ? 'success' : 'info'">
-              {{ scope.row.role === 'doctor' ? '医生' : '护士' }}
+            <el-tag :type="scope.row.role === 'doctor' ? 'success' : scope.row.role === 'nurse' ? 'info' : 'warning'">
+              {{ scope.row.role === 'doctor' ? '医生' : scope.row.role === 'nurse' ? '护士' : '财务' }}
             </el-tag>
           </template>
         </el-table-column>
@@ -43,6 +43,7 @@
           <el-radio-group v-model="form.role">
             <el-radio label="doctor">医生</el-radio>
             <el-radio label="nurse">护士</el-radio>
+            <el-radio label="finance">财务</el-radio>
           </el-radio-group>
         </el-form-item>
         <el-form-item label="登录账号" prop="username">
