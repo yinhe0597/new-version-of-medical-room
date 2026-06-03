@@ -124,7 +124,8 @@ const pagination = reactive({
 const roleMap = {
   admin: '管理员',
   doctor: '医生',
-  nurse: '护士'
+  nurse: '护士',
+  finance: '财务'
 }
 
 const actionTypeMap = {

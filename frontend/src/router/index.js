@@ -13,6 +13,7 @@ const resolveHomeByRole = role => {
   if (role === 'doctor') return '/doctor'
   if (role === 'nurse') return '/nurse'
   if (role === 'admin') return '/admin'
+  if (role === 'finance') return '/finance'
   return null
 }
 
@@ -159,6 +160,40 @@ const routes = [
         path: 'settings',
         name: 'SystemSettings',
         component: () => import('@/views/admin/SystemSettings.vue')
+      }
+    ]
+  },
+  {
+    path: '/finance',
+    name: 'FinanceDashboard',
+    component: () => import('@/views/finance/Dashboard.vue'),
+    meta: { role: 'finance' },
+    redirect: '/finance/dashboard',
+    children: [
+      {
+        path: 'dashboard',
+        name: 'FinanceHome',
+        component: () => import('@/views/finance/FinanceDashboard.vue')
+      },
+      {
+        path: 'statistics',
+        name: 'FinanceStatistics',
+        component: () => import('@/views/admin/Statistics.vue')
+      },
+      {
+        path: 'drug-outbound-report',
+        name: 'FinanceDrugOutboundReport',
+        component: () => import('@/views/admin/DrugOutboundReport.vue')
+      },
+      {
+        path: 'drugs',
+        name: 'FinanceDrugPriceView',
+        component: () => import('@/views/finance/DrugPriceView.vue')
+      },
+      {
+        path: 'operation-log',
+        name: 'FinanceOperationLog',
+        component: () => import('@/views/admin/OperationLog.vue')
       }
     ]
   }

@@ -465,7 +465,7 @@ def admin_get_visit_detail(visit_id):
     }), 200
 
 @bp.route('/admin/drugs', methods=['GET'])
-@role_required(['admin', 'nurse'])
+@role_required(['admin', 'nurse', 'finance'])
 def get_drugs():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('size', 20, type=int)
@@ -869,7 +869,7 @@ def import_drugs_xls():
         return jsonify({"msg": f"Import failed: {str(e)}"}), 500
 
 @bp.route('/admin/drugs/template', methods=['GET'])
-@role_required(['admin', 'nurse'])
+@role_required(['admin', 'nurse', 'finance'])
 def get_drug_template():
     si = io.BytesIO()
     si.write(b'\xef\xbb\xbf')
@@ -976,7 +976,7 @@ def smart_inventory():
         return jsonify({"msg": f"智能盘库失败: {str(e)}"}), 500
 
 @bp.route('/admin/statistics/revenue', methods=['GET'])
-@role_required(['admin', 'nurse'])
+@role_required(['admin', 'finance'])
 def get_revenue_stats():
     def parse_dt(value, is_end=False):
         if not value:
@@ -1143,7 +1143,7 @@ def get_revenue_stats():
 
 
 @bp.route('/admin/statistics/revenue/users', methods=['GET'])
-@role_required(['admin', 'nurse'])
+@role_required(['admin', 'finance'])
 def get_revenue_stats_users():
     users = User.query.filter(User.role.in_(["doctor", "nurse"])).order_by(User.role.asc(), User.real_name.asc()).all()
     doctors = []
@@ -1158,7 +1158,7 @@ def get_revenue_stats_users():
 
 
 @bp.route("/admin/statistics/revenue/export", methods=["GET"])
-@role_required(["admin", "nurse"])
+@role_required(['admin', 'finance'])
 def export_revenue_stats():
     from openpyxl import Workbook
 
@@ -1367,7 +1367,7 @@ def export_revenue_stats():
 
 
 @bp.route("/admin/statistics/drug-outbound", methods=["GET"])
-@role_required(["admin", "nurse"])
+@role_required(['admin', 'finance'])
 def get_drug_outbound_records():
     def parse_dt(value, is_end=False):
         if not value:
@@ -1520,7 +1520,7 @@ def get_drug_outbound_records():
 
 
 @bp.route("/admin/statistics/drug-outbound/export", methods=["GET"])
-@role_required(["admin", "nurse"])
+@role_required(['admin', 'finance'])
 def export_drug_outbound_records():
     from openpyxl import Workbook
 
@@ -1702,8 +1702,8 @@ def create_user():
     if User.query.filter_by(username=data['username']).first():
         return jsonify({"msg": "Username already exists"}), 400
 
-    if data['role'] not in ['doctor', 'nurse']:
-        return jsonify({"msg": "Invalid role"}), 400
+    if data['role'] not in ['doctor', 'nurse', 'finance']:
+        return jsonify({"msg": "角色无效，有效角色: doctor/nurse/finance"}), 400
 
     user = User(
         username=data['username'],
@@ -1733,7 +1733,7 @@ def update_user(id):
     if 'real_name' in data:
         user.real_name = data['real_name']
 
-    if 'role' in data and data['role'] in ['doctor', 'nurse']:
+    if 'role' in data and data['role'] in ['doctor', 'nurse', 'finance']:
         user.role = data['role']
 
     if data.get('password'):
@@ -1754,7 +1754,7 @@ def delete_user(id):
     return jsonify({"msg": "User deleted successfully"}), 200
 
 @bp.route('/admin/operation-logs', methods=['GET'])
-@role_required('admin')
+@role_required(['admin', 'finance'])
 def get_operation_logs():
     """获取运营日志列表"""
     page = request.args.get('page', 1, type=int)
