@@ -1,8 +1,15 @@
 <div align="center">
 
+[![中文](https://img.shields.io/badge/Lang-中文-red?style=for-the-badge)](README.md)
+[![English](https://img.shields.io/badge/Lang-English-blue?style=for-the-badge)](README.en.md)
+
+---
+
 # 🏥 校医务室诊疗管理系统
 
 **Medical Room Management System**
+
+---
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![Flask](https://img.shields.io/badge/Backend-Flask-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com)
