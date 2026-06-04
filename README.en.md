@@ -62,6 +62,9 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 
 ## 📋 Feature Overview
 
+<details>
+<summary>Click to expand full feature list</summary>
+
 | Module | Feature | Description |
 |:---:|------|------|
 | 🩺 **Doctor** | Smart Consultation | Quick/full consultation modes; `##` medical history template shortcut |
@@ -87,6 +90,8 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 | 📊 **Admin** | Operation Logs | Full audit trail for all system operations |
 | 👤 **System** | Role Permissions | 4 independent interfaces with role isolation |
 | 🔧 **System** | Smooth Upgrade | Auto database migration, zero data loss |
+
+</details>
 
 ---
 
