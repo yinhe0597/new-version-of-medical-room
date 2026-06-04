@@ -113,7 +113,9 @@
       <el-table :data="stats.details" stripe style="width: 100%" height="400">
         <el-table-column prop="date" label="时间" width="170" />
         <el-table-column prop="visit_id" label="就诊ID" width="90" />
-        <el-table-column prop="patient_name" label="患者" width="120" />
+        <el-table-column label="患者" width="120">
+          <template #default="scope">{{ maskName(scope.row.patient_name) }}</template>
+        </el-table-column>
         <el-table-column prop="diagnosis" label="诊断" min-width="200" show-overflow-tooltip />
         <el-table-column prop="doctor_name" label="接诊医生" width="110" />
         <el-table-column prop="nurse_name" label="开药护士" width="110" />
@@ -149,6 +151,16 @@ import request from '@/api/request'
 import { Download } from '@element-plus/icons-vue'
 import dayjs from 'dayjs'
 import { ElMessage } from 'element-plus'
+import { useUserStore } from '@/store/user'
+
+const userStore = useUserStore()
+const isFinance = computed(() => userStore.userInfo?.role === 'finance')
+
+const maskName = (name) => {
+  if (!name || !isFinance.value) return name || '-'
+  if (name.length <= 1) return name
+  return name[0] + '*'.repeat(name.length - 1)
+}
 
 const statsType = ref('daily')
 const timeRange = ref([

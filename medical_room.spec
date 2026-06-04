@@ -23,6 +23,7 @@ a = Analysis(
         'backend.app.api.doctor',
         'backend.app.api.nurse',
         'backend.app.api.admin',
+        'backend.app.api.finance',
         'backend.app.models',
         'backend.app.utils',
         'backend.app.utils.decorators',

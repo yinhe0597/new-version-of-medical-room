@@ -151,6 +151,11 @@ const routes = [
         component: () => import('@/views/admin/DrugOutboundReport.vue')
       },
       {
+        path: 'finance-dashboard',
+        name: 'AdminFinanceDashboard',
+        component: () => import('@/views/finance/FinanceDashboard.vue')
+      },
+      {
         path: 'operation-log',
         name: 'OperationLog',
         component: () => import('@/views/admin/OperationLog.vue'),
@@ -189,11 +194,6 @@ const routes = [
         path: 'drugs',
         name: 'FinanceDrugPriceView',
         component: () => import('@/views/finance/DrugPriceView.vue')
-      },
-      {
-        path: 'operation-log',
-        name: 'FinanceOperationLog',
-        component: () => import('@/views/admin/OperationLog.vue')
       }
     ]
   }

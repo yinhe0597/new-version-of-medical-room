@@ -27,6 +27,19 @@ def _check_upload_size(file_storage):
         return False
     return True
 
+
+def _mask_patient_name(name):
+    """对财务角色脱敏患者姓名"""
+    try:
+        current_user_id = get_jwt_identity()
+        user = User.query.get(current_user_id)
+        if user and user.role == 'finance':
+            if name and len(name) > 1:
+                return name[0] + '*' * (len(name) - 1)
+    except Exception:
+        pass
+    return name or ''
+
 def _name_pinyin_parts(text):
     if not isinstance(text, str) or not text:
         return "", ""
@@ -1323,7 +1336,7 @@ def export_revenue_stats():
             [
                 safe_text((p.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else ""),
                 v.id,
-                safe_text(v.patient.name if v.patient else ""),
+                safe_text(_mask_patient_name(v.patient.name if v.patient else "")),
                 safe_text(v.patient.student_id if v.patient else ""),
                 safe_text(v.doctor.real_name if v.doctor else ""),
                 safe_text(p.nurse.real_name if getattr(p, "nurse", None) else ""),
@@ -1642,7 +1655,7 @@ def export_drug_outbound_records():
         ws.append([
             safe_text((r.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else ""),
             r.visit_id,
-            safe_text(r.patient_name),
+            safe_text(_mask_patient_name(r.patient_name)),
             safe_text(r.student_id),
             safe_text(r.doctor_name),
             safe_text(r.nurse_name),
@@ -1754,7 +1767,7 @@ def delete_user(id):
     return jsonify({"msg": "User deleted successfully"}), 200
 
 @bp.route('/admin/operation-logs', methods=['GET'])
-@role_required(['admin', 'finance'])
+@role_required(['admin'])
 def get_operation_logs():
     """获取运营日志列表"""
     page = request.args.get('page', 1, type=int)
