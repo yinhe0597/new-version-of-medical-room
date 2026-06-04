@@ -25,6 +25,10 @@
           <el-icon><DataLine /></el-icon>
           <span>统计报表</span>
         </el-menu-item>
+        <el-menu-item index="/admin/finance-dashboard">
+          <el-icon><Coin /></el-icon>
+          <span>财务看板</span>
+        </el-menu-item>
         <el-menu-item index="/admin/drug-outbound-report">
           <el-icon><DataLine /></el-icon>
           <span>药品出库报表</span>
@@ -59,7 +63,7 @@
 import { computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { FirstAidKit, DataLine, Setting, User, Avatar, Document } from '@element-plus/icons-vue'
+import { FirstAidKit, DataLine, Setting, User, Avatar, Document, Coin } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 const router = useRouter()
