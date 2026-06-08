@@ -34,7 +34,7 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="包装" width="90">
+        <el-table-column label="包装" width="90" v-if="!isNurse">
           <template #default="scope">
             <el-tag v-if="scope.row.variant_type === 'pack'">整装</el-tag>
             <el-tag v-else-if="scope.row.variant_type === 'retail'" type="warning">零散</el-tag>
@@ -54,7 +54,7 @@
             ¥ {{ scope.row.price.toFixed(2) }}
           </template>
         </el-table-column>
-        <el-table-column prop="scattered_price" label="零卖单价" width="80">
+        <el-table-column prop="scattered_price" label="零卖单价" width="80" v-if="!isNurse">
           <template #default="scope">
             {{ scope.row.has_scattered ? '¥ ' + scope.row.scattered_price.toFixed(4) : '-' }}
           </template>
@@ -236,6 +236,10 @@ import { ref, onMounted, computed, watch } from 'vue'
 import request from '@/api/request'
 import { Plus } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { useUserStore } from '@/store/user'
+
+const userStore = useUserStore()
+const isNurse = computed(() => userStore.userInfo?.role === 'nurse')
 
 const keyword = ref('')
 const drugList = ref([])
