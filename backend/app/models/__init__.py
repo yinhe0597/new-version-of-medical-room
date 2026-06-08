@@ -90,6 +90,7 @@ class Drug(db.Model):
     unit_amount = db.Column(db.Integer, nullable=True)
     base_name = db.Column(db.String(128), nullable=True)
     storage_location = db.Column(db.String(10), nullable=True)
+    expiry_date = db.Column(db.Date, nullable=True)  # 有效期
 
     def __repr__(self):
         return f'<Drug/Item {self.name}>'

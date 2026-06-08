@@ -65,6 +65,21 @@
           </template>
         </el-table-column>
         <el-table-column prop="stock" label="库存" width="80" />
+        <el-table-column label="有效期" width="120">
+          <template #default="scope">
+            <template v-if="scope.row.expiry_date">
+              <el-tag
+                :type="getExpiryTagType(scope.row.expiry_date)"
+                size="small"
+              >
+                {{ scope.row.expiry_date }}
+                <span v-if="getExpiryDays(scope.row.expiry_date) < 0" style="margin-left: 4px; font-size: 11px;">已过期</span>
+                <span v-else-if="getExpiryDays(scope.row.expiry_date) <= 30" style="margin-left: 4px; font-size: 11px;">{{ getExpiryDays(scope.row.expiry_date) }}天</span>
+              </el-tag>
+            </template>
+            <span v-else style="color: #909399;">—</span>
+          </template>
+        </el-table-column>
         <el-table-column prop="status" label="状态" width="100">
           <template #default="scope">
             <el-tag :type="scope.row.status === 1 ? 'success' : 'info'">
@@ -156,6 +171,16 @@
         </el-form-item>
         <el-form-item :label="isEdit ? '现有库存' : '初始库存'" prop="stock" v-if="form.type === 1 || form.type === 3">
           <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="isEdit || isGroupedStock" />
+        </el-form-item>
+        <el-form-item label="有效期" v-if="form.type === 1">
+          <el-date-picker
+            v-model="form.expiry_date"
+            type="date"
+            placeholder="选择有效期"
+            value-format="YYYY-MM-DD"
+            :disabled-date="(d) => d < new Date(new Date().setHours(0,0,0,0))"
+            clearable
+          />
         </el-form-item>
 
         <!-- 库存操作区域（仅编辑模式） -->
@@ -305,10 +330,28 @@ const form = ref({
   stock_group_code: null,
   unit_amount: null,
   base_name: null,
-  storage_location: null
+  storage_location: null,
+  expiry_date: null
 })
 
 const isGroupedStock = computed(() => Boolean(form.value && form.value.stock_group_code))
+
+// 有效期计算工具
+const getExpiryDays = (expiryDate) => {
+  if (!expiryDate) return null
+  const today = new Date()
+  today.setHours(0, 0, 0, 0)
+  const expiry = new Date(expiryDate)
+  return Math.ceil((expiry - today) / (1000 * 60 * 60 * 24))
+}
+
+const getExpiryTagType = (expiryDate) => {
+  const days = getExpiryDays(expiryDate)
+  if (days === null) return 'info'
+  if (days < 0) return 'danger'      // 已过期
+  if (days <= 30) return 'warning'   // 30天内到期
+  return 'success'                   // 正常
+}
 
 // 存放位置级联选择
 const locationLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
@@ -425,7 +468,8 @@ const openCreateDialog = () => {
     stock_group_code: null,
     unit_amount: null,
     base_name: null,
-    storage_location: null
+    storage_location: null,
+    expiry_date: null
   }
   storageLetter.value = null
   storageSuffix.value = ''
@@ -446,6 +490,7 @@ const openEditDialog = (row) => {
     unit_amount: null,
     base_name: null,
     storage_location: null,
+    expiry_date: null,
     ...row
   }
   const loc = row.storage_location
