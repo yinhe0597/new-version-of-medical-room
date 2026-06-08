@@ -177,6 +177,7 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 - ⚠️ **Smart Inventory Expiry Alerts**: New "expiry threshold days" input (1-365), returns soon-to-expire and expired drugs sorted by remaining days
 - 🏷️ **Expiry Status Tags**: Three-color tags in drug list — expired (red), expiring within 30 days (yellow), normal (green)
 - 👩‍⚕️ **Nurse UI Cleanup**: Hidden "Packaging" and "Scattered Price" columns in nurse drug management
+- 📦 **Smart Inventory Category Filter**: New checkboxes for "Stock Warning" and "Expiry Warning" categories — filter individually or combined, unchecking hides corresponding parameters and results
 - 📖 **Bilingual README**: Added `README.en.md` with language toggle badges
 - 📋 **Feature Table Collapsed**: Feature overview now uses `<details>` tag, collapsed by default
 
