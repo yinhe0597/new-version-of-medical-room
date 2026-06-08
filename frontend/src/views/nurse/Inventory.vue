@@ -208,31 +208,48 @@
         destroy-on-close
       >
         <!-- 筛选控制区域 -->
-        <div style="margin-bottom: 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 16px;">
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="white-space: nowrap; font-size: 14px;">库存预警阈值：</span>
-            <el-input-number 
-              v-model="smartThreshold" 
-              :min="1" 
-              :max="9999" 
-              size="default"
-              style="width: 150px;"
-            />
+        <div style="margin-bottom: 16px;">
+          <!-- 筛选类目勾选 -->
+          <div style="margin-bottom: 12px; padding: 10px 14px; background: #f5f7fa; border-radius: 6px;">
+            <span style="font-size: 14px; font-weight: 500; margin-right: 16px;">筛选类目：</span>
+            <el-checkbox v-model="showStockWarnings" @change="onFilterCategoryChange">
+              <span style="font-weight: 500;">📦 库存预警</span>
+            </el-checkbox>
+            <el-checkbox v-model="showExpiryWarnings" @change="onFilterCategoryChange" style="margin-left: 20px;">
+              <span style="font-weight: 500;">⚠️ 有效期预警</span>
+            </el-checkbox>
           </div>
-          <div style="display: flex; align-items: center; gap: 8px;">
-            <span style="white-space: nowrap; font-size: 14px;">有效期预警天数：</span>
-            <el-input-number
-              v-model="smartExpiryThreshold"
-              :min="1"
-              :max="365"
-              size="default"
-              style="width: 120px;"
-            />
+          <!-- 库存预警参数 -->
+          <div v-if="showStockWarnings" style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="white-space: nowrap; font-size: 14px;">库存阈值：</span>
+              <el-input-number 
+                v-model="smartThreshold" 
+                :min="1" 
+                :max="9999" 
+                size="default"
+                style="width: 140px;"
+              />
+            </div>
+            <el-checkbox v-model="smartScatteredOnly">仅显示含“散”类目</el-checkbox>
           </div>
-          <el-checkbox v-model="smartScatteredOnly">仅显示含“散”类目</el-checkbox>
-          <el-button type="primary" size="default" @click="handleSmartInventory">
+          <!-- 有效期预警参数 -->
+          <div v-if="showExpiryWarnings" style="display: flex; flex-wrap: wrap; align-items: center; gap: 16px; margin-bottom: 8px;">
+            <div style="display: flex; align-items: center; gap: 8px;">
+              <span style="white-space: nowrap; font-size: 14px;">有效期预警天数：</span>
+              <el-input-number
+                v-model="smartExpiryThreshold"
+                :min="1"
+                :max="365"
+                size="default"
+                style="width: 120px;"
+              />
+            </div>
+          </div>
+          <el-button type="primary" size="default" @click="handleSmartInventory" :disabled="!showStockWarnings && !showExpiryWarnings">
             重新筛选
           </el-button>
+          <span v-if="!showStockWarnings && !showExpiryWarnings" style="margin-left: 8px; color: #E6A23C; font-size: 13px;">请至少勾选一个筛选类目</span>
         </div>
       
         <div v-if="smartResult">
@@ -244,55 +261,59 @@
             style="margin-bottom: 16px"
           />
       
-          <h3 style="margin: 0 0 12px 0; font-size: 15px;">库存预警清单 (库存 &lt; {{ smartThreshold }})</h3>
-          <el-table :data="smartResult.warnings" border stripe size="small" max-height="250" empty-text="无符合条件的预警药品">
-            <el-table-column prop="name" label="药品名称" min-width="150" />
-            <el-table-column prop="specification" label="规格" width="120" />
-            <el-table-column prop="stock" label="当前库存" width="100" align="center">
-              <template #default="scope">
-                <span style="color: #f56c6c; font-weight: bold">{{ scope.row.stock }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div style="margin: 4px 0 16px; color: #909399; font-size: 13px;">
-            共 {{ smartResult.warnings.length }} 种药品库存低于预警值
+          <div v-if="showStockWarnings">
+            <h3 style="margin: 0 0 12px 0; font-size: 15px;">📦 库存预警清单 (库存 &lt; {{ smartThreshold }})</h3>
+            <el-table :data="smartResult.warnings" border stripe size="small" max-height="250" empty-text="无符合条件的预警药品">
+              <el-table-column prop="name" label="药品名称" min-width="150" />
+              <el-table-column prop="specification" label="规格" width="120" />
+              <el-table-column prop="stock" label="当前库存" width="100" align="center">
+                <template #default="scope">
+                  <span style="color: #f56c6c; font-weight: bold">{{ scope.row.stock }}</span>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin: 4px 0 16px; color: #909399; font-size: 13px;">
+              共 {{ smartResult.warnings.length }} 种药品库存低于预警值
+            </div>
           </div>
       
-          <h3 style="margin: 0 0 12px 0; font-size: 15px; color: #E6A23C;">⚠️ 有效期预警清单 ({{ smartExpiryThreshold }} 天内到期)</h3>
-          <el-table
-            :data="smartResult.expiry_warnings"
-            border
-            stripe
-            size="small"
-            max-height="300"
-            empty-text="无有效期预警药品"
-            :row-class-name="({row}) => row.is_expired ? 'expired-row' : ''"
-          >
-            <el-table-column prop="name" label="药品名称" min-width="140" />
-            <el-table-column prop="specification" label="规格" width="110" />
-            <el-table-column label="有效期" width="120">
-              <template #default="scope">{{ scope.row.expiry_date }}</template>
-            </el-table-column>
-            <el-table-column label="剩余天数" width="110" align="center">
-              <template #default="scope">
-                <el-tag v-if="scope.row.is_expired" type="danger" size="small">已过期 {{ Math.abs(scope.row.days_remaining) }} 天</el-tag>
-                <el-tag v-else-if="scope.row.days_remaining === 0" type="danger" size="small">今天到期</el-tag>
-                <el-tag v-else-if="scope.row.days_remaining <= 7" type="danger" size="small">{{ scope.row.days_remaining }} 天</el-tag>
-                <el-tag v-else type="warning" size="small">{{ scope.row.days_remaining }} 天</el-tag>
-              </template>
-            </el-table-column>
-            <el-table-column prop="stock" label="库存" width="80" align="center" />
-            <el-table-column label="状态" width="90" align="center">
-              <template #default="scope">
-                <el-tag v-if="scope.row.is_expired" type="danger" size="small">已过期</el-tag>
-                <el-tag v-else-if="scope.row.days_remaining <= 7" type="danger" size="small">紧急</el-tag>
-                <el-tag v-else-if="scope.row.days_remaining <= 30" type="warning" size="small">注意</el-tag>
-                <el-tag v-else type="info" size="small">正常</el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-          <div style="margin-top: 4px; color: #909399; font-size: 13px;">
-            共 {{ (smartResult.expiry_warnings || []).length }} 种药品在 {{ smartExpiryThreshold }} 天内到期或已过期
+          <div v-if="showExpiryWarnings">
+            <h3 style="margin: 0 0 12px 0; font-size: 15px; color: #E6A23C;">⚠️ 有效期预警清单 ({{ smartExpiryThreshold }} 天内到期)</h3>
+            <el-table
+              :data="smartResult.expiry_warnings"
+              border
+              stripe
+              size="small"
+              max-height="300"
+              empty-text="无有效期预警药品"
+              :row-class-name="({row}) => row.is_expired ? 'expired-row' : ''"
+            >
+              <el-table-column prop="name" label="药品名称" min-width="140" />
+              <el-table-column prop="specification" label="规格" width="110" />
+              <el-table-column label="有效期" width="120">
+                <template #default="scope">{{ scope.row.expiry_date }}</template>
+              </el-table-column>
+              <el-table-column label="剩余天数" width="110" align="center">
+                <template #default="scope">
+                  <el-tag v-if="scope.row.is_expired" type="danger" size="small">已过期 {{ Math.abs(scope.row.days_remaining) }} 天</el-tag>
+                  <el-tag v-else-if="scope.row.days_remaining === 0" type="danger" size="small">今天到期</el-tag>
+                  <el-tag v-else-if="scope.row.days_remaining <= 7" type="danger" size="small">{{ scope.row.days_remaining }} 天</el-tag>
+                  <el-tag v-else type="warning" size="small">{{ scope.row.days_remaining }} 天</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column prop="stock" label="库存" width="80" align="center" />
+              <el-table-column label="状态" width="90" align="center">
+                <template #default="scope">
+                  <el-tag v-if="scope.row.is_expired" type="danger" size="small">已过期</el-tag>
+                  <el-tag v-else-if="scope.row.days_remaining <= 7" type="danger" size="small">紧急</el-tag>
+                  <el-tag v-else-if="scope.row.days_remaining <= 30" type="warning" size="small">注意</el-tag>
+                  <el-tag v-else type="info" size="small">正常</el-tag>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div style="margin-top: 4px; color: #909399; font-size: 13px;">
+              共 {{ (smartResult.expiry_warnings || []).length }} 种药品在 {{ smartExpiryThreshold }} 天内到期或已过期
+            </div>
           </div>
         </div>
         <template #footer>
@@ -382,6 +403,12 @@ const smartResult = ref(null)
 const smartThreshold = ref(30)
 const smartScatteredOnly = ref(false)
 const smartExpiryThreshold = ref(30)
+const showStockWarnings = ref(true)
+const showExpiryWarnings = ref(true)
+
+const onFilterCategoryChange = () => {
+  // 确保至少勾选一项时自动触发筛选
+}
 
 // Dialog
 const dialogVisible = ref(false)
