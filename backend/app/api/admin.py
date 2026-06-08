@@ -511,7 +511,8 @@ def get_drugs():
             "variant_type": drug.variant_type,
             "stock_group_code": drug.stock_group_code,
             "unit_amount": drug.unit_amount,
-            "storage_location": drug.storage_location
+            "storage_location": drug.storage_location,
+            "expiry_date": drug.expiry_date.isoformat() if drug.expiry_date else None
         })
 
     return jsonify({
@@ -540,6 +541,16 @@ def create_drug():
         if field not in data:
             return jsonify({"msg": f"Missing required field: {field}"}), 400
 
+    # 有效期验证
+    expiry_val = None
+    if data.get('expiry_date'):
+        try:
+            expiry_val = date.fromisoformat(data['expiry_date'])
+            if expiry_val < date.today():
+                return jsonify({"msg": "有效期不能早于当前日期"}), 400
+        except ValueError:
+            return jsonify({"msg": "有效期格式错误，请使用 YYYY-MM-DD 格式"}), 400
+
     drug = Drug(
         name=data['name'],
         base_name=data['name'],
@@ -557,6 +568,7 @@ def create_drug():
         inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None,
         variant_type="consumable" if drug_type == 3 else None,
         storage_location=data.get('storage_location'),
+        expiry_date=expiry_val,
     )
     db.session.add(drug)
     db.session.commit()
@@ -621,6 +633,17 @@ def update_drug(id):
     if 'batch_no' in data: drug.batch_no = data['batch_no'] or None
     if 'inbound_at' in data: drug.inbound_at = datetime.fromisoformat(data['inbound_at']) if data['inbound_at'] else None
     if 'storage_location' in data: drug.storage_location = data['storage_location'] or None
+    if 'expiry_date' in data:
+        if data['expiry_date']:
+            try:
+                new_expiry = date.fromisoformat(data['expiry_date'])
+                if new_expiry < date.today():
+                    return jsonify({"msg": "有效期不能早于当前日期"}), 400
+                drug.expiry_date = new_expiry
+            except ValueError:
+                return jsonify({"msg": "有效期格式错误，请使用 YYYY-MM-DD 格式"}), 400
+        else:
+            drug.expiry_date = None
 
     db.session.commit()
 
@@ -948,13 +971,12 @@ def smart_inventory():
 
         db.session.commit()
 
+        # 库存预警药品
         query = Drug.query.filter(
             Drug.type.in_([1, 3]),
             Drug.status == 1,
             Drug.stock < threshold
         )
-
-        # 如果勾选了"散"筛选，只显示名称或规格中含有"散"字的药品
         if scattered_only:
             query = query.filter(
                 db.or_(
@@ -962,25 +984,42 @@ def smart_inventory():
                     Drug.specification.like('%散%')
                 )
             )
-
         low_stock_drugs = query.order_by(Drug.stock.asc()).all()
-
-        warnings = []
-        for d in low_stock_drugs:
-            warnings.append({
+        warnings = [{"id": d.id, "name": d.name, "specification": d.specification, "stock": d.stock} for d in low_stock_drugs]
+        
+        # 有效期预警药品（阈值天数内到期）
+        expiry_threshold = int(data.get('expiry_threshold', 30))
+        today = date.today()
+        warn_date = today + timedelta(days=expiry_threshold)
+        expiry_query = Drug.query.filter(
+            Drug.type.in_([1, 3]),
+            Drug.status == 1,
+            Drug.expiry_date != None,
+            Drug.expiry_date <= warn_date
+        )
+        expiry_drugs = expiry_query.order_by(Drug.expiry_date.asc()).all()
+        expiry_warnings = []
+        for d in expiry_drugs:
+            days_remaining = (d.expiry_date - today).days
+            expiry_warnings.append({
                 "id": d.id,
                 "name": d.name,
                 "specification": d.specification,
-                "stock": d.stock
+                "expiry_date": d.expiry_date.isoformat(),
+                "days_remaining": days_remaining,
+                "stock": d.stock,
+                "is_expired": days_remaining < 0
             })
-
+        
         return jsonify({
             "msg": "盘库完成",
             "data": {
                 "merged_groups": total_merged,
                 "deleted_duplicates": total_deleted,
                 "warnings": warnings,
-                "threshold": threshold
+                "threshold": threshold,
+                "expiry_warnings": expiry_warnings,
+                "expiry_threshold": expiry_threshold
             }
         }), 200
 

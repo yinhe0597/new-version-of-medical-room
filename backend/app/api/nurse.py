@@ -31,7 +31,7 @@ from backend.app.services.drug_stock import (
     validate_pack_spec,
     validate_prices,
 )
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, date, timezone, timedelta
 from sqlalchemy import or_, func
 import re
 import math
@@ -1648,7 +1648,8 @@ def list_drugs():
             "scattered_price": drug.scattered_price,
             "conversion_rate": drug.conversion_rate,
             "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None,
-            "storage_location": drug.storage_location
+            "storage_location": drug.storage_location,
+            "expiry_date": drug.expiry_date.isoformat() if drug.expiry_date else None
         })
 
     return jsonify({

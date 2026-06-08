@@ -116,6 +116,7 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "drug", "unit_amount", "INTEGER")
     _ensure_sqlite_column(app, "drug", "base_name", "VARCHAR(128)")
     _ensure_sqlite_column(app, "drug", "storage_location", "VARCHAR(10)")
+    _ensure_sqlite_column(app, "drug", "expiry_date", "DATE")
 
     # payment 表新增列
     _ensure_sqlite_column(app, "payment", "receipt_printed", "BOOLEAN DEFAULT 0")
