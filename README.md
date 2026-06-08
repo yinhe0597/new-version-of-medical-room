@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.14-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.15-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -91,7 +91,7 @@
 | 💰 **财务端** | 药品出库报表 | 复用管理员端出库报表，支持日期/医生/护士/关键字筛选 |
 | 💰 **财务端** | 药品价格查看（只读） | 查看药品购进价、零售价、散装价，无增删改权限 |
 | 📊 **管理端** | 统计报表 | 营收统计（药品/诊疗/耗材三路拆分）、药品消耗、Excel 导出 |
-| 📊 **管理端** | 药品管理 | 药品/诊疗/耗材三类物资的增删改查、停用管理 |
+| 📊 **管理端** | 药品管理 | 药品/诊疗/耗材三类物资的增删改查、停用管理、有效期管理 |
 | 📊 **管理端** | 人员档案 | 学生/教职工/临时人员增删改查、批量导入、就诊历史查看 |
 | 📊 **管理端** | 运营日志 | 全系统操作追溯，病历修改/药品变更全记录 |
 | 👤 **系统** | 多角色权限 | 医生/护士/管理员/财务四端独立界面与权限隔离 |
@@ -207,6 +207,21 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.15（2026-06-08）🗓️⚠️👩‍⚕️
+
+**药品有效期管理 & 智能盘库过期预警 & 护士端界面优化：**
+- 🗓️ **药品有效期管理**：Drug 模型新增 `expiry_date` 字段，药品管理界面新增有效期日期选择器，入库时自动验证不能早于当前日期
+- ⚠️ **智能盘库过期预警**：智能盘库弹窗新增"有效期预警天数"输入（1-365天），返回即将过期和已过期的药品清单（含药品名、规格、有效期、剩余天数、库存），按剩余天数升序排列
+- 🏷️ **前端有效期标识**：药品列表有效期三色标签 — 已过期（红）、30天内到期（黄）、正常（绿），过期药品显示"已过期"标记
+- 👩‍⚕️ **护士端界面精简**：护士端药品管理隐藏"包装"和"零卖单价"列，减少无关信息干扰
+- 📖 **README中英切换**：新增 `README.en.md` 英文版，顶部添加语言切换 badge
+- 📋 **功能总览折叠**：功能总览表格使用 `<details>` 标签默认折叠，页面更简洁
+- 📝 **编译部署文档**：新增编译打包防遗漏检查清单
+
+> 📝 详细变更：[开发日志-open0.0.15.md](docs/开发日志-open0.0.15.md)
+
+---
 
 ### 🏷️ open0.0.14（2026-06-03）🔄📝📦🔧💰🛡️
 

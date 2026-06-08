@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.14-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.15-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -85,7 +85,7 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 | 💰 **Finance** | Drug Outbound | Outbound records with date/doctor/keyword filter |
 | 💰 **Finance** | Drug Prices (Read-only) | View prices without edit permissions |
 | 📊 **Admin** | Statistics & Reports | Revenue split by drugs/services/consumables, Excel export |
-| 📊 **Admin** | Drug Management | Full CRUD for drugs/services/consumables |
+| 📊 **Admin** | Drug Management | Full CRUD for drugs/services/consumables, expiry date management |
 | 📊 **Admin** | Patient Records | Student/employee/temporary personnel management |
 | 📊 **Admin** | Operation Logs | Full audit trail for all system operations |
 | 👤 **System** | Role Permissions | 4 independent interfaces with role isolation |
@@ -170,6 +170,19 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 ---
 
 ## 📋 Changelog
+
+### 🏷️ open0.0.15 (2026-06-08) 🗓️⚠️👩‍⚕️
+
+- 🗓️ **Drug Expiry Management**: New `expiry_date` field on Drug model, date picker in management UI, validation prevents past dates
+- ⚠️ **Smart Inventory Expiry Alerts**: New "expiry threshold days" input (1-365), returns soon-to-expire and expired drugs sorted by remaining days
+- 🏷️ **Expiry Status Tags**: Three-color tags in drug list — expired (red), expiring within 30 days (yellow), normal (green)
+- 👩‍⚕️ **Nurse UI Cleanup**: Hidden "Packaging" and "Scattered Price" columns in nurse drug management
+- 📖 **Bilingual README**: Added `README.en.md` with language toggle badges
+- 📋 **Feature Table Collapsed**: Feature overview now uses `<details>` tag, collapsed by default
+
+> 📝 Details (中文): [开发日志-open0.0.15.md](docs/开发日志-open0.0.15.md)
+
+---
 
 ### 🏷️ open0.0.14 (2026-06-03) 🔄📝📦🔧💰🛡️
 
