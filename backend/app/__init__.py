@@ -77,6 +77,9 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "patient", "age", "INTEGER")
     _ensure_sqlite_column(app, "patient", "id_card", "VARCHAR(20)")
     _ensure_sqlite_column(app, "patient", "counselor_name", "VARCHAR(64)")
+    _ensure_sqlite_column(app, "patient", "patient_type", "VARCHAR(20) DEFAULT 'student'")
+    _ensure_sqlite_column(app, "patient", "department", "VARCHAR(100)")
+    _ensure_sqlite_column(app, "patient", "shop_name", "VARCHAR(100)")
 
     # visit 表新增列
     _ensure_sqlite_column(app, "visit", "verified_by", "INTEGER")
@@ -128,6 +131,27 @@ def create_app(config_class=None):
     app.register_blueprint(api_bp, url_prefix='/api')
 
     from backend.app import models
+
+    # 历史数据兼容迁移：is_temporary -> patient_type
+    try:
+        uri = app.config.get("SQLALCHEMY_DATABASE_URI") or ""
+        if isinstance(uri, str) and uri.startswith("sqlite"):
+            with app.app_context():
+                with db.engine.connect() as conn:
+                    result = conn.execute(
+                        sqlalchemy.text(
+                            "SELECT COUNT(*) FROM patient WHERE patient_type IS NULL OR patient_type = ''"
+                        )
+                    ).fetchone()
+                    if result and result[0] > 0:
+                        conn.execute(sqlalchemy.text(
+                            "UPDATE patient SET patient_type = 'temporary' WHERE is_temporary = 1 AND (patient_type IS NULL OR patient_type = '')"
+                        ))
+                        conn.execute(sqlalchemy.text(
+                            "UPDATE patient SET patient_type = 'student' WHERE (is_temporary = 0 OR is_temporary IS NULL) AND (patient_type IS NULL OR patient_type = '')"
+                        ))
+    except Exception:
+        pass
 
     try:
         uri = app.config.get("SQLALCHEMY_DATABASE_URI") or ""
