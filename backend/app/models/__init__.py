@@ -60,8 +60,11 @@ class Patient(db.Model):
     name_initials = db.Column(db.Text, index=True, nullable=True)
     is_temporary = db.Column(db.Boolean, default=False, index=True)
     age = db.Column(db.Integer, nullable=True)
-    id_card = db.Column(db.String(20), nullable=True)
+    id_card = db.Column(db.String(20), nullable=True, index=True)
     counselor_name = db.Column(db.String(64), nullable=True)
+    patient_type = db.Column(db.String(20), default='student', index=True)
+    department = db.Column(db.String(100), nullable=True)
+    shop_name = db.Column(db.String(100), nullable=True)
 
     visits = db.relationship('Visit', backref='patient', lazy='dynamic')
 

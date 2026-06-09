@@ -1,6 +1,6 @@
-# 开发日志 open0.0.15（2026-06-08）
+# 开发日志 open0.0.15（2026-06-09）
 
-## 版本主题：药品有效期管理 & 智能盘库过期预警 & 护士端界面优化
+## 版本主题：药品有效期管理 & 智能盘库过期预警 & 护士端界面优化 & 患者类型扩展
 
 ---
 
@@ -17,7 +17,10 @@
 | ⚠️ 智能盘库预警 | 智能盘库新增过期预警模块，按阈值天数筛选即将过期药品 |
 | 🏷️ 前端状态标识 | 药品列表有效期三色标签：已过期（红）/ 30天内到期（黄）/ 正常（绿） |
 | 👩‍⚕️ 护士端界面精简 | 隐藏“包装”和“零卖单价”列，减少干扰信息 |
-| 📦 智能盘库类目勾选 | 支持勾选“库存预警”和“有效期预警”类目，单独或组合筛选 |
+| 📦 智能盘库类目勾选 | 支持勾选"库存预警"和"有效期预警"类目，单独或组合筛选 |
+| 👥 患者类型扩展 | 支持学生/教职工/商铺员工/临时人员四种类型区分管理 |
+| 🪪 身份证自动算年龄 | 教职工/商铺员工录入身份证号后自动计算年龄 |
+| 📋 多模板批量导入 | 三种CSV模板（学生/教职工/商铺员工），按类型独立导入去重 |
 
 ---
 
@@ -206,20 +209,92 @@ const isNurse = computed(() => userStore.userInfo?.role === 'nurse')
 
 ---
 
-## 四、修改文件清单
+## 四、患者类型扩展功能
+
+### 4.1 需求背景
+
+系统原有患者管理仅区分"学生"和"临时人员"（通过 `is_temporary` 布尔值），实际使用中出现教师与学生同名同姓导致混淆的问题。需要将患者类型细分为四种：**学生**（student）、**教职工**（staff）、**商铺员工**（shop）、**临时人员**（temporary）。
+
+### 4.2 数据模型（models/__init__.py）
+
+Patient 模型新增三个字段：
+
+```python
+patient_type = db.Column(db.String(20), default='student', index=True)
+department = db.Column(db.String(100), nullable=True)   # 教职工二级单位
+shop_name = db.Column(db.String(100), nullable=True)     # 商铺员工所在商铺
+```
+
+`id_card` 字段新增 `index=True` 以支持按身份证去重查询。
+
+**自动迁移**（`__init__.py`）：
+```python
+_ensure_sqlite_column(app, "patient", "patient_type", "VARCHAR(20) DEFAULT 'student'")
+_ensure_sqlite_column(app, "patient", "department", "VARCHAR(100)")
+_ensure_sqlite_column(app, "patient", "shop_name", "VARCHAR(100)")
+```
+
+**历史数据兼容迁移**：启动时自动将 `is_temporary=1` 的记录更新为 `patient_type='temporary'`，其余为 `'student'`。
+
+### 4.3 后端 API（admin.py & doctor.py）
+
+#### 工具函数
+
+- `_is_valid_cn_id_card()`：18位中国身份证校验（加权因子校验码验证）
+- `_age_from_id_card()`：从身份证出生日期字段计算周岁
+
+#### 管理员端变更
+
+| 端点 | 变更 |
+|------|------|
+| `GET /admin/patients/template` | 支持 `type` 参数返回不同CSV模板（学生/教职工/商铺员工） |
+| `POST /admin/patients/import` | 三种导入分支：学生按 `student_id` 去重，教职工/商铺员工按 `id_card` 去重 |
+| `GET /admin/patients` | 新增 `patient_type` 过滤参数，响应增加 `department`、`shop_name` 字段 |
+| `POST /admin/patients` | 根据 `patient_type` 差异化校验和创建 |
+| `PUT /admin/patients/<id>` | 支持类型变更、新字段更新、`id_card` 变更自动重算 `age` |
+
+#### 医生端变更
+
+| 端点 | 变更 |
+|------|------|
+| `GET /doctor/patient/search` | 响应增加 `patient_type`、`department`、`shop_name`、`id_card` |
+| `POST /doctor/patient` | 支持 `patient_type` 参数，staff/shop 类型按 `id_card` 去重 |
+
+### 4.4 前端变更
+
+#### 管理员端 PatientManagement.vue
+
+- 新增类型筛选下拉框（全部/学生/教职工/商铺员工/临时人员）
+- 表格列按筛选类型动态显示/隐藏（如学生显示学号/班级，教职工显示单位）
+- 新增/编辑表单：四类型下拉选择器，按类型条件渲染专属字段
+- `calcAgeFromIdCard()` 前端函数实现身份证自动算年龄
+- 批量导入弹窗：新增导入类型选择，下载模板和上传URL带 `type` 参数
+
+#### 医生端 PatientSearch.vue
+
+- 搜索建议下拉项增加 `el-tag` 类型标签（如 "教职工"、"商铺员工"）
+- 患者信息展示区新增"人员类型"展示，不同专属字段按类型条件显示
+- 确认接诊弹窗 HTML 动态生成人员类型和对应专属信息
+
+---
+
+## 五、修改文件清单
 
 | 文件 | 变更类型 | 说明 |
 |------|---------|------|
 | `backend/app/models/__init__.py` | 修改 | Drug 模型新增 `expiry_date` 字段 |
-| `backend/app/__init__.py` | 修改 | 新增 `expiry_date` 自动迁移 |
-| `backend/app/api/admin.py` | 修改 | 药品 CRUD 支持有效期，智能盘库新增过期预警 |
+| `backend/app/__init__.py` | 修改 | 新增 `expiry_date` 自动迁移；新增 `patient_type`、`department`、`shop_name` 迁移及历史数据兼容 |
+| `backend/app/api/admin.py` | 修改 | 药品 CRUD 支持有效期，智能盘库新增过期预警；患者管理支持四种类型 |
 | `backend/app/api/nurse.py` | 修改 | 护士端药品列表返回有效期字段 |
+| `backend/app/api/doctor.py` | 修改 | 患者搜索返回类型字段，创建患者支持多类型，就诊日志改进 |
 | `frontend/src/views/admin/DrugManagement.vue` | 修改 | 新增有效期列、表单日期选择器、角色判断隐藏字段 |
+| `frontend/src/views/admin/PatientManagement.vue` | 修改 | 类型筛选、四类型表单、批量导入多模板、身份证自动算年龄 |
+| `frontend/src/views/doctor/PatientSearch.vue` | 修改 | 搜索标签、类型展示、接诊弹窗动态信息 |
 | `frontend/src/views/nurse/Inventory.vue` | 修改 | 智能盘库新增有效期预警清单、类目勾选筛选机制 |
 
 ---
 
-## 五、Git 提交记录
+## 六、Git 提交记录
 
 ```
 494b220 fix: 智能盘库弹窗新增类目勾选 — 支持单独筛选库存预警或有效期预警
@@ -232,37 +307,47 @@ d886da9 docs: README 支持中英切换 — 新增 README.en.md，顶部添加�
 
 ---
 
-## 六、验证测试
+## 七、验证测试
 
-### 6.1 有效期入库验证
+### 7.1 有效期入库验证
 
 ✅ 创建有效期为 `2026-07-01` 的药品成功  
 ✅ 尝试创建过去日期 `2020-01-01` 被拒绝，返回 `400: 有效期不能早于当前日期`
 
-### 6.2 智能盘库过期预警
+### 7.2 智能盘库过期预警
 
 ✅ `expiry_threshold: 30` 正确返回 23 天内到期的药品  
 ✅ 已过期药品 `is_expired: true`，剩余天数为负数
 
-### 6.3 前端显示
+### 7.3 前端显示
 
 ✅ 药品列表有效期三色标签正常显示  
 ✅ 智能盘库弹窗有效期预警清单正常渲染  
 ✅ 护士端“包装”和“零卖单价”列正确隐藏
 
-### 6.4 智能盘库类目勾选
+### 7.4 智能盘库类目勾选
 
-✅ 勾选/取消“库存预警”类目，对应阈值输入和结果表动态显示/隐藏  
-✅ 勾选/取消“有效期预警”类目，对应天数输入和结果表动态显示/隐藏  
-✅ 全部取消时“重新筛选”按钮禁用，提示“请至少勾选一个筛选类目”
+✅ 勾选/取消"库存预警"类目，对应阈值输入和结果表动态显示/隐藏  
+✅ 勾选/取消"有效期预警"类目，对应天数输入和结果表动态显示/隐藏  
+✅ 全部取消时"重新筛选"按钮禁用，提示"请至少勾选一个筛选类目"
+
+### 7.5 患者类型扩展
+
+✅ Patient 模型新增 `patient_type`、`department`、`shop_name` 字段，`id_card` 加索引  
+✅ 历史数据自动迁移：`is_temporary=1` → `patient_type='temporary'`，其余 → `'student'`  
+✅ 管理员端列表支持按类型筛选，新增/编辑支持四种类型差异化字段  
+✅ 批量导入三种模板，学生按 `student_id` 去重，教职工/商铺员工按 `id_card` 去重  
+✅ 身份证18位校验 + 自动计算年龄（前后端均实现）  
+✅ 医生端搜索显示类型标签，不同专属字段按类型条件展示  
+✅ Python `ast.parse` 语法检查通过，`vite build` 前端构建成功
 
 ---
 
-## 七、部署信息
+## 八、部署信息
 
 | 项目 | 值 |
 |------|-----|
 | 版本号 | open0.0.15 |
-| 发布日期 | 2026-06-08 |
+| 发布日期 | 2026-06-09 |
 | 部署路径 | `D:\yiwushi\yws20260608` |
-| EXE 大小 | 85.9 MB |
+| EXE 大小 | 81.9 MB |

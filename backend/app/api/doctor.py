@@ -36,6 +36,27 @@ _GARBLED_Q_RE = re.compile(r"\?{2,}")
 
 _ID_CARD_RE = re.compile(r"^\d{17}[\dXx]$")
 
+PATIENT_TYPES = {
+    'student': '学生',
+    'staff': '教职工',
+    'shop': '商铺员工',
+    'temporary': '临时人员',
+}
+
+def _age_from_id_card(id_card: str):
+    """从 18 位中国身份证号提取出生日期并计算周岁"""
+    if not id_card or len(id_card) != 18:
+        return None
+    try:
+        birth = datetime.strptime(id_card[6:14], "%Y%m%d")
+        today = datetime.today()
+        age = today.year - birth.year
+        if (today.month, today.day) < (birth.month, birth.day):
+            age -= 1
+        return age
+    except Exception:
+        return None
+
 def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
     if dt is None:
         return None
@@ -276,6 +297,10 @@ def search_patient():
             "counselor_name": p.counselor_name,
             "is_temporary": bool(p.is_temporary) if p.is_temporary is not None else False,
             "age": p.age,
+            "patient_type": p.patient_type or 'student',
+            "department": p.department,
+            "shop_name": p.shop_name,
+            "id_card": p.id_card,
         })
 
     logger.info(f"Returning {len(data)} patients")
@@ -294,16 +319,12 @@ def create_patient():
         if field not in data:
             return jsonify({"msg": f"Missing required field: {field}"}), 400
 
+    # 确定 patient_type，兼容旧接口
+    patient_type = (data.get('patient_type') or '').strip()
     is_temporary = bool(data.get("is_temporary", False))
-
-    student_id = (data.get("student_id") or "").strip() or None
-    if is_temporary:
-        student_id = None
-
-    if student_id:
-        existing = Patient.query.filter_by(student_id=student_id).first()
-        if existing:
-            return jsonify({"data": {"id": existing.id}}), 200
+    if not patient_type:
+        patient_type = 'temporary' if is_temporary else 'student'
+    is_temporary = (patient_type == 'temporary')
 
     name = (data.get("name") or "").strip()
     gender = (data.get("gender") or "").strip()
@@ -311,19 +332,28 @@ def create_patient():
     age_val = data.get("age")
     id_card = (data.get("id_card") or "").strip() or None
 
-    if is_temporary:
-        if not phone:
-            return jsonify({"msg": "Missing required field: phone", "field": "phone"}), 400
-        try:
-            age = int(age_val)
-        except Exception:
-            return jsonify({"msg": "Invalid age", "field": "age"}), 400
-        if age <= 0 or age > 150:
-            return jsonify({"msg": "Invalid age", "field": "age"}), 400
-        if id_card and not _is_valid_cn_id_card(id_card):
-            return jsonify({"msg": "Invalid id_card", "field": "id_card"}), 400
-    else:
-        age = None
+    # 类型专属字段初始化
+    student_id = None
+    grade = None
+    college = None
+    major = None
+    class_name = None
+    counselor_name = None
+    department = None
+    shop_name = None
+    age = None
+
+    if patient_type == 'student':
+        student_id = (data.get("student_id") or "").strip() or None
+        if student_id:
+            existing = Patient.query.filter_by(student_id=student_id).first()
+            if existing:
+                return jsonify({"data": {"id": existing.id}}), 200
+        grade = (data.get("grade") or "").strip() or None
+        college = (data.get("college") or "").strip() or None
+        major = (data.get("major") or "").strip() or None
+        class_name = (data.get("class_name") or "").strip() or None
+        counselor_name = (data.get("counselor_name") or "").strip() or None
         if age_val not in (None, ""):
             try:
                 age = int(age_val)
@@ -334,22 +364,40 @@ def create_patient():
         if id_card and not _is_valid_cn_id_card(id_card):
             return jsonify({"msg": "Invalid id_card", "field": "id_card"}), 400
 
+    elif patient_type in ('staff', 'shop'):
+        if not id_card:
+            return jsonify({"msg": "必须填写身份证号", "field": "id_card"}), 400
+        if not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "Invalid id_card", "field": "id_card"}), 400
+        # 身份证号去重
+        existing = Patient.query.filter_by(id_card=id_card).first()
+        if existing:
+            return jsonify({"data": {"id": existing.id}}), 200
+        age = _age_from_id_card(id_card)
+        if patient_type == 'staff':
+            department = (data.get("department") or "").strip() or None
+        else:
+            shop_name = (data.get("shop_name") or "").strip() or None
+
+    elif patient_type == 'temporary':
+        if not phone:
+            return jsonify({"msg": "Missing required field: phone", "field": "phone"}), 400
+        try:
+            age = int(age_val)
+        except Exception:
+            return jsonify({"msg": "Invalid age", "field": "age"}), 400
+        if age <= 0 or age > 150:
+            return jsonify({"msg": "Invalid age", "field": "age"}), 400
+        if id_card and not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "Invalid id_card", "field": "id_card"}), 400
+
     full_py, initials_py = _name_pinyin_parts(name)
     patient = Patient(
-        student_id=student_id,
-        name=name,
-        name_pinyin=full_py,
-        name_initials=initials_py,
-        gender=gender,
-        grade=(data.get("grade") or "").strip() or None,
-        college=(data.get("college") or "").strip() or None,
-        major=(data.get("major") or "").strip() or None,
-        class_name=(data.get("class_name") or "").strip() or None,
-        phone=phone,
-        counselor_name=(data.get("counselor_name") or "").strip() or None,
-        is_temporary=is_temporary,
-        age=age,
-        id_card=id_card
+        student_id=student_id, name=name, name_pinyin=full_py, name_initials=initials_py,
+        gender=gender, grade=grade, college=college, major=major, class_name=class_name,
+        phone=phone, counselor_name=counselor_name, is_temporary=is_temporary,
+        age=age, id_card=id_card, patient_type=patient_type,
+        department=department, shop_name=shop_name,
     )
     db.session.add(patient)
     db.session.commit()
@@ -728,18 +776,20 @@ def create_visit():
         except Exception:
             db.session.rollback()
 
-    # 检查是否为临时人员就诊
+    # 检查是否为非学生类型人员就诊，记录日志
     patient = Patient.query.get(patient_id)
-    if patient and patient.is_temporary:
+    if patient and patient.patient_type and patient.patient_type != 'student':
+        type_label = PATIENT_TYPES.get(patient.patient_type, '未知')
         log = OperationLog(
             user_id=int(get_jwt_identity()),
-            action_type='temp_patient_visit',
+            action_type='non_student_patient_visit',
             target_type='visit',
             target_id=visit.id,
-            summary=f"临时人员就诊: {patient.name}",
+            summary=f"{type_label}就诊: {patient.name}",
             details=json.dumps({
                 "patient_name": patient.name,
                 "patient_id": patient.id,
+                "patient_type": patient.patient_type,
                 "diagnosis": visit.diagnosis or ""
             }, ensure_ascii=False)
         )

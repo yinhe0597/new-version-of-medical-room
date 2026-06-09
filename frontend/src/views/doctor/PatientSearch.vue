@@ -19,10 +19,13 @@
           </template>
           <template #default="{ item }">
             <div class="patient-suggestion">
+              <el-tag :type="typeTagMap[item.patient_type] || 'success'" size="small" style="margin-right:4px;">
+                {{ typeLabelMap[item.patient_type] || '学生' }}
+              </el-tag>
               <span class="student-id">{{ item.student_id || '-' }}</span>
               <span class="name">{{ item.name }}</span>
               <span class="gender">{{ item.gender }}</span>
-              <span class="class-name">{{ item.class_name || '-' }}</span>
+              <span class="class-name">{{ item.department || item.shop_name || item.class_name || '-' }}</span>
               <span class="phone">{{ item.phone || '-' }}</span>
             </div>
           </template>
@@ -84,14 +87,21 @@
         </div>
       </template>
       <el-descriptions border>
-        <el-descriptions-item label="学号">{{ patient.student_id || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="人员类型">
+          <el-tag :type="typeTagMap[patient.patient_type] || 'success'" size="small">
+            {{ typeLabelMap[patient.patient_type] || '学生' }}
+          </el-tag>
+        </el-descriptions-item>
+        <el-descriptions-item label="学号" v-if="patient.patient_type === 'student' || !patient.patient_type">{{ patient.student_id || '-' }}</el-descriptions-item>
         <el-descriptions-item label="姓名">{{ patient.name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="性别">{{ patient.gender || '-' }}</el-descriptions-item>
         <el-descriptions-item label="年龄">{{ patient.age || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="年级">{{ patient.grade || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="学院">{{ patient.college || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="专业">{{ patient.major || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="班级">{{ patient.class_name || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="年级" v-if="patient.patient_type === 'student' || !patient.patient_type">{{ patient.grade || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="学院" v-if="patient.patient_type === 'student' || !patient.patient_type">{{ patient.college || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="专业" v-if="patient.patient_type === 'student' || !patient.patient_type">{{ patient.major || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="班级" v-if="patient.patient_type === 'student' || !patient.patient_type">{{ patient.class_name || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="所在单位" v-if="patient.patient_type === 'staff'">{{ patient.department || '-' }}</el-descriptions-item>
+        <el-descriptions-item label="商铺名称" v-if="patient.patient_type === 'shop'">{{ patient.shop_name || '-' }}</el-descriptions-item>
         <el-descriptions-item label="电话">{{ patient.phone || '-' }}</el-descriptions-item>
       </el-descriptions>
 
@@ -294,6 +304,10 @@ const showCreateForm = ref(false)
 const creating = ref(false)
 const formRef = ref(null)
 const searchResults = ref([])
+
+// 人员类型映射
+const typeLabelMap = { student: '学生', staff: '教职工', shop: '商铺员工', temporary: '临时人员' }
+const typeTagMap = { student: 'success', staff: 'primary', shop: '', temporary: 'warning' }
 
 const phoneDialogVisible = ref(false)
 const tempPhone = ref('')
@@ -670,16 +684,25 @@ const confirmStartVisit = async () => {
   if (!patient.value) return
 
   const p = patient.value
+  const typeLabel = typeLabelMap[p.patient_type] || '学生'
+  let extraInfo = ''
+  if (p.patient_type === 'staff') {
+    extraInfo = `<div><b>所在单位：</b>${escapeHtml(p.department || '-')}</div>`
+  } else if (p.patient_type === 'shop') {
+    extraInfo = `<div><b>商铺名称：</b>${escapeHtml(p.shop_name || '-')}</div>`
+  } else if (p.patient_type === 'student' || !p.patient_type) {
+    extraInfo = `<div><b>班级：</b>${escapeHtml(p.class_name || '-')}</div>`
+  }
   const html = `
     <div style="line-height: 1.8;">
       <div style="margin-bottom: 10px;">请再次确认患者基本信息无误：</div>
-      <div><b>学号：</b>${escapeHtml(p.student_id || '-')}</div>
+      <div><b>人员类型：</b>${typeLabel}</div>
+      <div><b>学号/工号：</b>${escapeHtml(p.student_id || '-')}</div>
       <div><b>姓名：</b>${escapeHtml(p.name || '-')}</div>
       <div><b>性别：</b>${escapeHtml(p.gender || '-')}</div>
       <div><b>年龄：</b>${escapeHtml(p.age || '-')}</div>
-      <div><b>班级：</b>${escapeHtml(p.class_name || '-')}</div>
+      ${extraInfo}
       <div><b>电话：</b>${escapeHtml(p.phone || '-')}</div>
-      <div><b>人员类型：</b>${p.is_temporary ? '临时人员' : '在校学生'}</div>
     </div>
   `
 

@@ -12,12 +12,57 @@ import shutil
 import csv
 import io
 import json
+import re
 import subprocess
 from sqlalchemy.exc import IntegrityError
 
 from pypinyin import pinyin, Style
 
 MAX_UPLOAD_SIZE = 10 * 1024 * 1024  # 10MB
+
+PATIENT_TYPES = {
+    'student': '学生',
+    'staff': '教职工',
+    'shop': '商铺员工',
+    'temporary': '临时人员',
+}
+
+_ID_CARD_RE = re.compile(r"^\d{17}[\dXx]$")
+
+def _is_valid_cn_id_card(id_card: str) -> bool:
+    if not isinstance(id_card, str):
+        return False
+    s = id_card.strip()
+    if not s:
+        return False
+    if not _ID_CARD_RE.match(s):
+        return False
+    birth = s[6:14]
+    try:
+        datetime.strptime(birth, "%Y%m%d")
+    except Exception:
+        return False
+    weights = [7, 9, 10, 5, 8, 4, 2, 1, 6, 3, 7, 9, 10, 5, 8, 4, 2]
+    mapping = ["1", "0", "X", "9", "8", "7", "6", "5", "4", "3", "2"]
+    total = 0
+    for i in range(17):
+        total += int(s[i]) * weights[i]
+    check = mapping[total % 11]
+    return s[-1].upper() == check
+
+def _age_from_id_card(id_card: str):
+    """从 18 位中国身份证号提取出生日期并计算周岁"""
+    if not id_card or len(id_card) != 18:
+        return None
+    try:
+        birth = datetime.strptime(id_card[6:14], "%Y%m%d")
+        today = datetime.today()
+        age = today.year - birth.year
+        if (today.month, today.day) < (birth.month, birth.day):
+            age -= 1
+        return age
+    except Exception:
+        return None
 
 def _check_upload_size(file_storage):
     file_storage.seek(0, 2)
@@ -113,11 +158,22 @@ def backup_mysql_database():
 @bp.route('/admin/patients/template', methods=['GET'])
 @role_required('admin')
 def get_patients_template():
-    csv_content = "学号,姓名,性别,手机号码,年级,学院,专业,班级,年龄,辅导员姓名\n"
-    csv_content += "2024001,张三,男,,2024级,计算机学院,软件工程,软件一班,19,王老师\n"
-    csv_content += "2024002,李四,女,13912345678,2024级,外国语学院,英语,英语二班,20,赵老师\n"
+    template_type = request.args.get('type', 'student')
+
+    templates = {
+        'student': "学号,姓名,性别,手机号码,年级,学院,专业,班级,年龄,辅导员姓名\n2024001,张三,男,,2024级,计算机学院,软件工程,软件一班,19,王老师\n2024002,李四,女,13912345678,2024级,外国语学院,英语,英语二班,20,赵老师\n",
+        'staff': "姓名,性别,身份证号,手机号码,所在单位\n张三,男,110101199001011234,13800138000,计算机学院\n李四,女,110101198512121234,13900139000,外国语学院\n",
+        'shop': "姓名,性别,身份证号,手机号码,商铺名称\n王五,男,110101198805053456,13700137000,校园超市\n赵六,女,110101199208084567,13600136000,学生食堂\n",
+    }
+
+    csv_content = templates.get(template_type, templates['student'])
+    filename_map = {
+        'student': 'patients_template_student.csv',
+        'staff': 'patients_template_staff.csv',
+        'shop': 'patients_template_shop.csv',
+    }
     response = make_response(csv_content.encode('utf-8-sig'))
-    response.headers["Content-Disposition"] = "attachment; filename=patients_template.csv"
+    response.headers["Content-Disposition"] = f"attachment; filename={filename_map.get(template_type, 'patients_template.csv')}"
     response.headers["Content-type"] = "text/csv"
     return response
 
@@ -133,6 +189,8 @@ def import_patients():
         return jsonify({"msg": "Only CSV files are allowed"}), 400
     if not _check_upload_size(file):
         return jsonify({"msg": "File too large, max 10MB"}), 400
+
+    import_type = request.args.get('type', 'student')
 
     try:
         file_content = file.stream.read()
@@ -150,112 +208,184 @@ def import_patients():
         success_count = 0
         error_count = 0
 
-        for row in csv_input:
-            def pick(*keys):
-                for k in keys:
-                    if k in row:
-                        return row.get(k)
-                return None
+        def pick(row, *keys):
+            for k in keys:
+                if k in row:
+                    return row.get(k)
+            return None
 
-            student_id = (pick('student_id', '学号') or '').strip()
-            name = (pick('name', '姓名') or '').strip()
-            gender = (pick('gender', '性别') or '').strip()
-            phone_raw = (pick('phone', '手机号码', '手机号', '电话') or '').strip()
-            grade = (pick('grade', '年级') or '').strip()
-            college = (pick('college', '学院') or '').strip()
-            major = (pick('major', '专业') or '').strip()
-            class_name = (pick('class_name', '班级') or '').strip()
-            age_raw = (pick('age', '年龄') or '').strip()
-            counselor_name = (pick('counselor_name', '辅导员姓名', '辅导员') or '').strip()
-            phone = phone_raw or None
+        def sanitize(val):
+            if val and val[0] in ('=', '+', '-', '@'):
+                return "'" + val
+            return val
 
-            # Security Best Practice: Sanitize inputs to prevent CSV injection (if exported later)
-            # Remove leading formula characters: = + - @
-            def sanitize(val):
-                if val and val[0] in ('=', '+', '-', '@'):
-                    return "'" + val
-                return val
+        if import_type == 'staff':
+            # 教职工导入: 姓名,性别,身份证号,手机号码,所在单位
+            for row in csv_input:
+                name = sanitize((pick(row, 'name', '姓名') or '').strip())
+                gender = (pick(row, 'gender', '性别') or '').strip()
+                id_card = (pick(row, 'id_card', '身份证号') or '').strip()
+                phone = (pick(row, 'phone', '手机号码', '手机号', '电话') or '').strip() or None
+                department = sanitize((pick(row, 'department', '所在单位', '单位') or '').strip()) or None
 
-            student_id = sanitize(student_id)
-            name = sanitize(name)
-            counselor_name = sanitize(counselor_name)
+                if not name or not id_card:
+                    error_count += 1
+                    continue
+                if not _is_valid_cn_id_card(id_card):
+                    error_count += 1
+                    continue
 
-            missing = []
-            if not student_id:
-                missing.append("student_id")
-            if not name:
-                missing.append("name")
-            if not class_name:
-                missing.append("class_name")
-            if not counselor_name:
-                missing.append("counselor_name")
+                full_py, initials_py = _name_pinyin_parts(name)
+                age = _age_from_id_card(id_card)
 
-            if missing:
-                error_count += 1
-                continue
+                existing = Patient.query.filter_by(id_card=id_card).first()
+                if existing:
+                    existing.name = name
+                    existing.name_pinyin = full_py
+                    existing.name_initials = initials_py
+                    existing.gender = gender or existing.gender
+                    existing.phone = phone if phone else existing.phone
+                    existing.department = department if department else existing.department
+                    existing.patient_type = 'staff'
+                    existing.is_temporary = False
+                    existing.age = age
+                else:
+                    new_patient = Patient(
+                        name=name, name_pinyin=full_py, name_initials=initials_py,
+                        gender=gender or None, phone=phone, id_card=id_card,
+                        department=department, patient_type='staff', is_temporary=False, age=age
+                    )
+                    db.session.add(new_patient)
+                success_count += 1
+                if success_count % 100 == 0:
+                    db.session.commit()
 
-            full_py, initials_py = _name_pinyin_parts(name)
+        elif import_type == 'shop':
+            # 商铺员工导入: 姓名,性别,身份证号,手机号码,商铺名称
+            for row in csv_input:
+                name = sanitize((pick(row, 'name', '姓名') or '').strip())
+                gender = (pick(row, 'gender', '性别') or '').strip()
+                id_card = (pick(row, 'id_card', '身份证号') or '').strip()
+                phone = (pick(row, 'phone', '手机号码', '手机号', '电话') or '').strip() or None
+                shop_name = sanitize((pick(row, 'shop_name', '商铺名称', '商铺') or '').strip()) or None
 
-            # Insert or update based on student_id if provided
-            existing = Patient.query.filter_by(student_id=student_id).first()
-            if existing:
-                existing.name = name
-                existing.name_pinyin = full_py
-                existing.name_initials = initials_py
-                if gender:
-                    existing.gender = gender
-                if grade:
-                    existing.grade = grade
-                if college:
-                    existing.college = college
-                if major:
-                    existing.major = major
-                existing.class_name = class_name
-                existing.counselor_name = counselor_name
-                if age_raw:
-                    try:
-                        existing.age = int(age_raw)
-                    except ValueError:
-                        error_count += 1
-                        continue
-                if phone is not None:
-                    existing.phone = phone
-            else:
-                age_val = None
-                if age_raw:
-                    try:
-                        age_val = int(age_raw)
-                    except ValueError:
-                        error_count += 1
-                        continue
-                new_patient = Patient(
-                    student_id=student_id,
-                    name=name,
-                    name_pinyin=full_py,
-                    name_initials=initials_py,
-                    gender=gender or None,
-                    grade=grade or None,
-                    college=college or None,
-                    major=major or None,
-                    class_name=class_name,
-                    phone=phone,
-                    age=age_val,
-                    counselor_name=counselor_name
-                )
-                db.session.add(new_patient)
+                if not name or not id_card:
+                    error_count += 1
+                    continue
+                if not _is_valid_cn_id_card(id_card):
+                    error_count += 1
+                    continue
 
-            success_count += 1
+                full_py, initials_py = _name_pinyin_parts(name)
+                age = _age_from_id_card(id_card)
 
-            if success_count % 100 == 0:
-                db.session.commit()
+                existing = Patient.query.filter_by(id_card=id_card).first()
+                if existing:
+                    existing.name = name
+                    existing.name_pinyin = full_py
+                    existing.name_initials = initials_py
+                    existing.gender = gender or existing.gender
+                    existing.phone = phone if phone else existing.phone
+                    existing.shop_name = shop_name if shop_name else existing.shop_name
+                    existing.patient_type = 'shop'
+                    existing.is_temporary = False
+                    existing.age = age
+                else:
+                    new_patient = Patient(
+                        name=name, name_pinyin=full_py, name_initials=initials_py,
+                        gender=gender or None, phone=phone, id_card=id_card,
+                        shop_name=shop_name, patient_type='shop', is_temporary=False, age=age
+                    )
+                    db.session.add(new_patient)
+                success_count += 1
+                if success_count % 100 == 0:
+                    db.session.commit()
+
+        else:
+            # 学生导入（保持原有逻辑）
+            for row in csv_input:
+                student_id = sanitize((pick(row, 'student_id', '学号') or '').strip())
+                name = sanitize((pick(row, 'name', '姓名') or '').strip())
+                gender = (pick(row, 'gender', '性别') or '').strip()
+                phone_raw = (pick(row, 'phone', '手机号码', '手机号', '电话') or '').strip()
+                grade = (pick(row, 'grade', '年级') or '').strip()
+                college = (pick(row, 'college', '学院') or '').strip()
+                major = (pick(row, 'major', '专业') or '').strip()
+                class_name = (pick(row, 'class_name', '班级') or '').strip()
+                age_raw = (pick(row, 'age', '年龄') or '').strip()
+                counselor_name = sanitize((pick(row, 'counselor_name', '辅导员姓名', '辅导员') or '').strip())
+                phone = phone_raw or None
+
+                missing = []
+                if not student_id:
+                    missing.append("student_id")
+                if not name:
+                    missing.append("name")
+                if not class_name:
+                    missing.append("class_name")
+                if not counselor_name:
+                    missing.append("counselor_name")
+
+                if missing:
+                    error_count += 1
+                    continue
+
+                full_py, initials_py = _name_pinyin_parts(name)
+
+                existing = Patient.query.filter_by(student_id=student_id).first()
+                if existing:
+                    existing.name = name
+                    existing.name_pinyin = full_py
+                    existing.name_initials = initials_py
+                    existing.patient_type = 'student'
+                    existing.is_temporary = False
+                    if gender:
+                        existing.gender = gender
+                    if grade:
+                        existing.grade = grade
+                    if college:
+                        existing.college = college
+                    if major:
+                        existing.major = major
+                    existing.class_name = class_name
+                    existing.counselor_name = counselor_name
+                    if age_raw:
+                        try:
+                            existing.age = int(age_raw)
+                        except ValueError:
+                            error_count += 1
+                            continue
+                    if phone is not None:
+                        existing.phone = phone
+                else:
+                    age_val = None
+                    if age_raw:
+                        try:
+                            age_val = int(age_raw)
+                        except ValueError:
+                            error_count += 1
+                            continue
+                    new_patient = Patient(
+                        student_id=student_id, name=name, name_pinyin=full_py, name_initials=initials_py,
+                        gender=gender or None, grade=grade or None, college=college or None,
+                        major=major or None, class_name=class_name, phone=phone,
+                        age=age_val, counselor_name=counselor_name,
+                        patient_type='student', is_temporary=False
+                    )
+                    db.session.add(new_patient)
+
+                success_count += 1
+                if success_count % 100 == 0:
+                    db.session.commit()
 
         db.session.commit()
+        type_label = PATIENT_TYPES.get(import_type, '人员')
         log = OperationLog(
             user_id=int(get_jwt_identity()),
             action_type='import_data',
             target_type='patient',
             target_id=0,
-            summary=f"批量导入人员: 成功{success_count}条, 失败{error_count}条"
+            summary=f"批量导入{type_label}: 成功{success_count}条, 失败{error_count}条"
         )
         db.session.add(log)
         db.session.commit()
@@ -271,8 +401,11 @@ def get_patients():
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('size', 20, type=int)
     keyword = request.args.get('keyword', '')
+    patient_type = request.args.get('patient_type', '')
 
     query = Patient.query.order_by(Patient.id.desc())
+    if patient_type:
+        query = query.filter(Patient.patient_type == patient_type)
     if keyword:
         like = f'%{keyword}%'
         query = query.filter(
@@ -282,6 +415,7 @@ def get_patients():
                 Patient.phone.like(like),
                 Patient.name_pinyin.like(like),
                 Patient.name_initials.like(like),
+                Patient.id_card.like(like),
             )
         )
 
@@ -302,6 +436,9 @@ def get_patients():
             "id_card": p.id_card,
             "counselor_name": p.counselor_name,
             "is_temporary": p.is_temporary,
+            "patient_type": p.patient_type or 'student',
+            "department": p.department,
+            "shop_name": p.shop_name,
         })
 
     return jsonify({
@@ -317,39 +454,82 @@ def admin_create_patient():
     if not name:
         return jsonify({"msg": "姓名不能为空"}), 400
 
-    student_id = (data.get('student_id') or '').strip() or None
-    if student_id:
-        existing = Patient.query.filter_by(student_id=student_id).first()
-        if existing:
-            return jsonify({"msg": f"学号 {student_id} 已存在"}), 400
+    patient_type = (data.get('patient_type') or 'student').strip()
+    is_temporary = (patient_type == 'temporary')
+    # 兼容旧接口：若传了 is_temporary=true 且无 patient_type，则自动设为 temporary
+    if 'patient_type' not in data and data.get('is_temporary'):
+        patient_type = 'temporary'
+        is_temporary = True
 
     full_py, initials_py = _name_pinyin_parts(name)
 
+    # 通用字段
+    gender = (data.get('gender') or '').strip() or None
+    phone = (data.get('phone') or '').strip() or None
+    id_card = (data.get('id_card') or '').strip() or None
+    age = int(data['age']) if data.get('age') else None
+
+    # 类型专属字段初始化
+    student_id = None
+    class_name = None
+    grade = None
+    college = None
+    major = None
+    counselor_name = None
+    department = None
+    shop_name = None
+
+    if patient_type == 'student':
+        student_id = (data.get('student_id') or '').strip() or None
+        if student_id:
+            existing = Patient.query.filter_by(student_id=student_id).first()
+            if existing:
+                return jsonify({"msg": f"学号 {student_id} 已存在"}), 400
+        class_name = (data.get('class_name') or '').strip() or None
+        grade = (data.get('grade') or '').strip() or None
+        college = (data.get('college') or '').strip() or None
+        major = (data.get('major') or '').strip() or None
+        counselor_name = (data.get('counselor_name') or '').strip() or None
+
+    elif patient_type == 'staff':
+        if not id_card:
+            return jsonify({"msg": "教职工必须填写身份证号"}), 400
+        if not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "身份证号格式不正确"}), 400
+        age = _age_from_id_card(id_card)
+        department = (data.get('department') or '').strip() or None
+
+    elif patient_type == 'shop':
+        if not id_card:
+            return jsonify({"msg": "商铺员工必须填写身份证号"}), 400
+        if not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "身份证号格式不正确"}), 400
+        age = _age_from_id_card(id_card)
+        shop_name = (data.get('shop_name') or '').strip() or None
+
+    elif patient_type == 'temporary':
+        if not phone:
+            return jsonify({"msg": "临时人员必须填写手机号"}), 400
+        if id_card and not _is_valid_cn_id_card(id_card):
+            return jsonify({"msg": "身份证号格式不正确"}), 400
+
     patient = Patient(
-        student_id=student_id,
-        name=name,
-        name_pinyin=full_py,
-        name_initials=initials_py,
-        gender=(data.get('gender') or '').strip() or None,
-        class_name=(data.get('class_name') or '').strip() or None,
-        phone=(data.get('phone') or '').strip() or None,
-        grade=(data.get('grade') or '').strip() or None,
-        college=(data.get('college') or '').strip() or None,
-        major=(data.get('major') or '').strip() or None,
-        age=int(data['age']) if data.get('age') else None,
-        id_card=(data.get('id_card') or '').strip() or None,
-        counselor_name=(data.get('counselor_name') or '').strip() or None,
-        is_temporary=bool(data.get('is_temporary', False)),
+        student_id=student_id, name=name, name_pinyin=full_py, name_initials=initials_py,
+        gender=gender, class_name=class_name, phone=phone, grade=grade,
+        college=college, major=major, age=age, id_card=id_card,
+        counselor_name=counselor_name, is_temporary=is_temporary,
+        patient_type=patient_type, department=department, shop_name=shop_name,
     )
     db.session.add(patient)
     db.session.commit()
 
+    type_label = PATIENT_TYPES.get(patient_type, '人员')
     log = OperationLog(
         user_id=int(get_jwt_identity()),
         action_type='create_patient',
         target_type='patient',
         target_id=patient.id,
-        summary=f'新增人员: {name}'
+        summary=f'新增{type_label}: {name}'
     )
     db.session.add(log)
     db.session.commit()
@@ -361,6 +541,29 @@ def admin_create_patient():
 def admin_update_patient(id):
     patient = Patient.query.get_or_404(id)
     data = request.get_json() or {}
+
+    # 类型变更处理
+    if 'patient_type' in data:
+        new_type = (data['patient_type'] or '').strip()
+        if new_type and new_type != patient.patient_type:
+            patient.patient_type = new_type
+            patient.is_temporary = (new_type == 'temporary')
+            # 切换到非学生类型时清空学生专属字段
+            if new_type != 'student':
+                for sf in ['student_id', 'class_name', 'grade', 'college', 'major', 'counselor_name']:
+                    setattr(patient, sf, None)
+            # 切换到非教职工类型时清空 department
+            if new_type != 'staff':
+                patient.department = None
+            # 切换到非商铺类型时清空 shop_name
+            if new_type != 'shop':
+                patient.shop_name = None
+
+    # 兼容旧接口 is_temporary 参数
+    if 'is_temporary' in data and 'patient_type' not in data:
+        patient.is_temporary = bool(data['is_temporary'])
+        if data['is_temporary']:
+            patient.patient_type = 'temporary'
 
     new_student_id = (data.get('student_id') or '').strip() or None
     if new_student_id and new_student_id != patient.student_id:
@@ -378,21 +581,23 @@ def admin_update_patient(id):
         patient.name_pinyin = full_py
         patient.name_initials = initials_py
 
-    for field in ['gender', 'class_name', 'phone', 'grade', 'college', 'major', 'id_card', 'counselor_name']:
+    for field in ['gender', 'class_name', 'phone', 'grade', 'college', 'major', 'id_card', 'counselor_name', 'department', 'shop_name']:
         if field in data:
             setattr(patient, field, (data[field] or '').strip() or None)
 
-    if 'age' in data:
+    # 教职工/商铺员工：id_card 更新时自动重算 age
+    if patient.patient_type in ('staff', 'shop') and patient.id_card:
+        new_age = _age_from_id_card(patient.id_card)
+        if new_age is not None:
+            patient.age = new_age
+    elif 'age' in data:
         patient.age = int(data['age']) if data['age'] else None
-
-    if 'is_temporary' in data:
-        patient.is_temporary = bool(data['is_temporary'])
 
     db.session.commit()
 
     log = OperationLog(
         user_id=int(get_jwt_identity()),
-        action_type='create_patient',
+        action_type='update_patient',
         target_type='patient',
         target_id=patient.id,
         summary=f"编辑人员: {patient.name}"
