@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.15-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.16-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -207,6 +207,17 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.16（2026-06-09）🔐🚀
+
+**护士端报表权限修复 & 全量编译部署：**
+- 🔐 **护士端统计报表权限修复**：`/admin/statistics/revenue` 及其导出和医护人员列表接口的 `@role_required` 补充 `'nurse'` 角色，护士端可正常访问营收统计功能
+- 🔐 **护士端药品出库报表权限修复**：`/admin/statistics/drug-outbound` 及其导出接口的 `@role_required` 补充 `'nurse'` 角色，护士端可正常查看和导出药品出库记录
+- 🚀 **全量重新编译**：`vite build` + `pyinstaller` 全量打包，产物输出到 `D:\yiwushi\yws20260608`
+
+> 📝 详细变更：[开发日志-open0.0.16.md](docs/开发日志-open0.0.16.md)
+
+---
 
 ### 🏷️ open0.0.15（2026-06-09）🗓️⚠️👩‍⚕️👥
 

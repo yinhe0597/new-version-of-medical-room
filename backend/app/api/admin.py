@@ -1233,7 +1233,7 @@ def smart_inventory():
         return jsonify({"msg": f"智能盘库失败: {str(e)}"}), 500
 
 @bp.route('/admin/statistics/revenue', methods=['GET'])
-@role_required(['admin', 'finance'])
+@role_required(['admin', 'nurse', 'finance'])
 def get_revenue_stats():
     def parse_dt(value, is_end=False):
         if not value:
@@ -1400,7 +1400,7 @@ def get_revenue_stats():
 
 
 @bp.route('/admin/statistics/revenue/users', methods=['GET'])
-@role_required(['admin', 'finance'])
+@role_required(['admin', 'nurse', 'finance'])
 def get_revenue_stats_users():
     users = User.query.filter(User.role.in_(["doctor", "nurse"])).order_by(User.role.asc(), User.real_name.asc()).all()
     doctors = []
@@ -1415,7 +1415,7 @@ def get_revenue_stats_users():
 
 
 @bp.route("/admin/statistics/revenue/export", methods=["GET"])
-@role_required(['admin', 'finance'])
+@role_required(['admin', 'nurse', 'finance'])
 def export_revenue_stats():
     from openpyxl import Workbook
 
@@ -1624,7 +1624,7 @@ def export_revenue_stats():
 
 
 @bp.route("/admin/statistics/drug-outbound", methods=["GET"])
-@role_required(['admin', 'finance'])
+@role_required(['admin', 'nurse', 'finance'])
 def get_drug_outbound_records():
     def parse_dt(value, is_end=False):
         if not value:
@@ -1777,7 +1777,7 @@ def get_drug_outbound_records():
 
 
 @bp.route("/admin/statistics/drug-outbound/export", methods=["GET"])
-@role_required(['admin', 'finance'])
+@role_required(['admin', 'nurse', 'finance'])
 def export_drug_outbound_records():
     from openpyxl import Workbook
 
