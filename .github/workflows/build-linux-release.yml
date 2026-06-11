@@ -1,0 +1,301 @@
+# ============================================================
+# 医务室诊疗管理系统 - Linux 自动构建 & 发布
+# 触发方式：
+#   1. 手动触发 (Actions → Build Linux Release → Run workflow)
+#   2. 推送 v* 标签自动触发 (git tag v0.0.16 && git push github v0.0.16)
+# ============================================================
+
+name: Build Linux Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '版本号 (如 0.0.16)'
+        required: true
+        default: '0.0.16'
+      prerelease:
+        description: '是否为预发布版本'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Build Linux Packages
+    runs-on: ubuntu-22.04
+
+    steps:
+      # ── 1. 检出代码 ──────────────────────────────────────
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── 2. 确定版本号 ────────────────────────────────────
+      - name: Set version
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # 从 tag 提取版本号 (去掉 v 前缀)
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION="${{ github.event.inputs.version }}"
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Building version: ${VERSION}"
+
+      # ── 3. 设置 Python ───────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      # ── 4. 设置 Node.js ──────────────────────────────────
+      - name: Set up Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      # ── 5. 安装系统依赖 ──────────────────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libsqlite3-dev \
+            patchelf \
+            fuse \
+            libfuse2
+
+      # ── 6. 安装 Python 依赖 ──────────────────────────────
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+          pip install pyinstaller
+
+      # ── 7. 构建前端 ──────────────────────────────────────
+      - name: Build frontend
+        run: |
+          cd frontend
+          npm ci
+          npm run build
+          echo "Frontend build output:"
+          ls -la dist/
+
+      # ── 8. PyInstaller 打包 ────────────────────────────
+      - name: PyInstaller build
+        run: |
+          pyinstaller --clean --noconfirm medical_room_linux.spec
+          echo "PyInstaller output:"
+          ls -lh dist/medical_room
+          file dist/medical_room
+
+      # ── 9. 打包 tar.gz ───────────────────────────────────
+      - name: Package tar.gz
+        id: tarball
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          DIST_NAME="medical-room-v${VERSION}-linux-x86_64"
+          STAGING="/tmp/${DIST_NAME}"
+          mkdir -p "${STAGING}"
+
+          # 复制可执行文件
+          cp dist/medical_room "${STAGING}/"
+          chmod +x "${STAGING}/medical_room"
+
+          # 复制启动脚本
+          cp run.sh "${STAGING}/"
+          chmod +x "${STAGING}/run.sh"
+
+          # 创建 README
+          cat > "${STAGING}/README.txt" << 'EOF'
+          ============================================================
+            医务室诊疗管理系统 - Linux 版
+          ============================================================
+
+          【快速启动】
+            chmod +x run.sh
+            ./run.sh start
+
+          【命令说明】
+            ./run.sh start   - 启动系统（后台运行）
+            ./run.sh stop    - 停止系统
+            ./run.sh restart - 重启系统
+            ./run.sh status  - 查看运行状态
+            ./run.sh log     - 查看实时日志
+
+          【直接运行（前台模式）】
+            ./medical_room
+
+          【访问地址】
+            本机:     http://127.0.0.1:5000
+            局域网:   http://<本机IP>:5000
+
+          【默认账号】
+            管理员: admin / 123456
+            医生:   doctor / 123456
+            护士:   nurse / 123456
+
+          【系统要求】
+            Linux x86_64 (glibc 2.17+)
+            无需安装 Python 或其他依赖
+          ============================================================
+          EOF
+
+          # 打包
+          TARBALL="${DIST_NAME}.tar.gz"
+          tar -czf "${TARBALL}" -C /tmp "${DIST_NAME}"
+          mv "${TARBALL}" "${GITHUB_WORKSPACE}/"
+
+          echo "filename=${TARBALL}" >> "$GITHUB_OUTPUT"
+          echo "Size: $(du -h "${TARBALL}" | cut -f1)"
+
+      # ── 10. 打包 AppImage ────────────────────────────────
+      - name: Package AppImage
+        id: appimage
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          APP_NAME="medical_room"
+          APP_DIR="${APP_NAME}.AppDir"
+          mkdir -p "${APP_DIR}/usr/bin"
+
+          # 复制可执行文件
+          cp dist/${APP_NAME} "${APP_DIR}/usr/bin/"
+          chmod +x "${APP_DIR}/usr/bin/${APP_NAME}"
+
+          # 创建 AppRun
+          cat > "${APP_DIR}/AppRun" << 'APPRUN'
+          #!/bin/bash
+          SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
+          export APP_ROOT="$SELF_DIR"
+          mkdir -p "$SELF_DIR/data/backups" "$SELF_DIR/logs"
+          exec "$SELF_DIR/usr/bin/medical_room" "$@"
+          APPRUN
+          chmod +x "${APP_DIR}/AppRun"
+
+          # 创建 .desktop 文件
+          cat > "${APP_DIR}/${APP_NAME}.desktop" << EOF
+          [Desktop Entry]
+          Type=Application
+          Name=医务室管理系统
+          Comment=Medical Room Management System
+          Exec=medical_room
+          Icon=medical_room
+          Terminal=true
+          Categories=Office;
+          StartupNotify=false
+          EOF
+
+          # 创建占位图标 (256x256 SVG)
+          cat > "${APP_DIR}/medical_room.png" << 'PNG'
+          PNG_PLACEHOLDER
+          PNG
+          # 用 python 生成简单图标
+          python3 -c "
+          import struct, zlib
+          def create_png(w, h, color):
+              def chunk(ctype, data):
+                  c = ctype + data
+                  return struct.pack('>I', len(data)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
+              raw = b''
+              for y in range(h):
+                  raw += b'\\x00' + bytes(color) * w
+              return (b'\\x89PNG\\r\\n\\x1a\\n' +
+                      chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) +
+                      chunk(b'IDAT', zlib.compress(raw)) +
+                      chunk(b'IEND', b''))
+          with open('${APP_DIR}/medical_room.png', 'wb') as f:
+              f.write(create_png(256, 256, [64, 158, 255]))
+          " 2>/dev/null || true
+
+          # 下载 appimagetool
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -O /tmp/appimagetool.AppImage || \
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/13/appimagetool-x86_64.AppImage" \
+            -O /tmp/appimagetool.AppImage
+
+          chmod +x /tmp/appimagetool.AppImage
+
+          # 解压 appimagetool (CI 无 FUSE)
+          cd /tmp
+          ./appimagetool.AppImage --appimage-extract 2>/dev/null
+          cd "${GITHUB_WORKSPACE}"
+
+          # 生成 AppImage
+          APPIMAGE_FILE="medical-room-v${VERSION}-linux-x86_64.AppImage"
+          ARCH=x86_64 /tmp/squashfs-root/AppRun --no-appindicator "${APP_DIR}" "${APPIMAGE_FILE}" 2>/dev/null || true
+
+          if [ -f "${APPIMAGE_FILE}" ]; then
+            chmod +x "${APPIMAGE_FILE}"
+            echo "filename=${APPIMAGE_FILE}" >> "$GITHUB_OUTPUT"
+            echo "Size: $(du -h "${APPIMAGE_FILE}" | cut -f1)"
+            echo "built=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "AppImage build skipped (appimagetool unavailable)"
+            echo "built=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── 11. 创建 Release 并上传 ─────────────────────────
+      - name: Create Release and Upload
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: "医务室管理系统 v${{ steps.version.outputs.version }} (Linux)"
+          body: |
+            ## 🐧 Linux 部署包 v${{ steps.version.outputs.version }}
+
+            ### 📦 下载说明
+
+            | 文件 | 格式 | 适用场景 | 使用方式 |
+            |------|------|----------|----------|
+            | `*.tar.gz` | 压缩包 | 服务器 / 远程机器 | `tar xzf *.tar.gz && cd * && ./run.sh start` |
+            | `*.AppImage` | 单文件 | 桌面 Linux / U盘 | `chmod +x *.AppImage && ./*.AppImage` |
+
+            ### 🔑 默认账号
+
+            | 角色 | 用户名 | 密码 |
+            |:---:|:---:|:---:|
+            | 管理员 | admin | 123456 |
+            | 医生 | doctor | 123456 |
+            | 护士 | nurse | 123456 |
+
+            ### 💡 说明
+            - 启动后自动在程序同级目录创建 `data/` 和 `logs/`
+            - 数据库自动建表，旧数据库自动迁移补字段
+            - 系统要求：Linux x86_64 (glibc 2.17+)
+
+            ### 🔗 访问地址
+            - 本机：http://127.0.0.1:5000
+            - 局域网：http://<本机IP>:5000
+          draft: false
+          prerelease: ${{ github.event.inputs.prerelease || false }}
+          files: |
+            ${{ steps.tarball.outputs.filename }}
+            ${{ steps.appimage.outputs.built == 'true' && steps.appimage.outputs.filename || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── 12. 输出构建摘要 ─────────────────────────────────
+      - name: Build summary
+        run: |
+          echo "## 🎉 Build Complete!" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| File | Size |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| ${{ steps.tarball.outputs.filename }} | $(du -h ${{ steps.tarball.outputs.filename }} | cut -f1) |" >> "$GITHUB_STEP_SUMMARY"
+          if [ "${{ steps.appimage.outputs.built }}" == "true" ]; then
+            echo "| ${{ steps.appimage.outputs.filename }} | $(du -h ${{ steps.appimage.outputs.filename }} | cut -f1) |" >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Release: ${{ steps.version.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
