@@ -31,7 +31,7 @@
 
 > ⚠️ **项目状态：积极开发中**
 >
-> 目前系统仍在**小范围试用与反馈收集阶段**，功能与稳定性会持续迭代完善。预计 **2026 年下半年**趋向成熟稳定，届时将考虑迁移至 **MySQL + Linux / Docker** 部署方案。在此之前以 SQLite + Windows 为主，适合单机或小规模局域网试用。
+> 目前系统仍在**小范围试用与反馈收集阶段**，功能与稳定性会持续迭代完善。已支持 **Windows + Linux** 双平台部署（tar.gz / AppImage），预计 **2026 年下半年**进一步迁移至 **MySQL + Docker** 方案。在此之前以 SQLite 为主，适合单机或小规模局域网试用。
 >
 > 尽管仍在积极开发中，**当前版本已能丝滑跑通全流程**（挂号→接诊→处方→审核→收费→库存），可在实际业务场景中正常使用。
 >
@@ -107,24 +107,58 @@
 |:---:|------|------|------|
 | 🖥️ 后端 | Python / Flask / SQLAlchemy / JWT | 3.8+ | |
 | 🎨 前端 | Vue 3 / Element Plus / Vite / Axios | Vue 3.x | |
-| 💾 数据库 | SQLite（当前）/ MySQL（规划中） | — | 当前 SQLite 零配置开箱即用；**下半年计划迁移至 MySQL + Docker** |
+| 💾 数据库 | SQLite（当前）/ MySQL（规划中） | — | 自动建库建表 + 旧库自动迁移补字段，零配置开箱即用 |
 | 🔧 迁移 | Alembic + 自动列迁移机制 | — | |
-| 📦 部署 | PyInstaller 单文件打包 / Docker（规划中） | — | 当前以 Windows 单机部署为主；**下半年规划迁移至 Linux / Docker** |
+| 📦 部署 | PyInstaller 单文件打包（Windows + Linux） | — | Windows EXE / Linux tar.gz + AppImage 三种格式开箱即用 |
 
 ---
 
 ## 🚀 快速开始
 
-### 方式一：直接运行（推荐）
+### 方式一：Windows 直接运行（推荐）
 
 ```
 1. 下载最新 Release 包
-2. 将数据库文件 app.db 放入 data/ 目录
-3. 双击 启动系统.bat
-4. 浏览器访问 http://localhost:5000
+2. 双击 医务室管理系统.exe
+3. 浏览器访问 http://localhost:5000
 ```
 
-### 方式二：源码开发
+### 方式二：Linux 部署
+
+提供两种打包格式，适用于不同场景：
+
+**格式 A：tar.gz 压缩包（服务器 / 远程机器）**
+```bash
+# 解压
+tar xzf 医务室管理系统-v0.0.16-linux.tar.gz
+cd 医务室管理系统-v0.0.16-linux
+
+# 后台启动（自带进程管理）
+./run.sh start
+
+# 其他命令
+./run.sh stop      # 停止
+./run.sh restart   # 重启
+./run.sh status    # 查看状态
+./run.sh log       # 查看实时日志
+```
+
+**格式 B：AppImage 单文件（桌面 Linux / U盘携带）**
+```bash
+chmod +x 医务室管理系统-v0.0.16-linux.AppImage
+./医务室管理系统-v0.0.16-linux.AppImage
+```
+
+> 💡 Linux 版启动后自动在程序同级目录创建 `data/` 和 `logs/`，无需手动配置数据库。
+
+**从源码构建 Linux 包：**
+```bash
+# 需要 Python 3.8+ 和 Node.js 16+
+bash build_linux.sh
+# 输出到 dist_linux/ 目录，包含 tar.gz 和 AppImage 两种格式
+```
+
+### 方式三：源码开发
 
 **后端 (Python 3.8+)**
 ```bash
@@ -207,6 +241,19 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.16（2026-06-11）🐧🚀
+
+**Linux 双格式打包 & 跨平台支持：**
+- 🐧 **Linux 打包支持**：新增 `medical_room_linux.spec` PyInstaller 配置，适配 Linux x86_64 平台
+- 📦 **tar.gz 自包含压缩包**：含可执行文件 + `run.sh` 服务管理脚本（start/stop/restart/status/log），适合服务器部署
+- 📦 **AppImage 单文件**：双击即运行，无需安装，适合桌面 Linux 和 U 盘携带
+- 🔧 **一键构建脚本**：`build_linux.sh` 自动完成依赖安装、前端构建、PyInstaller 打包、双格式输出
+- 🖥️ **run_prod.py 跨平台适配**：控制台提示信息根据 Windows/Linux 平台自动切换，后台运行时 stdin 安全检查
+
+> 📝 详细变更：[开发日志-open0.0.16.md](docs/开发日志-open0.0.16.md)
+
+---
 
 ### 🏷️ open0.0.16（2026-06-09）🔐🚀
 
