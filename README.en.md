@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.15-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.16-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -31,7 +31,7 @@
 
 > ⚠️ **Project Status: Active Development**
 > 
-> The system is still in **small-scale trial and feedback collection**. It is expected to reach stable maturity in **late 2026**, when we will migrate to **MySQL + Linux/Docker** deployment. Currently runs on SQLite + Windows, suitable for standalone or small LAN setups.
+> The system is still in **small-scale trial and feedback collection**. Now supports **Windows + Linux** dual-platform deployment (tar.gz / AppImage). **MySQL + Docker** migration planned for late 2026. Currently runs on SQLite, suitable for standalone or small LAN setups.
 >
 > Despite active development, **the current version can smoothly run the full workflow** and can be used in real business scenarios.
 >
@@ -101,24 +101,53 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 |:---:|------|------|------|
 | 🖥️ Backend | Python / Flask / SQLAlchemy / JWT | 3.8+ | |
 | 🎨 Frontend | Vue 3 / Element Plus / Vite / Axios | Vue 3.x | |
-| 💾 Database | SQLite (current) / MySQL (planned) | — | Zero-config; **MySQL + Docker planned late 2026** |
+| 💾 Database | SQLite (current) / MySQL (planned) | — | Auto DB creation + schema migration, zero-config |
 | 🔧 Migration | Alembic + auto column migration | — | |
-| 📦 Deployment | PyInstaller / Docker (planned) | — | Windows standalone; **Linux/Docker planned** |
+| 📦 Deployment | PyInstaller (Windows + Linux) | — | Windows EXE / Linux tar.gz + AppImage |
 
 ---
 
 ## 🚀 Quick Start
 
-### Option 1: Run Directly (Recommended)
+### Option 1: Windows (Recommended)
 
 ```
 1. Download the latest Release package
-2. Place app.db in the data/ directory
-3. Double-click start_dev.bat
-4. Open http://localhost:5000 in browser
+2. Double-click 医务室管理系统.exe
+3. Open http://localhost:5000 in browser
 ```
 
-### Option 2: Source Code Development
+### Option 2: Linux Deployment
+
+Two packaging formats for different scenarios:
+
+**Format A: tar.gz (Server / Remote Machines)**
+```bash
+tar xzf medical-room-v0.0.16-linux.tar.gz
+cd medical-room-v0.0.16-linux
+./run.sh start     # Start in background
+./run.sh stop      # Stop
+./run.sh restart   # Restart
+./run.sh status    # Check status
+./run.sh log       # Tail logs
+```
+
+**Format B: AppImage (Desktop Linux / Portable)**
+```bash
+chmod +x medical-room-v0.0.16-linux.AppImage
+./medical-room-v0.0.16-linux.AppImage
+```
+
+> 💡 Database and logs are auto-created in the same directory as the executable — no manual setup needed.
+
+**Build Linux packages from source:**
+```bash
+# Requires Python 3.8+ and Node.js 16+
+bash build_linux.sh
+# Output in dist_linux/ (both tar.gz and AppImage)
+```
+
+### Option 3: Source Code Development
 
 **Backend (Python 3.8+)**
 ```bash
@@ -170,6 +199,24 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 ---
 
 ## 📋 Changelog
+
+### 🏷️ open0.0.16 (2026-06-11) 🐧🚀
+
+**Linux Dual-Format Packaging & Cross-Platform Support:**
+- 🐧 **Linux Packaging**: New `medical_room_linux.spec` PyInstaller config for Linux x86_64
+- 📦 **tar.gz Archive**: Self-contained package with `run.sh` service manager (start/stop/restart/status/log)
+- 📦 **AppImage Single File**: Double-click to run, no installation needed, portable via USB
+- 🔧 **One-Click Build**: `build_linux.sh` automates dependency install, frontend build, PyInstaller packaging
+- 🖥️ **Cross-Platform**: `run_prod.py` adapts console output for Windows/Linux, safe stdin handling
+
+---
+
+### 🏷️ open0.0.16 (2026-06-09) 🔐🚀
+
+- 🔐 **Nurse Report Permissions**: Added `'nurse'` role to revenue stats and drug outbound report endpoints
+- 🚀 **Full Rebuild**: `vite build` + `pyinstaller` full package build
+
+---
 
 ### 🏷️ open0.0.15 (2026-06-08) 🗓️⚠️👩‍⚕️
 
