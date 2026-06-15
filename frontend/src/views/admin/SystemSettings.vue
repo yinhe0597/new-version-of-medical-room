@@ -35,7 +35,7 @@
       </el-form>
       <template #footer>
         <el-button @click="showPasswordDialog = false">取消</el-button>
-        <el-button type="primary" @click="changePassword">确定</el-button>
+        <el-button type="primary" :loading="changingPassword" @click="changePassword">确定</el-button>
       </template>
     </el-dialog>
   </div>
@@ -91,10 +91,36 @@ const handleBackup = async () => {
   }
 }
 
-const changePassword = () => {
-  // Mock implementation as API was not defined in spec
-  ElMessage.info('修改密码功能需后端API支持')
-  showPasswordDialog.value = false
+const changingPassword = ref(false)
+
+const changePassword = async () => {
+  if (!passwordForm.value.old || !passwordForm.value.new || !passwordForm.value.confirm) {
+    ElMessage.warning('请填写所有密码字段')
+    return
+  }
+  if (passwordForm.value.new !== passwordForm.value.confirm) {
+    ElMessage.error('两次输入的新密码不一致')
+    return
+  }
+  if (passwordForm.value.new.length < 6) {
+    ElMessage.warning('新密码长度不能少于6位')
+    return
+  }
+
+  changingPassword.value = true
+  try {
+    const res = await request.post('/auth/change-password', {
+      old_password: passwordForm.value.old,
+      new_password: passwordForm.value.new
+    })
+    ElMessage.success(res.msg || '密码修改成功')
+    showPasswordDialog.value = false
+    passwordForm.value = { old: '', new: '', confirm: '' }
+  } catch (error) {
+    ElMessage.error(error.msg || '密码修改失败')
+  } finally {
+    changingPassword.value = false
+  }
 }
 </script>
 
