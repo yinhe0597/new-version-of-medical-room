@@ -172,7 +172,7 @@
         <el-form-item :label="isEdit ? '现有库存' : '初始库存'" prop="stock" v-if="form.type === 1 || form.type === 3">
           <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="isEdit || isGroupedStock" />
         </el-form-item>
-        <el-form-item label="有效期" v-if="form.type === 1">
+        <el-form-item label="有效期" v-if="form.type === 1 || form.type === 3">
           <el-date-picker
             v-model="form.expiry_date"
             type="date"

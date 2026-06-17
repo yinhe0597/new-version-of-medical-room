@@ -114,8 +114,9 @@
               :key="item.option_id"
               :label="`${item.name} [${item.specification}] (${item.option_label}) - ¥${item.display_price.toFixed(2)}`"
               :value="item.option_id"
+              :style="item.out_of_stock ? 'opacity: 0.5;' : ''"
             >
-              <span style="float: left">{{ item.name }}</span>
+              <span style="float: left">{{ item.name }}<el-tag v-if="item.out_of_stock" type="danger" size="small" style="margin-left: 6px;">库存为0</el-tag></span>
               <span style="float: right; color: #8492a6; font-size: 13px">
                 {{ item.specification }} | {{ (item.type === 1 || item.type === 3) ? '库存: ' + item.stock + ' | ' : '' }}{{ item.option_label }}: ¥{{ item.display_price.toFixed(2) }}
               </span>

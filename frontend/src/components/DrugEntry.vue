@@ -134,6 +134,17 @@
             </el-form-item>
           </el-col>
         </el-row>
+        <el-form-item label="有效期">
+          <el-date-picker
+            v-model="form.expiry_date"
+            type="date"
+            placeholder="选择有效期（可选）"
+            value-format="YYYY-MM-DD"
+            :disabled-date="(d) => d < new Date(new Date().setHours(0,0,0,0))"
+            clearable
+            style="width: 100%"
+          />
+        </el-form-item>
       </template>
 
       <template v-else-if="form.type === 3">
@@ -154,6 +165,17 @@
         </el-row>
         <el-form-item label="入库数量" prop="inbound_quantity">
           <el-input-number v-model="form.inbound_quantity" :min="1" :step="1" style="width: 100%" />
+        </el-form-item>
+        <el-form-item label="有效期">
+          <el-date-picker
+            v-model="form.expiry_date"
+            type="date"
+            placeholder="选择有效期（可选）"
+            value-format="YYYY-MM-DD"
+            :disabled-date="(d) => d < new Date(new Date().setHours(0,0,0,0))"
+            clearable
+            style="width: 100%"
+          />
         </el-form-item>
       </template>
 
@@ -185,8 +207,11 @@
 
 <script setup>
 import { computed, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/api/request'
+
+const router = useRouter()
 
 const formRef = ref(null)
 const submitting = ref(false)
@@ -208,7 +233,8 @@ const form = ref({
   min_sale_price: null,
   specification: '',
   unit: '',
-  price: null
+  price: null,
+  expiry_date: null
 })
 
 const rules = computed(() => {
@@ -364,7 +390,8 @@ const resetForm = () => {
     min_sale_price: null,
     specification: '',
     unit: '',
-    price: null
+    price: null,
+    expiry_date: null
   }
   nameOptions.value = []
 }
@@ -382,7 +409,13 @@ const submit = async () => {
       return res
     } catch (error) {
       if (error && error.code === 409) {
-        await ElMessageBox.alert(error.msg || '存在重复批次记录', '重复校验', { type: 'warning' })
+        ElMessageBox.confirm(
+          (error.msg || '该物资已存在重复批次记录') + '\n是否前往库存列表进行补货？',
+          '重复校验',
+          { confirmButtonText: '前往补货', cancelButtonText: '取消', type: 'warning' }
+        ).then(() => {
+          router.push('/nurse/drugs')
+        }).catch(() => {})
         return
       }
       if (error && error.threshold != null) {

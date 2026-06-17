@@ -468,9 +468,7 @@ def search_drugs():
     drugs = query.limit(20).all()
     data = []
     for drug in drugs:
-        if (drug.type in (1, 3) or drug.type is None) and (drug.stock or 0) <= 0:
-            if drug.variant_type in ["retail", "pack"] or drug.has_scattered:
-                continue
+        is_oos = (drug.type in (1, 3) or drug.type is None) and (drug.stock or 0) <= 0
         data.append({
             "id": drug.id,
             "name": drug.name,
@@ -485,7 +483,8 @@ def search_drugs():
             "has_scattered": drug.has_scattered,
             "scattered_price": drug.scattered_price,
             "conversion_rate": drug.conversion_rate,
-            "stock": drug.stock
+            "stock": drug.stock,
+            "out_of_stock": is_oos
         })
 
     return jsonify({"data": data}), 200

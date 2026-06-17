@@ -258,6 +258,17 @@ def inbound_stock():
         if inbound_qty <= 0:
             return jsonify({"msg": "inbound_quantity must be > 0"}), 400
 
+        # 解析有效期
+        expiry_val = None
+        expiry_str = (data.get("expiry_date") or "").strip()
+        if expiry_str:
+            try:
+                expiry_val = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+            except ValueError:
+                return jsonify({"msg": "Invalid expiry_date format, use YYYY-MM-DD"}), 400
+            if expiry_val < date.today():
+                return jsonify({"msg": "expiry_date cannot be in the past"}), 400
+
         existing = Drug.query.filter(
             Drug.type == 3,
             Drug.name == name,
@@ -283,6 +294,7 @@ def inbound_stock():
             inbound_at=now,
             variant_type="consumable",
             purchase_price=float(data.get("purchase_price") or 0.0),
+            expiry_date=expiry_val,
         )
         db.session.add(drug)
         db.session.commit()
@@ -349,6 +361,17 @@ def inbound_stock():
     except ValidationError as e:
         return jsonify({"msg": e.message, "field": e.field}), 400
 
+    # 解析有效期
+    expiry_val = None
+    expiry_str = (data.get("expiry_date") or "").strip()
+    if expiry_str:
+        try:
+            expiry_val = datetime.strptime(expiry_str, "%Y-%m-%d").date()
+        except ValueError:
+            return jsonify({"msg": "Invalid expiry_date format, use YYYY-MM-DD"}), 400
+        if expiry_val < date.today():
+            return jsonify({"msg": "expiry_date cannot be in the past"}), 400
+
     existing_pack = Drug.query.filter(
         Drug.type == 1,
         Drug.name == name,
@@ -377,6 +400,7 @@ def inbound_stock():
         variant_type="pack",
         stock_group_code=group_code,
         unit_amount=pack_amount,
+        expiry_date=expiry_val,
     )
     db.session.add(pack_drug)
     db.session.flush()
@@ -408,6 +432,7 @@ def inbound_stock():
             variant_type="retail",
             stock_group_code=group_code,
             unit_amount=retail_amount,
+            expiry_date=expiry_val,
         )
         db.session.add(retail_drug)
         db.session.flush()
@@ -1627,7 +1652,7 @@ def list_drugs():
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('size', 20, type=int)
-    query = query.order_by(Drug.storage_location.asc().nullslast())
+    query = query.order_by(Drug.storage_location.asc().nullslast(), Drug.id.desc())
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     data = []
     for drug in pagination.items:
