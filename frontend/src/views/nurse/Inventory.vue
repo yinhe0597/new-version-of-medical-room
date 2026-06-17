@@ -263,8 +263,8 @@
       
           <div v-if="showStockWarnings">
             <h3 style="margin: 0 0 12px 0; font-size: 15px;">📦 库存预警清单 (库存 &lt; {{ smartThreshold }})</h3>
-            <el-table :data="smartResult.warnings" border stripe size="small" max-height="250" empty-text="无符合条件的预警药品">
-              <el-table-column prop="name" label="药品名称" min-width="150" />
+            <el-table :data="smartResult.warnings" border stripe size="small" max-height="250" empty-text="无符合条件的预警物资">
+              <el-table-column prop="name" label="名称" min-width="150" />
               <el-table-column prop="specification" label="规格" width="120" />
               <el-table-column prop="stock" label="当前库存" width="100" align="center">
                 <template #default="scope">
@@ -273,7 +273,7 @@
               </el-table-column>
             </el-table>
             <div style="margin: 4px 0 16px; color: #909399; font-size: 13px;">
-              共 {{ smartResult.warnings.length }} 种药品库存低于预警值
+              共 {{ smartResult.warnings.length }} 种物资库存低于预警值
             </div>
           </div>
       
@@ -285,10 +285,10 @@
               stripe
               size="small"
               max-height="300"
-              empty-text="无有效期预警药品"
+              empty-text="无有效期预警物资"
               :row-class-name="({row}) => row.is_expired ? 'expired-row' : ''"
             >
-              <el-table-column prop="name" label="药品名称" min-width="140" />
+              <el-table-column prop="name" label="名称" min-width="140" />
               <el-table-column prop="specification" label="规格" width="110" />
               <el-table-column label="有效期" width="120">
                 <template #default="scope">{{ scope.row.expiry_date }}</template>
@@ -312,7 +312,7 @@
               </el-table-column>
             </el-table>
             <div style="margin-top: 4px; color: #909399; font-size: 13px;">
-              共 {{ (smartResult.expiry_warnings || []).length }} 种药品在 {{ smartExpiryThreshold }} 天内到期或已过期
+              共 {{ (smartResult.expiry_warnings || []).length }} 种物资在 {{ smartExpiryThreshold }} 天内到期或已过期
             </div>
           </div>
         </div>

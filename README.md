@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.16-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.17-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -241,6 +241,20 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.17（2026-06-12）🔍🔁📋🗓️🔑
+
+**护士入库"丢失"问题修复 & 耗材有效期入库 & 管理员修改密码：**
+- 🔍 **医生端零库存药品可见**：修复搜索接口将库存为 0 的药品/耗材静默隐藏的问题，改为标记 `out_of_stock` 并显示灰色"库存为0"标签，医生仍可开方
+- 🔁 **409 重复入库引导**：护士入库同名+同规格+同批次物资时，409 弹窗提供"前往补货"按钮，跳转库存列表直接补货
+- 📋 **护士列表排序优化**：增加 `Drug.id DESC` 二级排序，新入库项目优先显示在第一页
+- 🗓️ **耗材入库有效期**：护士端药品/耗材入库表单新增有效期日期选择器，后端同步接收并存储
+- 🏷️ **耗材有效期管理**：管理员端耗材表单显示有效期选择器，智能盘库文案从"药品"改为通用"物资"
+- 🔑 **管理员修改密码**：新增 `POST /auth/change-password` 接口，管理员端对接真实 API
+
+> 📝 详细变更：[开发日志-open0.0.17.md](docs/开发日志-open0.0.17.md)
+
+---
 
 ### 🏷️ open0.0.16（2026-06-11）🐧🚀
 

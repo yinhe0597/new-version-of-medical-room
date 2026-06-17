@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.16-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.17-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -199,6 +199,17 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 ---
 
 ## 📋 Changelog
+
+### 🏷️ open0.0.17 (2026-06-12) 🔍🔁📋🗓️🔑
+
+**Nurse Inbound "Lost" Items Fix & Expiry Date Support & Admin Password Change:**
+- 🔍 **Zero-Stock Items Visible**: Fixed doctor search silently hiding drugs/consumables with stock=0, now marked `out_of_stock` with gray tag
+- 🔁 **409 Duplicate Inbound UX**: Confirm dialog now offers "Go to Restock" button navigating to inventory list
+- 📋 **Nurse List Sorting**: Added `Drug.id DESC` secondary sort, newly inbound items appear on first page
+- 🗓️ **Inbound Expiry Date**: Nurse drug/consumable inbound forms now support optional expiry date picker
+- 🔑 **Admin Password Change**: New `POST /auth/change-password` API endpoint with JWT auth
+
+---
 
 ### 🏷️ open0.0.16 (2026-06-11) 🐧🚀
 
