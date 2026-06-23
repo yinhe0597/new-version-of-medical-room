@@ -91,6 +91,9 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "visit", "revoked_by", "INTEGER")
     _ensure_sqlite_column(app, "visit", "revoked_at", "DATETIME")
     _ensure_sqlite_column(app, "visit", "revoke_reason", "TEXT")
+    _ensure_sqlite_column(app, "visit", "tcm_enabled", "BOOLEAN DEFAULT 0")
+    _ensure_sqlite_column(app, "visit", "tcm_syndrome", "VARCHAR(100)")
+    _ensure_sqlite_column(app, "visit", "tcm_diagnosis_desc", "TEXT")
 
     # prescription_item 表新增列
     _ensure_sqlite_column(app, "prescription_item", "original_price", "FLOAT")
@@ -107,6 +110,11 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "prescription_item", "infusion_dosage_value", "FLOAT")
     _ensure_sqlite_column(app, "prescription_item", "infusion_dosage_unit", "VARCHAR(10)")
     _ensure_sqlite_column(app, "prescription_item", "infusion_method", "VARCHAR(50)")
+    _ensure_sqlite_column(app, "prescription_item", "prescription_type", "VARCHAR(10) DEFAULT 'western'")
+    _ensure_sqlite_column(app, "prescription_item", "herb_dosage", "FLOAT")
+    _ensure_sqlite_column(app, "prescription_item", "special_preparation", "VARCHAR(50)")
+    _ensure_sqlite_column(app, "prescription_item", "herb_sort_order", "INTEGER")
+    _ensure_sqlite_column(app, "prescription_item", "template_id", "INTEGER")
 
     # drug 表新增列
     _ensure_sqlite_column(app, "drug", "type", "INTEGER DEFAULT 1")
@@ -120,6 +128,21 @@ def create_app(config_class=None):
     _ensure_sqlite_column(app, "drug", "base_name", "VARCHAR(128)")
     _ensure_sqlite_column(app, "drug", "storage_location", "VARCHAR(10)")
     _ensure_sqlite_column(app, "drug", "expiry_date", "DATE")
+    _ensure_sqlite_column(app, "drug", "batch_no", "VARCHAR(50)")
+    _ensure_sqlite_column(app, "drug", "inbound_at", "DATETIME")
+    _ensure_sqlite_column(app, "drug", "is_herb", "BOOLEAN DEFAULT 0")
+    _ensure_sqlite_column(app, "drug", "herb_code", "VARCHAR(12)")
+    _ensure_sqlite_column(app, "drug", "herb_category", "VARCHAR(3)")
+    _ensure_sqlite_column(app, "drug", "herb_variety", "VARCHAR(4)")
+    _ensure_sqlite_column(app, "drug", "herb_spec", "VARCHAR(2)")
+    _ensure_sqlite_column(app, "drug", "alias_name", "VARCHAR(128)")
+    _ensure_sqlite_column(app, "drug", "pinyin_code", "VARCHAR(50)")
+    _ensure_sqlite_column(app, "drug", "processing_type", "VARCHAR(20)")
+    _ensure_sqlite_column(app, "drug", "safety_stock", "INTEGER DEFAULT 0")
+    _ensure_sqlite_column(app, "drug", "max_stock", "INTEGER DEFAULT 0")
+    _ensure_sqlite_column(app, "drug", "daily_loss_rate", "FLOAT DEFAULT 0.0")
+    _ensure_sqlite_column(app, "drug", "shelf_life_days", "INTEGER")
+    _ensure_sqlite_column(app, "drug", "storage_condition", "VARCHAR(50)")
 
     # payment 表新增列
     _ensure_sqlite_column(app, "payment", "receipt_printed", "BOOLEAN DEFAULT 0")

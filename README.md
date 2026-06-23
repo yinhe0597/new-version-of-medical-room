@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.17-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.19-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -241,6 +241,19 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.19（2026-06-23）🐛🔧🛡️
+
+**旧数据库兼容性全面修复 — 自动列迁移补全（23字段）：**
+- 🐛 **【关键修复】Drug 表 15 个字段缺少自动迁移**：`batch_no`、`inbound_at`、`is_herb` ~ `storage_condition`，导致系统启动时 `take_daily_snapshot()` 崩溃进入重启循环
+- 🐛 **【关键修复】Visit 表 3 个字段缺少自动迁移**：`tcm_enabled`、`tcm_syndrome`、`tcm_diagnosis_desc`，导致历史诊疗记录查询报错
+- 🐛 **【关键修复】PrescriptionItem 表 5 个字段缺少自动迁移**：`prescription_type`、`herb_dosage`、`special_preparation`、`herb_sort_order`、`template_id`，导致处方数据查询报错
+- 🛡️ **规范强化**：每次新增 `db.Column` 必须同步添加 `_ensure_sqlite_column()` 调用
+- ✅ **验证通过**：yws20260608 旧数据库测试，Drug 21→34列、Visit 22→25列、PrescriptionItem 25→30列全部自动补齐
+
+> 📝 详细变更：[开发日志-open0.0.19.md](docs/开发日志-open0.0.19.md)
+
+---
 
 ### 🏷️ open0.0.17（2026-06-12）🔍🔁📋🗓️🔑
 
