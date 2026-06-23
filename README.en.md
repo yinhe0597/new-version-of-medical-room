@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.17-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.19-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -199,6 +199,19 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 ---
 
 ## 📋 Changelog
+
+### 🏷️ open0.0.19 (2026-06-23) 🐛🔧🛡️
+
+**Old Database Compatibility Fix — Complete Auto Column Migration (23 fields):**
+- 🐛 **Drug table 15 missing migrations**: `batch_no`, `inbound_at`, `is_herb` ~ `storage_condition`, causing `take_daily_snapshot()` crash on startup
+- 🐛 **Visit table 3 missing migrations**: `tcm_enabled`, `tcm_syndrome`, `tcm_diagnosis_desc`, breaking visit history queries
+- 🐛 **PrescriptionItem table 5 missing migrations**: `prescription_type`, `herb_dosage`, `special_preparation`, `herb_sort_order`, `template_id`, breaking prescription queries
+- 🛡️ **Policy enforced**: Every new `db.Column` must now include a matching `_ensure_sqlite_column()` call
+- ✅ **Verified**: Drug 21→34 cols, Visit 22→25 cols, PrescriptionItem 25→30 cols auto-migrated on legacy DB
+
+> 📝 Details: [开发日志-open0.0.19.md](docs/开发日志-open0.0.19.md)
+
+---
 
 ### 🏷️ open0.0.17 (2026-06-12) 🔍🔁📋🗓️🔑
 
