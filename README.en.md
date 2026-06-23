@@ -45,7 +45,7 @@
 
 A **full-stack clinic and medication/consumables management system** designed for university and school medical rooms, covering the complete business loop: "Consultation & Prescription → Nurse Review → Dispensing & Settlement → Inventory & Revenue Statistics."
 
-The system features **Doctor / Nurse / Admin / Finance** four independent interfaces with clear role-based permissions.
+The system features **Doctor / Nurse / Admin / Finance / Lobby** five independent interfaces with clear role-based permissions.
 
 ### 🌟 Core Advantages
 
@@ -53,10 +53,11 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 - 🎒 **Three-Type Material Management**: Medications + Services + Consumables, unified yet separate
 - 🔒 **Security First**: Backend strong validation on prescription submission and review
 - 💊 **Smart Inventory**: Supports "whole pack + split unit" linked inbound and deduction
-- 🏗️ **Role Clarity**: Admin / Doctor / Nurse / Finance — capabilities separated by role
+- 🏗️ **Role Clarity**: Admin / Doctor / Nurse / Finance / Lobby — capabilities separated by role
 - 🚀 **Easy Deployment**: SQLite zero-config startup, PyInstaller single-file packaging
 - 🔄 **Smooth Upgrade**: Automatic detection and migration of missing columns and tables
-- 📊 **Data Insights**: Revenue stats (drugs/services/consumables split), drug consumption, multi-dimension reports
+- 🀄 **TCM Support**: TCM four-diagnosis, herbal prescription, classic formula templates
+- 📊 **Data Insights**: Revenue stats (drugs/services/consumables split), drug consumption, analytics dashboard
 
 ---
 
@@ -74,12 +75,18 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 | 🩺 **Doctor** | Scattered Dosing | Auto-calculate total dosage, support half-tablet/split units |
 | 🩺 **Doctor** | IV Compatibility | Independent compatibility management, solute + solution binding |
 | 🩺 **Doctor** | Usage Options | Added `--` empty option for ointments and external use |
+| 🩺 **Doctor** | TCM Four Diagnosis | Inspection (spirit/tongue), inquiry (ten-questions), palpation (pulse), syndrome differentiation |
+| 🩺 **Doctor** | Herbal Prescription | Search herbs by name/pinyin/code, set dosage (g) and special preparation methods |
+| 🩺 **Doctor** | Classic Formulas | 8 preset classic TCM formulas, one-click loading, add/subtract modification |
+| 🩺 **Doctor** | Decoction Usage | Total doses, water volume, decoction time, administration method, frequency, contraindications |
+| 🩺 **Doctor** | On-Duty Toggle | Available/rest switch in top bar, controls hall calling display |
 | 💊 **Nurse** | Prescription Handling | Review, confirm payment, reject operations |
 | 💊 **Nurse** | Visit History | Multi-dimension filtering (nurse/doctor/date/name/status), paginated |
 | 💊 **Nurse** | Transaction Revoke | Final-state revocation with auto inventory restore |
 | 💊 **Nurse** | Smart Inventory | Custom threshold alerts, scattered drug quick filter |
 | 💊 **Nurse** | Inventory Management | Unified drugs/consumables, monthly reports |
 | 💊 **Nurse** | Consumables | Add/remove consumables during prescription execution |
+| 💊 **Nurse** | Herbal Inventory | Herbal medicine inventory list, category/status filter, loss/damage reporting |
 | 💰 **Finance** | Dashboard | Revenue summary cards, 30-day trend chart, revenue type pie chart |
 | 💰 **Finance** | Revenue Reports | Daily/monthly/yearly stats, doctor/nurse filter, Excel export |
 | 💰 **Finance** | Drug Outbound | Outbound records with date/doctor/keyword filter |
@@ -88,8 +95,14 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 | 📊 **Admin** | Drug Management | Full CRUD for drugs/services/consumables, expiry date management |
 | 📊 **Admin** | Patient Records | Student/employee/temporary personnel management |
 | 📊 **Admin** | Operation Logs | Full audit trail for all system operations |
-| 👤 **System** | Role Permissions | 4 independent interfaces with role isolation |
-| 🔧 **System** | Smooth Upgrade | Auto database migration, zero data loss |
+| 📊 **Admin** | Analytics Dashboard | 8 analysis dimensions (visits/revenue/doctor workload/disease distribution/drug consumption/patient types/hourly heatmap), ECharts visualization |
+| 📊 **Admin** | Formula Management | CRUD for classic TCM formula templates |
+| 📊 **Admin** | Damage Approval | Review herbal medicine damage reports, auto-deduct inventory on approval |
+| 👤 **System** | Role Permissions | 5 independent interfaces with role isolation
+| 🔧 **System** | Smooth Upgrade | Auto database migration, zero data loss
+| 🏥 **Lobby** | Appointment | Patient search (masked), create temporary patient, book doctor, one-click check-in |
+| 🏥 **Lobby** | Digital Calling | Full-screen calling animation + Web Speech API TTS + chime sound, 6-second auto-dismiss |
+| 🏥 **Lobby** | Doctor Status | Available doctor list (green/gray status indicators), scrolling notification bar |
 
 </details>
 
@@ -174,6 +187,7 @@ npm run dev
 | Doctor | `doctor` | `123456` |
 | Nurse | `nurse` | `123456` |
 | Finance | `finance` | `123456` |
+| Lobby | `lobby` | `123456` |
 
 ---
 
@@ -203,13 +217,48 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 ### 🏷️ open0.0.19 (2026-06-23) 🐛🔧🛡️
 
 **Old Database Compatibility Fix — Complete Auto Column Migration (23 fields):**
-- 🐛 **Drug table 15 missing migrations**: `batch_no`, `inbound_at`, `is_herb` ~ `storage_condition`, causing `take_daily_snapshot()` crash on startup
+- 🐛 **Drug table 15 missing migrations**: `batch_no`, `inbound_at`, herb-related 8 fields (`is_herb` ~ `processing_type`), inventory 5 fields (`safety_stock` ~ `storage_condition`), causing `take_daily_snapshot()` crash on startup
 - 🐛 **Visit table 3 missing migrations**: `tcm_enabled`, `tcm_syndrome`, `tcm_diagnosis_desc`, breaking visit history queries
 - 🐛 **PrescriptionItem table 5 missing migrations**: `prescription_type`, `herb_dosage`, `special_preparation`, `herb_sort_order`, `template_id`, breaking prescription queries
-- 🛡️ **Policy enforced**: Every new `db.Column` must now include a matching `_ensure_sqlite_column()` call
-- ✅ **Verified**: Drug 21→34 cols, Visit 22→25 cols, PrescriptionItem 25→30 cols auto-migrated on legacy DB
+- 🛡️ **Policy enforced**: Updated "DB column change must include auto-migration" rule, every new `db.Column` must now include a matching `_ensure_sqlite_column()` call
+- ✅ **Verified**: Drug 21→34 cols, Visit 22→25 cols, PrescriptionItem 25→30 cols auto-migrated on yws20260608 legacy DB
 
 > 📝 Details: [开发日志-open0.0.19.md](docs/开发日志-open0.0.19.md)
+
+---
+
+### 🏷️ open0.0.18-dev (2026-06-17) 📊🏥🔔
+
+> ⚠️ **Dev-branch exclusive — NOT included in `main` branch**
+
+**Analytics Dashboard & Lobby Appointment & Digital Calling & Doctor On-Duty:**
+- 📊 **Analytics Dashboard**: 8 backend analytics APIs (overview/visit trend/revenue trend/doctor workload/disease distribution/drug consumption/patient types/hourly heatmap), ECharts visualization (bar/line/pie/heatmap)
+- 🏥 **Lobby Appointment**: New `lobby` role, independent appointment workspace + hall display, patient search (masked), temp patient creation, doctor booking, one-click check-in
+- 🔔 **Digital Calling**: Full-screen calling animation (bell → number → patient name → room), 6-second auto-dismiss; Web Speech API TTS + Web Audio API chime
+- 👨‍⚕️ **Doctor On-Duty**: Available/rest toggle in doctor navbar, controls hall calling display
+- 📢 **Notification Bar**: Top-page scrolling notification bar, admin-configurable content/color/speed
+- 🎨 **Hall UI**: Dark gradient background + frosted glass + pulse animation + doctor status lights
+
+> 📝 Details: [开发日志-open0.0.18-dev.md](docs/开发日志-open0.0.18-dev.md)
+
+---
+
+### 🏷️ open0.0.18 (2026-06-15) 🀄💊📋
+
+> ⚠️ **Dev-branch exclusive — TCM module release**
+
+**Traditional Chinese Medicine System — DB/API/UI Full Stack:**
+- 🀄 **DB Extension**: Drug +13 TCM fields (is_herb~storage_condition), Visit +3 fields, PrescriptionItem +5 fields, 7 new tables (tcm_diagnosis/classic_prescription_template/template_detail/decoction_usage/herb_inventory_log/herb_loss_record/herb_damage_record)
+- 🩺 **TCM Four Diagnosis**: Inspection (spirit/tongue coating), inquiry (ten-questions), palpation (pulse), syndrome differentiation, auto-generated TCM description
+- 💊 **Herbal Prescription**: Search herbs (name/pinyin/code), set dosage(g) and special preparation (decoct-first/decoct-last/wrap-decoct/etc.), auto-calculate cost
+- 📋 **Classic Formula Templates**: 8 preset classic formulas (Sijunzi/Liuwei Dihuang/Xiaoyao/etc.), one-click load, add/subtract modification
+- 🔥 **Decoction Usage**: Total doses, water volume, decoction time, administration, frequency, contraindications
+- 💊 **Nurse Herbal Inventory**: Herbal stock list, category/status filter, GB/T 31774 coding, loss registration, damage reporting
+- 📋 **Admin Formula Mgmt**: CRUD + enable/disable classic formula templates
+- 📋 **Admin Damage Approval**: Review damage reports, auto-deduct inventory
+- 🐛 **Code Review Fix**: 6 critical issues fixed (inventory validation/deduction/exception handling/duplicate approval check/frontend data submission/permissions)
+
+> 📝 Details: [开发日志-open0.0.18.md](docs/开发日志-open0.0.18.md)
 
 ---
 
