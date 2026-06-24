@@ -776,6 +776,19 @@ def create_drug():
         expiry_date=expiry_val,
     )
     db.session.add(drug)
+    db.session.flush()  # 获取 drug.id
+
+    # 记录初始库存盘点记录
+    if drug_type in (1, 3) and int(data.get('stock', 0)) > 0:
+        ir = InventoryRecord(
+            drug_id=drug.id,
+            nurse_id=int(get_jwt_identity()),
+            old_stock=0,
+            new_stock=int(data['stock']),
+            remark='初始入库(管理员新增)',
+        )
+        db.session.add(ir)
+
     db.session.commit()
 
     # 记录运营日志
@@ -810,6 +823,7 @@ def update_drug(id):
         if 'specification' in data or 'unit' in data:
             return jsonify({"msg": "Grouped stock item cannot change specification/unit"}), 400
 
+    old_stock = drug.stock
     if 'name' in data: drug.name = data['name']
     if 'type' in data:
         drug.type = data['type']
@@ -849,6 +863,17 @@ def update_drug(id):
                 return jsonify({"msg": "有效期格式错误，请使用 YYYY-MM-DD 格式"}), 400
         else:
             drug.expiry_date = None
+
+    # 若库存发生变化，记录盘点记录
+    if 'stock' in data and drug.type in (1, 3) and int(data['stock']) != old_stock:
+        ir = InventoryRecord(
+            drug_id=drug.id,
+            nurse_id=int(get_jwt_identity()),
+            old_stock=old_stock,
+            new_stock=int(data['stock']),
+            remark='管理员编辑库存',
+        )
+        db.session.add(ir)
 
     db.session.commit()
 
@@ -968,6 +993,7 @@ def import_drugs():
 
                 existing = Drug.query.filter_by(name=name, specification=specification).first()
                 if existing:
+                    old_stock_existing = existing.stock
                     existing.stock += stock
                     existing.purchase_price = purchase_price
                     existing.price = price
@@ -979,6 +1005,15 @@ def import_drugs():
                     if inbound_at:
                         existing.inbound_at = datetime.fromisoformat(inbound_at)
                     existing.status = 1
+                    # 记录入库盘点记录
+                    if stock > 0:
+                        db.session.add(InventoryRecord(
+                            drug_id=existing.id,
+                            nurse_id=int(get_jwt_identity()),
+                            old_stock=old_stock_existing,
+                            new_stock=existing.stock,
+                            remark='CSV批量入库',
+                        ))
                 else:
                     new_drug = Drug(
                         name=name,
@@ -995,6 +1030,16 @@ def import_drugs():
                         inbound_at=datetime.fromisoformat(inbound_at) if inbound_at else None
                     )
                     db.session.add(new_drug)
+                    db.session.flush()
+                    # 记录初始入库盘点记录
+                    if stock > 0:
+                        db.session.add(InventoryRecord(
+                            drug_id=new_drug.id,
+                            nurse_id=int(get_jwt_identity()),
+                            old_stock=0,
+                            new_stock=stock,
+                            remark='CSV初始入库',
+                        ))
 
                 success_count += 1
             except ValueError:
@@ -1097,6 +1142,16 @@ def import_drugs_xls():
                     inbound_at=inbound_at
                 )
                 db.session.add(new_drug)
+                db.session.flush()
+                # 记录初始入库盘点记录
+                if stock > 0:
+                    db.session.add(InventoryRecord(
+                        drug_id=new_drug.id,
+                        nurse_id=int(get_jwt_identity()),
+                        old_stock=0,
+                        new_stock=stock,
+                        remark='Excel批量初始入库',
+                    ))
                 success_count += 1
             except Exception as e:
                 error_count += 1

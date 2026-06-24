@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.19-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.20-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -241,6 +241,17 @@ npm run dev
 ---
 
 ## 📋 更新日志
+
+### 🏷️ open0.0.20（2026-06-24）📦🐛💊
+
+**库存盘点完整性修复 & 单独购药诊查费Bug修复 & 职工优惠功能细分：**
+- 📦 **库存逻辑修复**：管理员新增/编辑/CSV导入/Excel导入药品或耗材时，自动创建 `InventoryRecord` 盘点记录，确保月度报表不会遗漏库存变化，解决药品"无故丢失"问题
+- 🐛 **单独购药诊查费Bug修复**：修复单独购药（诊查费=0）被驳回重新开方时，JavaScript `0 || 8` 导致诊查费错误显示为8元的问题，改用 `!= null` 判断
+- 💊 **护士职工优惠功能细分**：Payment 模型新增 `actual_consultation_fee` 和 `actual_drug_amount` 字段；前端职工优惠 UI 从单一"实收金额"拆分为"实收诊查费"+"实收药价"两个输入框，显示药品成本价参考（进货价），最终以护士填写为准
+
+> 📝 详细变更：[开发日志-open0.0.20.md](docs/开发日志-open0.0.20.md)
+
+---
 
 ### 🏷️ open0.0.19（2026-06-23）🐛🔧🛡️
 

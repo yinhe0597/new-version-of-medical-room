@@ -17,7 +17,7 @@
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
 [![SQLite](https://img.shields.io/badge/Database-SQLite-003B57?logo=sqlite&logoColor=white)](https://sqlite.org)
 [![License](https://img.shields.io/badge/License-AGPLv3-blue?logo=opensourceinitiative&logoColor=white)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-open0.0.19-red?logo=semver&logoColor=white)]()
+[![Version](https://img.shields.io/badge/Version-open0.0.20-red?logo=semver&logoColor=white)]()
 
 ---
 
@@ -199,6 +199,17 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 ---
 
 ## 📋 Changelog
+
+### 🏷️ open0.0.20 (2026-06-24) 📦🐛💊
+
+**Inventory Record Completeness Fix & Consultation Fee Bug Fix & Employee Discount Refinement:**
+- 📦 **Inventory Fix**: Auto-create `InventoryRecord` when admin adds/edits/imports drugs or consumables via CSV/Excel, preventing items from "disappearing" in monthly reports
+- 🐛 **Consultation Fee Bug**: Fixed JavaScript `0 || 8` falsy-value trap causing standalone drug purchase (fee=0) to display 8 yuan when re-prescribed after rejection
+- 💊 **Employee Discount Split**: New `actual_consultation_fee` and `actual_drug_amount` fields in Payment model; nurse UI now shows separate inputs for actual consultation fee and actual drug price, with drug cost reference (purchase price) as guidance
+
+> 📝 Details: [开发日志-open0.0.20.md](docs/开发日志-open0.0.20.md)
+
+---
 
 ### 🏷️ open0.0.19 (2026-06-23) 🐛🔧🛡️
 

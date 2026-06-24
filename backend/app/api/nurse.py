@@ -1016,6 +1016,8 @@ def get_visit_detail(visit_id):
             "modified_by_name": item.modifier.real_name if item.modifier else None,
             "modified_at": item.modified_at.strftime('%Y-%m-%d %H:%M:%S') if item.modified_at else None,
             "modify_reason": item.modify_reason,
+            "purchase_price": drug.purchase_price if drug else 0,  # 进货价（成本参考）
+            "purchase_cost": item.purchase_cost if item.purchase_cost else ((drug.purchase_price or 0) * item.quantity) if drug else 0,  # 该条目成本合计
         })
 
     # 读取小票快照（支付执行时保存的 JSON 快照）
@@ -1467,7 +1469,9 @@ def execute_visit(visit_id):
     data = request.get_json() or {}
     payment_method = data.get('payment_method', 'cash')
     employee_discount = data.get('employee_discount', False)
-    actual_amount = data.get('actual_amount')
+    actual_amount = data.get('actual_amount')  # 向后兼容旧版单一实收金额
+    actual_consultation_fee = data.get('actual_consultation_fee')  # 实收诊查费（新版职工优惠分项）
+    actual_drug_amount = data.get('actual_drug_amount')  # 实收药价（新版职工优惠分项）
 
     visit.total_amount = _recompute_visit_total(visit)
 
@@ -1524,12 +1528,22 @@ def execute_visit(visit_id):
         if visit.verified_at is None:
             visit.verified_at = datetime.utcnow()
 
-        # 计算实收金额
+        # 计算实收金额（支持新版分项实收与旧版兼容）
         final_amount = visit.total_amount
         original_amount = None
-        if employee_discount and actual_amount is not None:
-            original_amount = visit.total_amount
-            final_amount = float(actual_amount)
+        actual_consultation_fee_val = None
+        actual_drug_amount_val = None
+        if employee_discount:
+            if actual_consultation_fee is not None and actual_drug_amount is not None:
+                # 新模式：护士分别填写实收诊查费和实收药价
+                actual_consultation_fee_val = float(actual_consultation_fee)
+                actual_drug_amount_val = float(actual_drug_amount)
+                final_amount = actual_consultation_fee_val + actual_drug_amount_val
+                original_amount = visit.total_amount
+            elif actual_amount is not None:
+                # 向后兼容旧模式：单一实收金额
+                original_amount = visit.total_amount
+                final_amount = float(actual_amount)
 
         payment = Payment(
             visit_id=visit.id,
@@ -1537,7 +1551,9 @@ def execute_visit(visit_id):
             amount=final_amount,
             payment_method=payment_method,
             is_employee_discount=employee_discount,
-            original_amount=original_amount
+            original_amount=original_amount,
+            actual_consultation_fee=actual_consultation_fee_val,
+            actual_drug_amount=actual_drug_amount_val
         )
         db.session.add(payment)
 
@@ -1581,7 +1597,9 @@ def execute_visit(visit_id):
                 "payment_method": payment_method,
                 "amount": final_amount,
                 "employee_discount": employee_discount,
-                "original_amount": original_amount
+                "original_amount": original_amount,
+                "actual_consultation_fee": actual_consultation_fee_val,
+                "actual_drug_amount": actual_drug_amount_val
             }, ensure_ascii=False)
         )
         db.session.add(log)

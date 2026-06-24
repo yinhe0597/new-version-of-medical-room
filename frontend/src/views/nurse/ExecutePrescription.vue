@@ -134,17 +134,34 @@
 
           <div class="discount-section" style="margin-top: 10px;">
             <el-checkbox v-model="employeeDiscount">职工优惠</el-checkbox>
-            <div v-if="employeeDiscount" style="margin-top: 8px; display: flex; align-items: center; gap: 8px;">
-              <span>实收金额：</span>
-              <el-input-number 
-                v-model="actualAmount" 
-                :min="0" 
-                :max="visitDetail.total_amount" 
-                :precision="2" 
-                :step="0.5"
-                size="small"
-              />
-              <span>元</span>
+            <div v-if="employeeDiscount" style="margin-top: 12px;">
+              <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
+                <span style="min-width: 90px;">实收诊查费：</span>
+                <el-input-number 
+                  v-model="actualConsultationFee" 
+                  :min="0" 
+                  :precision="2" 
+                  :step="0.5"
+                  size="small"
+                />
+                <span>元</span>
+                <span style="color: #909399; font-size: 12px;">（应收 ¥{{ visitDetail.consultation_fee.toFixed(2) }}）</span>
+              </div>
+              <div style="display: flex; align-items: center; gap: 8px;">
+                <span style="min-width: 90px;">实收药价：</span>
+                <el-input-number 
+                  v-model="actualDrugAmount" 
+                  :min="0" 
+                  :precision="2" 
+                  :step="0.5"
+                  size="small"
+                />
+                <span>元</span>
+                <span style="color: #909399; font-size: 12px;">（应收 ¥{{ drugTotalFromItems.toFixed(2) }}，成本参考 ¥{{ drugCostTotal.toFixed(2) }}）</span>
+              </div>
+              <div style="margin-top: 4px; color: #409eff; font-size: 13px;">
+                合计实收：¥ {{ (actualConsultationFee + actualDrugAmount).toFixed(2) }}
+              </div>
             </div>
           </div>
           
@@ -297,7 +314,8 @@ const loading = ref(false)
 const executing = ref(false)
 const paymentMethod = ref('cash')
 const employeeDiscount = ref(false)
-const actualAmount = ref(0)
+const actualConsultationFee = ref(0)
+const actualDrugAmount = ref(0)
 const showReceipt = ref(false)
 const receiptData = ref(null)
 const verifying = ref(false)
@@ -326,7 +344,8 @@ const addServiceForm = reactive({
 
 watch(employeeDiscount, (val) => {
   if (val && visitDetail.value) {
-    actualAmount.value = visitDetail.value.total_amount
+    actualConsultationFee.value = visitDetail.value.consultation_fee || 0
+    actualDrugAmount.value = drugTotalFromItems.value
   }
 })
 
@@ -399,6 +418,21 @@ const serviceItems = computed(() => {
 const drugItems = computed(() => {
   if (!visitDetail.value) return []
   return visitDetail.value.items.filter(item => item.type !== 2 && item.type !== 3)
+})
+
+// 药品应收合计（用于职工优惠实收药价默认值）
+const drugTotalFromItems = computed(() => {
+  if (!visitDetail.value) return 0
+  return drugItems.value.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+})
+
+// 药品成本合计（供护士参考）
+const drugCostTotal = computed(() => {
+  if (!visitDetail.value) return 0
+  return drugItems.value.reduce((sum, item) => {
+    const cost = Number(item.purchase_cost) || (Number(item.purchase_price) * Number(item.quantity)) || 0
+    return sum + cost
+  }, 0)
 })
 
 const hasServiceItems = computed(() => {
@@ -514,11 +548,15 @@ const submitModify = async () => {
 const handleExecute = async () => {
   executing.value = true
   try {
-    const res = await request.post(`/nurse/visits/${visitId}/execute`, {
+    const payload = {
       payment_method: paymentMethod.value,
-      employee_discount: employeeDiscount.value,
-      actual_amount: employeeDiscount.value ? actualAmount.value : null
-    })
+      employee_discount: employeeDiscount.value
+    }
+    if (employeeDiscount.value) {
+      payload.actual_consultation_fee = actualConsultationFee.value
+      payload.actual_drug_amount = actualDrugAmount.value
+    }
+    const res = await request.post(`/nurse/visits/${visitId}/execute`, payload)
     receiptData.value = res.data
     showReceipt.value = true
     ElMessage.success('结算成功')

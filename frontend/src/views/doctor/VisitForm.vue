@@ -639,7 +639,7 @@ const loadRejectedVisitAsDraft = async () => {
     visitForm.value.diagnosis = detail.diagnosis || ''
     visitForm.value.doctor_advice = detail.doctor_advice || ''
     visitForm.value.special_note = detail.special_note || ''
-    visitForm.value.consultation_fee = Number(detail.consultation_fee || 8)
+    visitForm.value.consultation_fee = detail.consultation_fee != null ? Number(detail.consultation_fee) : 8
 
     const draftItems = Array.isArray(detail.items) ? detail.items : []
     const normalItems = []
