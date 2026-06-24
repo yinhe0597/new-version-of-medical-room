@@ -127,7 +127,7 @@ _ensure_sqlite_column(app, "payment", "actual_drug_amount", "FLOAT")
 ## 五、Git 提交记录
 
 ```
-待提交
+d20149c feat: open0.0.20 库存盘点完整性修复 & 单独购药诊查费Bug修复 & 职工优惠功能细分
 ```
 
 ---
