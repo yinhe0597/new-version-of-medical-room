@@ -211,7 +211,7 @@ def start_server():
 
     print('')
     print('=' * 60)
-    print('    医务室诊疗管理系统 open0.0.19')
+    print('    医务室诊疗管理系统 open0.0.20')
     print('=' * 60)
     print(f'  本机访问:   http://127.0.0.1:{PORT}')
     print(f'  局域网访问: http://{local_ip}:{PORT}')
