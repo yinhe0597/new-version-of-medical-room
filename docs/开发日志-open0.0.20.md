@@ -173,7 +173,7 @@ _ensure_sqlite_column(app, "payment", "actual_drug_amount", "FLOAT")
 
 ```
 d20149c feat: open0.0.20 库存盘点完整性修复 & 单独购药诊查费Bug修复 & 职工优惠功能细分
-40545bc feat: open0.0.20 营收统计报表分页功能
+5b5d5c0 feat: open0.0.20 营收统计报表分页功能
 ```
 
 ---
