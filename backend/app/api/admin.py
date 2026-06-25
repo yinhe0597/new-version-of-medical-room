@@ -1319,6 +1319,16 @@ def get_revenue_stats():
     doctor_id = request.args.get("doctor_id", type=int)
     nurse_id = request.args.get("nurse_id", type=int)
 
+    # 分页参数（仅对明细数据生效，汇总统计始终全量计算）
+    try:
+        page = int(request.args.get("page", 1))
+        per_page = int(request.args.get("per_page", 20))
+    except (TypeError, ValueError):
+        page = 1
+        per_page = 20
+    page = max(page, 1)
+    per_page = max(min(per_page, 200), 1)  # 限制1-200条/页
+
     try:
         if start_time_str or end_time_str:
             start = parse_dt(start_time_str, is_end=False) if start_time_str else None
@@ -1433,6 +1443,12 @@ def get_revenue_stats():
                 "profit": profit,
             })
 
+        # 分页切割明细数据（汇总统计仍基于全量数据）
+        total = len(details)
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
+        paged_details = details[start_idx:end_idx]
+
         return jsonify({
             "data": {
                 "total_revenue": total_revenue,
@@ -1442,7 +1458,10 @@ def get_revenue_stats():
                 "consultation_revenue": consultation_revenue,
                 "total_cost": total_cost,
                 "total_profit": total_profit,
-                "details": details,
+                "details": paged_details,
+                "total": total,
+                "page": page,
+                "per_page": per_page,
                 "range": {
                     "start": start.strftime("%Y-%m-%d %H:%M:%S"),
                     "end": (end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),

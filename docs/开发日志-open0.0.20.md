@@ -111,28 +111,74 @@ _ensure_sqlite_column(app, "payment", "actual_drug_amount", "FLOAT")
 
 ---
 
-## 四、涉及文件清单
+## 四、营收统计报表分页功能
+
+### 问题背景
+
+管理员端营收统计报表（`/admin/statistics/revenue`）一次性返回全部明细数据。随着业务数据增长，历史就诊记录越来越多，全量返回导致：
+
+- 接口响应变慢，前端渲染卡顿
+- 明细表格一次性加载数千行数据，用户体验差
+
+### 改动方案
+
+#### 4.1 后端分页（`backend/app/api/admin.py`）
+
+`GET /admin/statistics/revenue` 接口新增分页参数：
+
+| 参数 | 类型 | 默认值 | 说明 |
+|------|------|------|------|
+| `page` | int | 1 | 页码（≥1） |
+| `per_page` | int | 20 | 每页条数（1-200） |
+
+响应新增分页元数据：
+
+```json
+{
+  "data": {
+    "total_revenue": ...,
+    "details": [...],   // 分页后的明细数据
+    "total": 156,       // 明细总条数（全量）
+    "page": 1,          // 当前页码
+    "per_page": 20      // 每页条数
+  }
+}
+```
+
+> 汇总统计（总收入、成本、利润等）始终基于全量数据计算，仅明细列表受分页影响。
+
+#### 4.2 前端分页（`frontend/src/views/admin/Statistics.vue`）
+
+- 明细表格下方新增 `<el-pagination>` 分页组件，支持 10/20/50/100 条/页切换
+- 筛选条件（日期范围、医生、护士）变更时自动重置到第 1 页
+- 统计类型切换（日报/月报/年报）时自动重置到第 1 页
+
+---
+
+## 五、涉及文件清单
 
 | 文件 | 改动类型 | 说明 |
 |------|------|------|
 | `backend/app/models/__init__.py` | 新增字段 | Payment 模型增加 actual_consultation_fee / actual_drug_amount |
 | `backend/app/__init__.py` | 新增迁移 | SQLite 自动迁移新 Payment 字段 |
-| `backend/app/api/admin.py` | 修复 | create_drug / update_drug / import_drugs / import_drugs_xls 增加 InventoryRecord |
+| `backend/app/api/admin.py` | 修复+增强 | create_drug / update_drug / import_drugs / import_drugs_xls 增加 InventoryRecord；营收统计新增分页参数 |
 | `backend/app/api/nurse.py` | 增强 | get_visit_detail 返回成本价；execute_visit 支持分项实收 |
 | `frontend/src/views/doctor/VisitForm.vue` | 修复 | 驳回重开方诊查费 0 值 bug |
 | `frontend/src/views/nurse/ExecutePrescription.vue` | 重构 | 职工优惠 UI 拆分为实收诊查费 + 实收药价 + 成本参考 |
+| `frontend/src/views/admin/Statistics.vue` | 增强 | 营收统计明细表格新增分页组件 |
 
 ---
 
-## 五、Git 提交记录
+## 六、Git 提交记录
 
 ```
 d20149c feat: open0.0.20 库存盘点完整性修复 & 单独购药诊查费Bug修复 & 职工优惠功能细分
+40545bc feat: open0.0.20 营收统计报表分页功能
 ```
 
 ---
 
-## 六、部署信息
+## 七、部署信息
 
 | 项目 | 详情 |
 |------|------|

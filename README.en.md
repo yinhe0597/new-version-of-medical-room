@@ -200,12 +200,13 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 
 ## 📋 Changelog
 
-### 🏷️ open0.0.20 (2026-06-24) 📦🐛💊
+### 🏷️ open0.0.20 (2026-06-25) 📦🐛💊📄
 
-**Inventory Record Completeness Fix & Consultation Fee Bug Fix & Employee Discount Refinement:**
+**Inventory Record Completeness Fix & Consultation Fee Bug Fix & Employee Discount Refinement & Revenue Pagination:**
 - 📦 **Inventory Fix**: Auto-create `InventoryRecord` when admin adds/edits/imports drugs or consumables via CSV/Excel, preventing items from "disappearing" in monthly reports
 - 🐛 **Consultation Fee Bug**: Fixed JavaScript `0 || 8` falsy-value trap causing standalone drug purchase (fee=0) to display 8 yuan when re-prescribed after rejection
 - 💊 **Employee Discount Split**: New `actual_consultation_fee` and `actual_drug_amount` fields in Payment model; nurse UI now shows separate inputs for actual consultation fee and actual drug price, with drug cost reference (purchase price) as guidance
+- 📄 **Revenue Pagination**: Backend `/admin/statistics/revenue` now supports `page`/`per_page` pagination (summary stats use full dataset, detail list is paginated); frontend adds pagination component with 10/20/50/100 per-page options, auto-resets to page 1 on filter change
 
 > 📝 Details: [开发日志-open0.0.20.md](docs/开发日志-open0.0.20.md)
 

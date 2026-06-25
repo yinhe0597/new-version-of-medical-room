@@ -19,7 +19,7 @@
               start-placeholder="开始时间"
               end-placeholder="结束时间"
               style="margin-left: 10px; width: 360px"
-              @change="fetchStats"
+              @change="handleFilterChange"
             />
 
             <el-select
@@ -28,7 +28,7 @@
               filterable
               placeholder="接诊医生"
               style="margin-left: 10px; width: 160px"
-              @change="fetchStats"
+              @change="handleFilterChange"
             >
               <el-option v-for="u in doctors" :key="u.id" :label="u.real_name" :value="u.id" />
             </el-select>
@@ -39,7 +39,7 @@
               filterable
               placeholder="开药护士"
               style="margin-left: 10px; width: 160px"
-              @change="fetchStats"
+              @change="handleFilterChange"
             >
               <el-option v-for="u in nurses" :key="u.id" :label="u.real_name" :value="u.id" />
             </el-select>
@@ -110,7 +110,7 @@
 
       <el-divider content-position="left">明细数据</el-divider>
 
-      <el-table :data="stats.details" stripe style="width: 100%" height="400">
+      <el-table :data="stats.details" stripe style="width: 100%" max-height="400">
         <el-table-column prop="date" label="时间" width="170" />
         <el-table-column prop="visit_id" label="就诊ID" width="90" />
         <el-table-column label="患者" width="120">
@@ -141,6 +141,19 @@
           <template #default="scope">¥ {{ (scope.row.profit || 0).toFixed(2) }}</template>
         </el-table-column>
       </el-table>
+
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+        <el-pagination
+          v-model:current-page="currentPage"
+          v-model:page-size="pageSize"
+          :page-sizes="[10, 20, 50, 100]"
+          :total="totalRecords"
+          layout="total, sizes, prev, pager, next, jumper"
+          background
+          @size-change="handlePageSizeChange"
+          @current-change="handlePageChange"
+        />
+      </div>
     </el-card>
   </div>
 </template>
@@ -182,6 +195,27 @@ const stats = ref({
   details: []
 })
 
+// 分页状态
+const currentPage = ref(1)
+const pageSize = ref(20)
+const totalRecords = ref(0)
+
+const handlePageChange = (page) => {
+  currentPage.value = page
+  fetchStats()
+}
+
+const handlePageSizeChange = (size) => {
+  pageSize.value = size
+  currentPage.value = 1
+  fetchStats()
+}
+
+const handleFilterChange = () => {
+  currentPage.value = 1
+  fetchStats()
+}
+
 const handleTypeChange = () => {
   if (statsType.value === 'daily') {
     timeRange.value = [
@@ -199,6 +233,7 @@ const handleTypeChange = () => {
       dayjs().endOf('year').format('YYYY-MM-DD HH:mm:ss')
     ]
   }
+  currentPage.value = 1
   fetchStats()
 }
 
@@ -221,10 +256,13 @@ const fetchStats = async () => {
         start_time: timeRange.value[0],
         end_time: timeRange.value[1],
         doctor_id: doctorId.value,
-        nurse_id: nurseId.value
+        nurse_id: nurseId.value,
+        page: currentPage.value,
+        per_page: pageSize.value
       }
     })
     stats.value = res.data
+    totalRecords.value = res.data.total || 0
   } catch (error) {
     console.error(error)
   }
