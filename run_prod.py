@@ -250,8 +250,8 @@ def start_server():
     print(f'  数据库位置: {database_label}')
     print('=' * 60)
     if sys.platform == 'win32':
-        print('  ⚠ 请勿点击本窗口内部（会导致系统暂停）')
-        print('  ⚠ 关闭本窗口将停止系统运行')
+        print('  [!] 请勿点击本窗口内部（会导致系统暂停）')
+        print('  [!] 关闭本窗口将停止系统运行')
     else:
         print('  提示: Ctrl+C 停止系统运行')
         print('  提示: 后台运行请使用 run.sh start')
@@ -301,6 +301,9 @@ if __name__ == '__main__':
                 logging.error('Max restart attempts reached. Server will not restart.')
                 print(f"\n服务器多次崩溃，已停止自动重启。请检查 logs/app.log 获取详情。", file=sys.stderr)
                 if sys.stdin.isatty():
-                    input("按 Enter 键退出...")
+                    try:
+                        input("按 Enter 键退出...")
+                    except EOFError:
+                        pass
 
     logging.info('Application exited.')
