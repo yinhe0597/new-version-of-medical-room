@@ -5,14 +5,14 @@ ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-# 在创建app之前就设置环境变量，指定数据库文件
-os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.abspath('D:\\yiwushi\\open0.0\\data\\app.db')
-print(f"Using database: {os.environ['SQLALCHEMY_DATABASE_URI']}")
+os.environ.setdefault('APP_ROOT', ROOT_DIR)
 
 from backend.app import create_app, db
 from backend.app.models import User, Patient, Drug, Visit, PrescriptionItem, Payment
+from sqlalchemy.engine import make_url
 
 app = create_app()
+print(f"Using database: {make_url(app.config['SQLALCHEMY_DATABASE_URI']).render_as_string(hide_password=True)}")
 
 @app.shell_context_processor
 def make_shell_context():
@@ -20,7 +20,7 @@ def make_shell_context():
 
 if __name__ == '__main__':
     import logging
-    from werkzeug.security import generate_password_hash
+    from backend.app.services.bootstrap import add_missing_bootstrap_users
     
     # 配置日志
     log_file = os.path.join(os.path.dirname(__file__), 'app.log')
@@ -39,31 +39,20 @@ if __name__ == '__main__':
         with app.app_context():
             logging.info('Creating database tables...')
             db.create_all()
-            # 创建默认用户
-            logging.info('Creating default users...')
-            admin = User.query.filter_by(username='admin').first()
-            if not admin:
-                admin = User(username='admin', password_hash=generate_password_hash('123456'), role='admin', real_name='管理员')
-                db.session.add(admin)
-                logging.info('Created admin user')
-            
-            doctor = User.query.filter_by(username='doctor').first()
-            if not doctor:
-                doctor = User(username='doctor', password_hash=generate_password_hash('123456'), role='doctor', real_name='张医生')
-                db.session.add(doctor)
-                logging.info('Created doctor user')
-            
-            nurse = User.query.filter_by(username='nurse').first()
-            if not nurse:
-                nurse = User(username='nurse', password_hash=generate_password_hash('123456'), role='nurse', real_name='李护士')
-                db.session.add(nurse)
-                logging.info('Created nurse user')
-            
+            logging.info('Ensuring bootstrap users exist...')
+            created_users, bootstrap_password = add_missing_bootstrap_users()
             db.session.commit()
+            if created_users:
+                logging.warning('Created bootstrap users: %s', ', '.join(created_users))
+                print(f'首次启动临时密码: {bootstrap_password}')
             logging.info('Database initialization completed.')
         
         logging.info('Starting Flask application...')
-        app.run(debug=True, host='127.0.0.1', port=5000, use_reloader=False)
+        debug_enabled = os.environ.get('FLASK_DEBUG') == '1'
+        bind_host = os.environ.get('FLASK_RUN_HOST', '127.0.0.1')
+        if debug_enabled and bind_host not in ('127.0.0.1', 'localhost', '::1'):
+            raise RuntimeError('FLASK_DEBUG may only be used with a loopback FLASK_RUN_HOST')
+        app.run(debug=debug_enabled, host=bind_host, port=5000, use_reloader=False)
     except Exception as e:
         logging.error(f"Error starting application: {e}")
     finally:

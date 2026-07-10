@@ -1,6 +1,11 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from werkzeug.security import generate_password_hash, check_password_hash
 from backend.app import db
+
+
+def utcnow():
+    """Return naive UTC for compatibility with existing database columns."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
 
 VISIT_STATUS_PENDING = "pending"
 VISIT_STATUS_NURSE_VERIFIED = "nurse_verified"
@@ -8,6 +13,12 @@ VISIT_STATUS_COMPLETED = "completed"
 VISIT_STATUS_REJECTED = "rejected"
 VISIT_STATUS_REVOKED = "revoked"
 VISIT_STATUS_PAUSED = "paused"  # 仅前端 UI 使用，不进入 Visit 状态机
+
+INVENTORY_OPERATION_INBOUND = "inbound"
+INVENTORY_OPERATION_ADJUSTMENT = "adjustment"
+INVENTORY_OPERATION_MERGE = "merge"
+INVENTORY_OPERATION_DISPENSE = "dispense"
+INVENTORY_OPERATION_REVERSAL = "reversal"
 
 VISIT_ALLOWED_STATUS_TRANSITIONS = {
     VISIT_STATUS_PENDING: {VISIT_STATUS_NURSE_VERIFIED, VISIT_STATUS_REJECTED},
@@ -31,9 +42,18 @@ class User(db.Model):
     password_hash = db.Column(db.String(256))
     real_name = db.Column(db.String(64))
     role = db.Column(db.String(20))
+    token_version = db.Column(db.Integer, default=0, nullable=True)
+    is_active = db.Column(
+        db.Boolean,
+        default=True,
+        server_default="1",
+        nullable=False,
+        index=True,
+    )
 
     def set_password(self, password):
         self.password_hash = generate_password_hash(password)
+        self.token_version = int(self.token_version or 0) + 1
 
     def check_password(self, password):
         return check_password_hash(self.password_hash, password)
@@ -52,12 +72,13 @@ class Patient(db.Model):
     gender = db.Column(db.String(10))
     class_name = db.Column(db.String(100), nullable=True)
     phone = db.Column(db.String(20), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
     grade = db.Column(db.String(50), nullable=True)
     college = db.Column(db.String(100), nullable=True)
     major = db.Column(db.String(100), nullable=True)
-    name_pinyin = db.Column(db.Text, index=True, nullable=True)
-    name_initials = db.Column(db.Text, index=True, nullable=True)
+    # Bounded strings keep these indexes portable to MySQL (TEXT indexes need prefixes).
+    name_pinyin = db.Column(db.String(255), index=True, nullable=True)
+    name_initials = db.Column(db.String(255), index=True, nullable=True)
     is_temporary = db.Column(db.Boolean, default=False, index=True)
     age = db.Column(db.Integer, nullable=True)
     id_card = db.Column(db.String(20), nullable=True, index=True)
@@ -110,7 +131,7 @@ class DrugStockGroup(db.Model):
     pack_drug_id = db.Column(db.Integer, db.ForeignKey('drug.id'), nullable=False)
     retail_drug_id = db.Column(db.Integer, db.ForeignKey('drug.id'), nullable=True)
     created_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     pack_drug = db.relationship('Drug', foreign_keys=[pack_drug_id])
     retail_drug = db.relationship('Drug', foreign_keys=[retail_drug_id])
@@ -120,7 +141,7 @@ class Visit(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     patient_id = db.Column(db.Integer, db.ForeignKey('patient.id'))
     doctor_id = db.Column(db.Integer, db.ForeignKey('user.id'))
-    timestamp = db.Column(db.DateTime, index=True, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, index=True, default=utcnow)
 
     chief_complaint = db.Column(db.Text)
     present_illness = db.Column(db.Text)
@@ -202,8 +223,8 @@ class TextTemplate(db.Model):
     category = db.Column(db.String(50), index=True, nullable=False)
     title = db.Column(db.String(200), nullable=False)
     content = db.Column(db.Text, nullable=False)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
 
     def __repr__(self):
         return f'<TextTemplate {self.id}>'
@@ -214,14 +235,14 @@ class Payment(db.Model):
     nurse_id = db.Column(db.Integer, db.ForeignKey('user.id'))
 
     amount = db.Column(db.Float)
-    payment_date = db.Column(db.DateTime, default=datetime.utcnow)
+    payment_date = db.Column(db.DateTime, default=utcnow)
     payment_method = db.Column(db.String(50))
     receipt_printed = db.Column(db.Boolean, default=False)
     is_employee_discount = db.Column(db.Boolean, default=False)  # 是否职工优惠
     original_amount = db.Column(db.Float, nullable=True)  # 原始应收金额（优惠前）
     receipt_snapshot = db.Column(db.Text, nullable=True)  # 小票数据快照（JSON）
     actual_consultation_fee = db.Column(db.Float, nullable=True)  # 实收诊查费（职工优惠拆分）
-    actual_drug_amount = db.Column(db.Float, nullable=True)  # 实收药价（职工优惠拆分）
+    actual_drug_amount = db.Column(db.Float, nullable=True)  # 实收物资及诊疗项目金额（兼容旧字段名）
 
     def __repr__(self):
         return f'<Payment {self.id}>'
@@ -230,14 +251,17 @@ class InventoryRecord(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     drug_id = db.Column(db.Integer, db.ForeignKey('drug.id'))
     nurse_id = db.Column(db.Integer, db.ForeignKey('user.id'))
+    visit_id = db.Column(db.Integer, db.ForeignKey('visit.id'), index=True, nullable=True)
     
     old_stock = db.Column(db.Integer)
     new_stock = db.Column(db.Integer)
+    operation_type = db.Column(db.String(20), index=True, nullable=True)
     remark = db.Column(db.String(200))
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=utcnow)
 
     drug = db.relationship('Drug')
     nurse = db.relationship('User')
+    visit = db.relationship('Visit')
 
     def __repr__(self):
         return f'<InventoryRecord {self.id}>'
@@ -247,7 +271,7 @@ class DailyStockSnapshot(db.Model):
     drug_id = db.Column(db.Integer, db.ForeignKey('drug.id'), index=True)
     date = db.Column(db.Date, index=True)
     stock = db.Column(db.Integer)
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
 
     drug = db.relationship('Drug')
     __table_args__ = (db.UniqueConstraint('drug_id', 'date'),)
@@ -276,8 +300,8 @@ class ParkedVisit(db.Model):
     items_json = db.Column(db.Text)
     quick_mode = db.Column(db.Boolean, default=False)
 
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
-    updated_at = db.Column(db.DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow)
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
     expires_at = db.Column(db.DateTime, nullable=False, index=True)
 
     patient = db.relationship('Patient')
@@ -295,7 +319,7 @@ class OperationLog(db.Model):
     target_id = db.Column(db.Integer)
     summary = db.Column(db.String(200))
     details = db.Column(db.Text)
-    timestamp = db.Column(db.DateTime, default=datetime.utcnow)
+    timestamp = db.Column(db.DateTime, default=utcnow)
 
     user = db.relationship('User')
 

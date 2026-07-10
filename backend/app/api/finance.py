@@ -6,27 +6,16 @@ from backend.app.models import Payment, Visit, PrescriptionItem, Drug, User, Ope
 from backend.app.utils.decorators import role_required
 from datetime import datetime, date, timedelta
 from sqlalchemy import func
+from backend.app.services.revenue import allocate_payment_revenue
+from backend.app.services.time_utils import (
+    local_naive_to_utc,
+    local_now,
+    parse_local_datetime,
+    utc_naive_to_local,
+)
 
 def parse_dt(value, is_end=False):
-    if not value:
-        return None
-    s = str(value).strip()
-    if not s:
-        return None
-    fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
-    for fmt in fmts:
-        try:
-            dt = datetime.strptime(s, fmt)
-            if fmt == "%Y-%m-%d":
-                if is_end:
-                    return dt + timedelta(days=1)
-                return dt
-            if is_end:
-                return dt + timedelta(seconds=1)
-            return dt
-        except Exception:
-            continue
-    raise ValueError("Invalid date format")
+    return parse_local_datetime(value, is_end=is_end)
 
 
 @bp.route('/finance/dashboard/summary', methods=['GET'])
@@ -35,15 +24,15 @@ def finance_dashboard_summary():
     """财务看板：聚合指标数据"""
     from datetime import time
 
-    now = datetime.now()
-    today_start = datetime.combine(now.date(), time.min)
+    now = local_now()
+    today_start = local_naive_to_utc(datetime.combine(now.date(), time.min))
     today_end = today_start + timedelta(days=1)
 
-    month_start = datetime(now.year, now.month, 1)
+    month_start = local_naive_to_utc(datetime(now.year, now.month, 1))
     if now.month == 12:
-        month_end = datetime(now.year + 1, 1, 1)
+        month_end = local_naive_to_utc(datetime(now.year + 1, 1, 1))
     else:
-        month_end = datetime(now.year, now.month + 1, 1)
+        month_end = local_naive_to_utc(datetime(now.year, now.month + 1, 1))
 
     # 上月同期
     prev_month = now.month - 1
@@ -51,11 +40,11 @@ def finance_dashboard_summary():
     if prev_month == 0:
         prev_month = 12
         prev_year -= 1
-    prev_month_start = datetime(prev_year, prev_month, 1)
+    prev_month_start = local_naive_to_utc(datetime(prev_year, prev_month, 1))
     if prev_month == 12:
-        prev_month_end = datetime(prev_year + 1, 1, 1)
+        prev_month_end = local_naive_to_utc(datetime(prev_year + 1, 1, 1))
     else:
-        prev_month_end = datetime(prev_year, prev_month + 1, 1)
+        prev_month_end = local_naive_to_utc(datetime(prev_year, prev_month + 1, 1))
 
     # 今日营收
     today_revenue = db.session.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
@@ -120,46 +109,35 @@ def finance_profit_trend():
     if days > 365:
         days = 365
 
-    now = datetime.now()
+    now = local_now()
     start_date = datetime.combine((now - timedelta(days=days - 1)).date(), datetime.min.time())
+    start_utc = local_naive_to_utc(start_date)
+    end_utc = local_naive_to_utc(now)
 
-    # 按天分组聚合
-    results = db.session.query(
-        func.date(Payment.payment_date).label('day'),
-        func.coalesce(func.sum(Payment.amount), 0).label('revenue'),
-        func.count(func.distinct(Payment.visit_id)).label('visit_count'),
-    ).filter(
-        Payment.payment_date >= start_date,
-        Payment.payment_date < now
-    ).group_by(
-        func.date(Payment.payment_date)
-    ).order_by(
-        func.date(Payment.payment_date)
+    payments = Payment.query.filter(
+        Payment.payment_date >= start_utc,
+        Payment.payment_date <= end_utc,
     ).all()
-
-    # 构建按天索引
     revenue_by_day = {}
     cost_by_day = {}
-    visit_by_day = {}
-    for r in results:
-        day_str = r.day
-        revenue_by_day[day_str] = float(r.revenue or 0)
-        visit_by_day[day_str] = int(r.visit_count or 0)
+    visits_by_day = {}
+    for payment in payments:
+        day_str = utc_naive_to_local(payment.payment_date).strftime('%Y-%m-%d')
+        revenue_by_day[day_str] = revenue_by_day.get(day_str, 0.0) + float(payment.amount or 0)
+        visits_by_day.setdefault(day_str, set()).add(payment.visit_id)
 
-    # 计算每天的成本
-    if results:
-        day_ranges = [(r.day, r.day) for r in results]
-        for day_str, _ in day_ranges:
-            day_start = datetime.strptime(day_str, '%Y-%m-%d')
-            day_end = day_start + timedelta(days=1)
-            visit_ids = db.session.query(Payment.visit_id).filter(
-                Payment.payment_date >= day_start,
-                Payment.payment_date < day_end
-            ).subquery()
-            cost = db.session.query(func.coalesce(func.sum(PrescriptionItem.purchase_cost), 0)).filter(
-                PrescriptionItem.visit_id.in_(visit_ids)
-            ).scalar() or 0.0
-            cost_by_day[day_str] = float(cost)
+    visit_ids = [payment.visit_id for payment in payments if payment.visit_id]
+    cost_by_visit = {}
+    if visit_ids:
+        cost_by_visit = {
+            visit_id: float(cost or 0)
+            for visit_id, cost in db.session.query(
+                PrescriptionItem.visit_id,
+                func.coalesce(func.sum(PrescriptionItem.purchase_cost), 0),
+            ).filter(PrescriptionItem.visit_id.in_(visit_ids)).group_by(PrescriptionItem.visit_id).all()
+        }
+    for day_str, day_visit_ids in visits_by_day.items():
+        cost_by_day[day_str] = sum(cost_by_visit.get(visit_id, 0.0) for visit_id in day_visit_ids)
 
     trend = []
     for i in range(days):
@@ -172,7 +150,7 @@ def finance_profit_trend():
             "revenue": round(rev, 2),
             "cost": round(cost, 2),
             "profit": round(rev - cost, 2),
-            "visit_count": visit_by_day.get(day_str, 0),
+            "visit_count": len(visits_by_day.get(day_str, set())),
         })
 
     return jsonify({"data": trend}), 200
@@ -184,18 +162,19 @@ def finance_revenue_by_type():
     """按收入类型统计（药品/诊疗/耗材/诊察费）"""
     start_time_str = request.args.get('start_time')
     end_time_str = request.args.get('end_time')
-    now = datetime.now()
+    now = local_now()
+    now_utc = local_naive_to_utc(now)
 
     if start_time_str or end_time_str:
         start = parse_dt(start_time_str, is_end=False) if start_time_str else None
         end = parse_dt(end_time_str, is_end=True) if end_time_str else None
         if start is None:
-            start = datetime.combine((now - timedelta(days=30)).date(), datetime.min.time())
+            start = local_naive_to_utc(datetime.combine((now - timedelta(days=30)).date(), datetime.min.time()))
         if end is None:
-            end = now
+            end = now_utc
     else:
-        start = datetime.combine((now - timedelta(days=30)).date(), datetime.min.time())
-        end = now
+        start = local_naive_to_utc(datetime.combine((now - timedelta(days=30)).date(), datetime.min.time()))
+        end = now_utc
 
     payments = Payment.query.filter(
         Payment.payment_date >= start,
@@ -216,22 +195,22 @@ def finance_revenue_by_type():
         for it in items:
             items_by_visit.setdefault(it.visit_id, []).append(it)
 
+    visits_by_id = {}
+    if visit_ids:
+        visits_by_id = {
+            visit.id: visit
+            for visit in Visit.query.filter(Visit.id.in_(visit_ids)).all()
+        }
+
     for p in payments:
-        v = Visit.query.get(p.visit_id)
+        v = visits_by_id.get(p.visit_id)
         if v is None:
             continue
-        consultation_revenue += float(v.consultation_fee or 0.0)
-        for it in items_by_visit.get(v.id, []):
-            amount_val = it.new_amount if it.new_amount is not None else it.amount
-            amount_val = float(amount_val or 0.0)
-            d = getattr(it, "drug", None)
-            drug_type = int(getattr(d, "type", 1) or 1)
-            if drug_type == 1:
-                drug_revenue += amount_val
-            elif drug_type == 3:
-                consumable_revenue += amount_val
-            else:
-                service_revenue += amount_val
+        breakdown = allocate_payment_revenue(p, v, items_by_visit.get(v.id, []))
+        consultation_revenue += breakdown["consultation"]
+        drug_revenue += breakdown["drug"]
+        service_revenue += breakdown["service"]
+        consumable_revenue += breakdown["consumable"]
 
     return jsonify({
         "data": {
@@ -241,8 +220,8 @@ def finance_revenue_by_type():
             "consultation_revenue": round(consultation_revenue, 2),
             "total": round(drug_revenue + service_revenue + consumable_revenue + consultation_revenue, 2),
             "range": {
-                "start": start.strftime("%Y-%m-%d %H:%M:%S"),
-                "end": (end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
+                "start": utc_naive_to_local(start).strftime("%Y-%m-%d %H:%M:%S"),
+                "end": utc_naive_to_local(end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
             }
         }
     }), 200

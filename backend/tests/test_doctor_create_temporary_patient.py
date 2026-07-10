@@ -7,7 +7,7 @@ from backend.app.models import Patient, User
 class TestConfig:
     TESTING = True
     SECRET_KEY = "test"
-    JWT_SECRET_KEY = "test-jwt"
+    JWT_SECRET_KEY = "test-jwt-secret-key-at-least-32-bytes"
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -80,7 +80,7 @@ class DoctorCreateTemporaryPatientTestCase(unittest.TestCase):
         )
         self.assertEqual(resp2.status_code, 201)
         pid = resp2.get_json()["data"]["id"]
-        p = Patient.query.get(pid)
+        p = db.session.get(Patient, pid)
         self.assertIsNotNone(p)
         self.assertTrue(p.is_temporary)
         self.assertEqual(p.age, 22)

@@ -71,6 +71,11 @@ const routes = [
         path: 'history',
         name: 'PrescriptionHistory',
         component: () => import('@/views/doctor/PrescriptionHistory.vue')
+      },
+      {
+        path: 'account-settings',
+        name: 'DoctorAccountSettings',
+        component: () => import('@/views/AccountSettings.vue')
       }
     ]
   },
@@ -115,6 +120,11 @@ const routes = [
         path: 'drug-outbound-report',
         name: 'NurseDrugOutboundReport',
         component: () => import('@/views/nurse/DrugOutboundReport.vue')
+      },
+      {
+        path: 'account-settings',
+        name: 'NurseAccountSettings',
+        component: () => import('@/views/AccountSettings.vue')
       }
     ]
   },
@@ -194,6 +204,11 @@ const routes = [
         path: 'drugs',
         name: 'FinanceDrugPriceView',
         component: () => import('@/views/finance/DrugPriceView.vue')
+      },
+      {
+        path: 'account-settings',
+        name: 'FinanceAccountSettings',
+        component: () => import('@/views/AccountSettings.vue')
       }
     ]
   }

@@ -33,6 +33,10 @@
           <el-icon><DataLine /></el-icon>
           <span>药品出库报表</span>
         </el-menu-item>
+        <el-menu-item index="/nurse/account-settings">
+          <el-icon><Setting /></el-icon>
+          <span>账号设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     
@@ -55,7 +59,7 @@
 import { computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { Timer, Box, FirstAidKit, DataLine, Document } from '@element-plus/icons-vue'
+import { Timer, Box, FirstAidKit, DataLine, Document, Setting } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 const router = useRouter()

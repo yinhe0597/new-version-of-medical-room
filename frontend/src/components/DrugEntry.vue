@@ -43,13 +43,13 @@
 
       <template v-if="form.type === 1">
         <el-form-item label="整份规格">
-          <el-row :gutter="12" style="width: 100%">
-            <el-col :span="12">
+          <el-row :gutter="12" class="spec-row" style="width: 100%">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="含量" prop="dosage_value" label-position="top" style="margin-bottom: 0">
                 <el-input-number v-model="form.dosage_value" :min="0" :precision="4" :step="0.1" style="width: 100%" />
               </el-form-item>
             </el-col>
-            <el-col :span="12">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="含量单位" prop="dosage_unit" label-position="top" style="margin-bottom: 0">
                 <el-select v-model="form.dosage_unit" filterable allow-create default-first-option style="width: 100%" placeholder="mg/IU等">
                   <el-option v-for="u in dosageUnitOptions" :key="u" :label="u" :value="u" />
@@ -57,13 +57,13 @@
               </el-form-item>
             </el-col>
           </el-row>
-          <el-row :gutter="12" style="width: 100%; margin-top: 12px">
-            <el-col :span="12">
+          <el-row :gutter="12" class="spec-row" style="width: 100%; margin-top: 12px">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="每整件数量" prop="pack_amount" label-position="top" style="margin-bottom: 0">
                 <el-input-number v-model="form.pack_amount" :min="1" :step="1" style="width: 100%" />
               </el-form-item>
             </el-col>
-            <el-col :span="12">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="最小单位" prop="unit_name" label-position="top" style="margin-bottom: 0">
                 <el-select v-model="form.unit_name" filterable allow-create default-first-option style="width: 100%" placeholder="片/粒等">
                   <el-option v-for="u in unitNameOptions" :key="u" :label="u" :value="u" />
@@ -71,15 +71,15 @@
               </el-form-item>
             </el-col>
           </el-row>
-          <el-row :gutter="12" style="width: 100%; margin-top: 12px">
-            <el-col :span="12">
+          <el-row :gutter="12" class="spec-row" style="width: 100%; margin-top: 12px">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="整件单位" prop="pack_unit" label-position="top" style="margin-bottom: 0">
                 <el-select v-model="form.pack_unit" filterable allow-create default-first-option style="width: 100%" placeholder="瓶/板/袋等">
                   <el-option v-for="u in packUnitOptions" :key="u" :label="u" :value="u" />
                 </el-select>
               </el-form-item>
             </el-col>
-            <el-col :span="12">
+            <el-col :xs="24" :sm="12">
               <el-form-item label="生成规格" label-position="top" style="margin-bottom: 0">
                 <el-input :model-value="packSpecText" disabled />
               </el-form-item>
@@ -90,13 +90,18 @@
           </div>
         </el-form-item>
 
-        <el-row :gutter="16">
-          <el-col :span="12">
+        <el-row :gutter="16" class="responsive-row">
+          <el-col :xs="24" :sm="12" :lg="8">
             <el-form-item label="整份单价(元)" prop="pack_price">
               <el-input-number v-model="form.pack_price" :min="0" :precision="2" :step="0.1" style="width: 100%" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :xs="24" :sm="12" :lg="8">
+            <el-form-item label="整份购进价(元)" prop="purchase_price">
+              <el-input-number v-model="form.purchase_price" :min="0" :precision="2" :step="0.1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :lg="8">
             <el-form-item label="入库数量(整份)" prop="inbound_quantity">
               <el-input-number v-model="form.inbound_quantity" :min="1" :step="1" style="width: 100%" />
             </el-form-item>
@@ -107,8 +112,8 @@
           <el-checkbox v-model="form.retail_enabled" @change="handleRetailToggle">可零售</el-checkbox>
         </el-form-item>
 
-        <el-row :gutter="16">
-          <el-col :span="12">
+        <el-row :gutter="16" class="responsive-row">
+          <el-col :xs="24" :sm="12">
             <el-form-item label="最小销售单位" prop="min_sale_unit">
               <el-input
                 v-model="form.min_sale_unit"
@@ -117,7 +122,7 @@
               />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :xs="24" :sm="12">
             <el-form-item label="最小销售单价(元)" prop="min_sale_price">
               <el-input-number
                 v-model="form.min_sale_price"
@@ -151,15 +156,20 @@
         <el-form-item label="规格" prop="specification">
           <el-input v-model="form.specification" placeholder="例如：100只/盒" />
         </el-form-item>
-        <el-row :gutter="16">
-          <el-col :span="12">
+        <el-row :gutter="16" class="responsive-row">
+          <el-col :xs="24" :sm="12" :lg="8">
             <el-form-item label="单位" prop="unit">
               <el-input v-model="form.unit" placeholder="例如：只" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :xs="24" :sm="12" :lg="8">
             <el-form-item label="单价(元)" prop="price">
               <el-input-number v-model="form.price" :min="0" :precision="2" :step="0.1" style="width: 100%" />
+            </el-form-item>
+          </el-col>
+          <el-col :xs="24" :sm="12" :lg="8">
+            <el-form-item label="购进价(元)" prop="purchase_price">
+              <el-input-number v-model="form.purchase_price" :min="0" :precision="2" :step="0.1" style="width: 100%" />
             </el-form-item>
           </el-col>
         </el-row>
@@ -183,13 +193,13 @@
         <el-form-item label="规格" prop="specification">
           <el-input v-model="form.specification" placeholder="例如：次/项" />
         </el-form-item>
-        <el-row :gutter="16">
-          <el-col :span="12">
+        <el-row :gutter="16" class="responsive-row">
+          <el-col :xs="24" :sm="12">
             <el-form-item label="单位" prop="unit">
               <el-input v-model="form.unit" placeholder="例如：次" />
             </el-form-item>
           </el-col>
-          <el-col :span="12">
+          <el-col :xs="24" :sm="12">
             <el-form-item label="单价(元)" prop="price">
               <el-input-number v-model="form.price" :min="0" :precision="2" :step="0.1" style="width: 100%" />
             </el-form-item>
@@ -212,6 +222,7 @@ import { ElMessage, ElMessageBox } from 'element-plus'
 import request from '@/api/request'
 
 const router = useRouter()
+const emit = defineEmits(['submitted'])
 
 const formRef = ref(null)
 const submitting = ref(false)
@@ -227,6 +238,7 @@ const form = ref({
   unit_name: '',
   pack_unit: '',
   pack_price: null,
+  purchase_price: null,
   inbound_quantity: 1,
   retail_enabled: false,
   min_sale_unit: '',
@@ -248,6 +260,7 @@ const rules = computed(() => {
     base.unit_name = [{ required: true, message: '请输入最小单位', trigger: 'change' }]
     base.pack_unit = [{ required: true, message: '请输入整件单位', trigger: 'change' }]
     base.pack_price = [{ required: true, message: '请输入整份单价', trigger: 'blur' }]
+    base.purchase_price = [{ required: true, message: '请输入整份购进价', trigger: 'blur' }]
     base.inbound_quantity = [{ required: true, message: '请输入入库数量', trigger: 'blur' }]
     base.min_sale_unit = [{
       validator: (_rule, value, callback) => {
@@ -273,6 +286,7 @@ const rules = computed(() => {
     base.specification = [{ required: true, message: '请输入规格', trigger: 'blur' }]
     base.unit = [{ required: true, message: '请输入单位', trigger: 'blur' }]
     base.price = [{ required: true, message: '请输入单价', trigger: 'blur' }]
+    base.purchase_price = [{ required: true, message: '请输入购进价', trigger: 'blur' }]
     base.inbound_quantity = [{ required: true, message: '请输入入库数量', trigger: 'blur' }]
   } else {
     base.specification = [{ required: true, message: '请输入规格', trigger: 'blur' }]
@@ -384,6 +398,7 @@ const resetForm = () => {
     unit_name: '',
     pack_unit: '',
     pack_price: null,
+    purchase_price: null,
     inbound_quantity: 1,
     retail_enabled: false,
     min_sale_unit: '',
@@ -402,10 +417,11 @@ const submit = async () => {
     if (!valid) return
     submitting.value = true
     try {
-        const payload = { ...form.value, pack_specification: packSpecText.value }
+      const payload = { ...form.value, pack_specification: packSpecText.value }
       const res = await request.post('/nurse/inbound', payload)
       ElMessage.success('入库成功')
       resetForm()
+      emit('submitted', res.data || res)
       return res
     } catch (error) {
       if (error && error.code === 409) {
@@ -448,6 +464,25 @@ const submit = async () => {
 }
 .hint.danger {
   color: #f56c6c;
+}
+.responsive-row {
+  row-gap: 4px;
+}
+.spec-row {
+  row-gap: 12px;
+}
+
+@media (max-width: 575px) {
+  .actions {
+    flex-wrap: wrap;
+  }
+  .actions :deep(.el-button) {
+    flex: 1 1 120px;
+    margin-left: 0;
+  }
+  :deep(.el-radio-group) {
+    row-gap: 8px;
+  }
 }
 </style>
 

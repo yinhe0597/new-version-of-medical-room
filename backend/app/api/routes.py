@@ -1,6 +1,7 @@
 from flask import jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app.api import bp
+from backend.app import db
 from backend.app.models import User
 from backend.app.utils.decorators import role_required
 
@@ -12,7 +13,7 @@ def index():
 @jwt_required()
 def protected():
     current_user_id = get_jwt_identity()
-    user = User.query.get(current_user_id)
+    user = db.session.get(User, int(current_user_id))
     return jsonify(logged_in_as=user.username), 200
 
 @bp.route('/admin-only', methods=['GET'])

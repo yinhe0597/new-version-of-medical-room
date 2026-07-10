@@ -19,14 +19,21 @@
             </el-tag>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="180">
+        <el-table-column label="状态" width="100">
+          <template #default="scope">
+            <el-tag :type="scope.row.is_active ? 'success' : 'info'">
+              {{ scope.row.is_active ? '已启用' : '已停用' }}
+            </el-tag>
+          </template>
+        </el-table-column>
+        <el-table-column label="操作" width="200">
           <template #default="scope">
             <el-button size="small" @click="openEditDialog(scope.row)">编辑</el-button>
-            <el-button 
-              size="small" 
-              type="danger" 
-              @click="handleDelete(scope.row)" 
-            >删除</el-button>
+            <el-button
+              size="small"
+              :type="scope.row.is_active ? 'danger' : 'success'"
+              @click="handleStatusChange(scope.row)"
+            >{{ scope.row.is_active ? '停用' : '启用' }}</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -95,6 +102,8 @@ const rules = {
       validator: (rule, value, callback) => {
         if (!isEdit.value && !value) {
           callback(new Error('请输入密码'))
+        } else if (value && value.length < 12) {
+          callback(new Error('密码长度不能少于12位'))
         } else {
           callback()
         }
@@ -170,22 +179,28 @@ const submitForm = async () => {
   })
 }
 
-const handleDelete = (row) => {
+const handleStatusChange = (row) => {
+  const enabling = !row.is_active
+  const action = enabling ? '启用' : '停用'
   ElMessageBox.confirm(
-    `确定要删除账号 ${row.real_name} (${row.username}) 吗？`,
-    '警告',
+    `确定要${action}账号 ${row.real_name} (${row.username}) 吗？`,
+    `${action}账号`,
     {
       confirmButtonText: '确定',
       cancelButtonText: '取消',
-      type: 'warning',
+      type: enabling ? 'success' : 'warning',
     }
   ).then(async () => {
     try {
-      await request.delete(`/admin/users/${row.id}`)
-      ElMessage.success('已删除')
+      if (enabling) {
+        await request.put(`/admin/users/${row.id}`, { is_active: true })
+      } else {
+        await request.delete(`/admin/users/${row.id}`)
+      }
+      ElMessage.success(`账号已${action}`)
       fetchUsers()
     } catch (error) {
-      ElMessage.error('删除失败')
+      ElMessage.error(error.msg || `${action}失败`)
     }
   }).catch(() => {})
 }

@@ -146,12 +146,12 @@ package_tarball() {
 
 【访问地址】
   本机:     http://127.0.0.1:5000
-  局域网:   http://<本机IP>:5000
+  局域网:   需在 .env 显式设置 SERVER_HOST=0.0.0.0，
+            并通过 HTTPS 反向代理访问
 
-【默认账号】
-  管理员: admin / 123456
-  医生:   doctor / 123456
-  护士:   nurse / 123456
+【首次账号】
+  用户名: admin / doctor / nurse
+  密码: 首次启动时控制台打印的随机临时密码，或 BOOTSTRAP_PASSWORD
 
 【数据目录】
   数据库和日志自动创建在本程序同级目录:

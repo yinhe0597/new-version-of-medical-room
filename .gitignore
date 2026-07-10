@@ -2,6 +2,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
+.venv/
+venv/
 
 # Flask
 instance/
@@ -63,6 +65,7 @@ logs
 
 # Local data files (do not commit)
 studentINF.xlsx
+/data/
 
 # Local scratch files
 diff.txt

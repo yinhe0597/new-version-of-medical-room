@@ -16,6 +16,7 @@ os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.join(APP_ROOT, 'd
 
 from backend.app import create_app, db
 from backend.app.models import User, Drug, DiagnosisDict, Patient
+from backend.app.services.bootstrap import add_missing_bootstrap_users
 
 app = create_app()
 
@@ -80,6 +81,9 @@ def init_demo_db():
         print('Creating database tables...')
         db.create_all()
 
+        created_users, bootstrap_password = add_missing_bootstrap_users()
+        db.session.commit()
+
         # 添加演示药品
         drug_count = Drug.query.count()
         if drug_count == 0:
@@ -128,10 +132,11 @@ def init_demo_db():
         print(f'  Database: {os.path.join(APP_ROOT, "data", "app.db")}')
         print('=' * 50)
         print()
-        print('  Default accounts (auto-created on first run):')
-        print('    admin/123456  (管理员)')
-        print('    doctor/123456 (医生)')
-        print('    nurse/123456  (护士)')
+        print('  Bootstrap accounts: admin, doctor, nurse')
+        if created_users:
+            print(f'  First-run temporary password: {bootstrap_password}')
+        else:
+            print('  Existing account passwords were not changed.')
         print()
         print('  提示: 将这个 data/app.db 复制到部署目录即可使用')
 

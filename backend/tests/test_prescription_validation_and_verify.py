@@ -7,7 +7,7 @@ from backend.app.models import Drug, Patient, User, Visit
 class TestConfig:
     TESTING = True
     SECRET_KEY = "test"
-    JWT_SECRET_KEY = "test-jwt"
+    JWT_SECRET_KEY = "test-jwt-secret-key-at-least-32-bytes"
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -88,7 +88,7 @@ class PrescriptionValidationAndVerifyTestCase(unittest.TestCase):
         data = resp.get_json()
         self.assertEqual(data.get("field"), "items")
 
-    def test_create_visit_requires_dosage_for_drug(self):
+    def test_create_visit_requires_at_least_one_usage_field(self):
         payload = {
             "patient_id": self.patient.id,
             "diagnosis": "感冒",
@@ -96,10 +96,10 @@ class PrescriptionValidationAndVerifyTestCase(unittest.TestCase):
                 {
                     "drug_id": self.drug.id,
                     "quantity": 1,
-                    "usage": "口服",
+                    "usage": "",
                     "dosage": "",
-                    "frequency": "每日1次",
-                    "timing": "餐后",
+                    "frequency": "",
+                    "timing": "",
                     "days": 1,
                 }
             ],
@@ -107,7 +107,7 @@ class PrescriptionValidationAndVerifyTestCase(unittest.TestCase):
         resp = self.client.post("/api/doctor/visits", json=payload, headers=self.doctor_headers)
         self.assertEqual(resp.status_code, 400)
         data = resp.get_json()
-        self.assertEqual(data.get("field"), "dosage")
+        self.assertEqual(data.get("field"), "prescription")
         self.assertEqual(data.get("item_index"), 0)
 
     def test_nurse_verify_checks_stock(self):
@@ -195,8 +195,28 @@ class PrescriptionValidationAndVerifyTestCase(unittest.TestCase):
         resp = self.client.post("/api/doctor/visits", json=payload, headers=self.doctor_headers)
         self.assertEqual(resp.status_code, 201)
         vid = resp.get_json()["data"]["visit_id"]
-        v = Visit.query.get(vid)
+        v = db.session.get(Visit, vid)
         self.assertIsNotNone(v)
+
+    def test_create_visit_rejects_negative_consultation_fee(self):
+        payload = {
+            "patient_id": self.patient.id,
+            "diagnosis": "感冒",
+            "consultation_fee": -1,
+            "items": [{
+                "drug_id": self.drug.id,
+                "quantity": 1,
+                "usage": "口服",
+                "days": 1,
+            }],
+        }
+        response = self.client.post(
+            "/api/doctor/visits",
+            json=payload,
+            headers=self.doctor_headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.get_json().get("field"), "consultation_fee")
 
 
 if __name__ == "__main__":

@@ -7,21 +7,11 @@
 CREATE DATABASE IF NOT EXISTS `medical_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 ALTER DATABASE `medical_db` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
--- 2. 创建医务室专用账号
--- 注意：如果是在 MySQL 8.0 及以上，默认密码策略可能要求密码满足复杂性要求
--- 这里的密码 "xibokeladi" 需符合服务器的密码策略
-CREATE USER IF NOT EXISTS 'yiwushi'@'localhost' IDENTIFIED BY 'xibokeladi';
-CREATE USER IF NOT EXISTS 'yiwushi'@'%' IDENTIFIED BY 'xibokeladi';
+-- 2. 使用部署环境自己的高强度密码创建最小权限账号。
+-- 不在仓库中保存共享密码。以下语句仅为示例，请先替换 <STRONG_PASSWORD> 后手工执行：
+-- CREATE USER 'yiwushi'@'localhost' IDENTIFIED BY '<STRONG_PASSWORD>';
+-- GRANT ALL PRIVILEGES ON `medical_db`.* TO 'yiwushi'@'localhost';
+-- FLUSH PRIVILEGES;
 
--- 修改密码以防用户已存在但密码不对
-ALTER USER 'yiwushi'@'localhost' IDENTIFIED BY 'xibokeladi';
-ALTER USER 'yiwushi'@'%' IDENTIFIED BY 'xibokeladi';
-
--- 3. 赋予权限
-GRANT ALL PRIVILEGES ON `medical_db`.* TO 'yiwushi'@'localhost';
-GRANT ALL PRIVILEGES ON `medical_db`.* TO 'yiwushi'@'%';
-
--- 4. 刷新权限
-FLUSH PRIVILEGES;
-
--- 提示：执行完成后，后端程序将使用 yiwushi / xibokeladi 连接到 3306 端口上的 medical_db
+-- 3. 通过环境变量配置连接串，例如：
+-- DATABASE_URL=mysql+pymysql://yiwushi:<URL_ENCODED_PASSWORD>@127.0.0.1:3306/medical_db?charset=utf8mb4

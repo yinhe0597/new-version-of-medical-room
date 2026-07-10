@@ -2,9 +2,11 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, Payment, ParkedVisit, VISIT_STATUS_PENDING
+from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, Payment, ParkedVisit, VISIT_STATUS_PENDING, utcnow
 import json
 from backend.app.utils.decorators import role_required
+from backend.app.utils.query import nulls_last_asc
+from backend.app.services.time_utils import local_now, utc_naive_to_local
 from datetime import datetime, timezone, timedelta
 import math
 import time
@@ -43,13 +45,25 @@ PATIENT_TYPES = {
     'temporary': '临时人员',
 }
 
+
+def _parse_nonnegative_money(value, field):
+    if isinstance(value, bool):
+        raise ValueError(field)
+    try:
+        amount = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(field)
+    if not math.isfinite(amount) or amount < 0:
+        raise ValueError(field)
+    return round(amount, 2)
+
 def _age_from_id_card(id_card: str):
     """从 18 位中国身份证号提取出生日期并计算周岁"""
     if not id_card or len(id_card) != 18:
         return None
     try:
         birth = datetime.strptime(id_card[6:14], "%Y%m%d")
-        today = datetime.today()
+        today = local_now()
         age = today.year - birth.year
         if (today.month, today.day) < (birth.month, birth.day):
             age -= 1
@@ -60,9 +74,9 @@ def _age_from_id_card(id_card: str):
 def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
     if dt is None:
         return None
-    if getattr(dt, "tzinfo", None) is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone().strftime(fmt)
+    if getattr(dt, "tzinfo", None) is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return utc_naive_to_local(dt).strftime(fmt)
 
 def _is_valid_cn_id_card(id_card: str) -> bool:
     if not isinstance(id_card, str):
@@ -407,7 +421,7 @@ def create_patient():
 @bp.route('/doctor/patient/<int:id>', methods=['PUT'])
 @role_required('doctor')
 def update_patient(id):
-    patient = Patient.query.get_or_404(id)
+    patient = db.get_or_404(Patient, id)
     data = request.get_json() or {}
     
     if 'phone' in data:
@@ -434,7 +448,7 @@ def update_patient(id):
 @bp.route('/doctor/patient/<int:patient_id>/visits', methods=['GET'])
 @role_required('doctor')
 def get_patient_history(patient_id):
-    patient = Patient.query.get_or_404(patient_id)
+    patient = db.get_or_404(Patient, patient_id)
     visits = patient.visits.options(
         db.joinedload(Visit.doctor)
     ).order_by(Visit.timestamp.desc()).all()
@@ -464,7 +478,7 @@ def search_drugs():
             (Drug.specification.contains(keyword))
         )
 
-    query = query.order_by(Drug.storage_location.asc().nullslast())
+    query = query.order_by(*nulls_last_asc(Drug.storage_location))
     drugs = query.limit(20).all()
     data = []
     for drug in drugs:
@@ -588,8 +602,15 @@ def create_visit():
     if not isinstance(items, list) or len(items) == 0:
         return jsonify({"msg": "Missing items", "field": "items"}), 400
 
+    try:
+        consultation_fee = _parse_nonnegative_money(
+            data.get('consultation_fee', 0), 'consultation_fee'
+        )
+    except ValueError:
+        return jsonify({"msg": "Invalid consultation_fee", "field": "consultation_fee"}), 400
+
     # Verify stock availability
-    total_amount = round(float(data.get('consultation_fee', 0)), 2)
+    total_amount = consultation_fee
     drug_items = []
 
     for idx, item in enumerate(items):
@@ -597,7 +618,7 @@ def create_visit():
         if drug_id is None:
             return jsonify({"msg": "Missing drug_id", "field": "drug_id", "item_index": idx}), 400
 
-        drug = Drug.query.get(drug_id)
+        drug = db.session.get(Drug, drug_id)
         if not drug:
             return jsonify({"msg": f"Drug/Item {drug_id} not found", "item_index": idx}), 404
 
@@ -714,6 +735,9 @@ def create_visit():
             "infusion_method": item.get("infusion_method"),
         })
 
+    if not math.isfinite(total_amount) or total_amount < 0:
+        return jsonify({"msg": "Invalid total amount", "field": "items"}), 400
+
     # Create Visit
     user_id = get_jwt_identity()
     visit = Visit(
@@ -726,7 +750,7 @@ def create_visit():
         diagnosis=diagnosis,
         doctor_advice=data.get('doctor_advice'),
         special_note=data.get('special_note'),
-        consultation_fee=data.get('consultation_fee', 0),
+        consultation_fee=consultation_fee,
         total_amount=total_amount,
         status=VISIT_STATUS_PENDING
     )
@@ -762,21 +786,18 @@ def create_visit():
         )
         db.session.add(p_item)
 
-    db.session.commit()
-
     # 如代码提交源于挂单草稿，同步删除对应 ParkedVisit
     parked_id = data.get('parked_id')
     if parked_id:
-        try:
-            pv = ParkedVisit.query.filter_by(id=parked_id, doctor_id=int(get_jwt_identity())).first()
-            if pv:
-                db.session.delete(pv)
-                db.session.commit()
-        except Exception:
-            db.session.rollback()
+        pv = ParkedVisit.query.filter_by(
+            id=parked_id,
+            doctor_id=int(get_jwt_identity()),
+        ).first()
+        if pv:
+            db.session.delete(pv)
 
     # 检查是否为非学生类型人员就诊，记录日志
-    patient = Patient.query.get(patient_id)
+    patient = db.session.get(Patient, patient_id)
     if patient and patient.patient_type and patient.patient_type != 'student':
         type_label = PATIENT_TYPES.get(patient.patient_type, '未知')
         log = OperationLog(
@@ -793,7 +814,8 @@ def create_visit():
             }, ensure_ascii=False)
         )
         db.session.add(log)
-        db.session.commit()
+
+    db.session.commit()
 
     return jsonify({"data": {"visit_id": visit.id}}), 201
 
@@ -856,7 +878,7 @@ def get_doctor_visit_detail(visit_id):
         db.joinedload(Visit.rejector),
         db.joinedload(Visit.revoker),
         db.joinedload(Visit.payment).joinedload(Payment.nurse),
-    ).get_or_404(visit_id)
+    ).filter_by(id=visit_id).first_or_404()
 
     items_query = visit.items
     if hasattr(items_query, "options"):
@@ -974,7 +996,7 @@ def get_doctor_visit_detail(visit_id):
 @role_required('doctor')
 def update_visit_medical_record(visit_id):
     user_id = get_jwt_identity()
-    visit = Visit.query.get_or_404(visit_id)
+    visit = db.get_or_404(Visit, visit_id)
 
     if visit.doctor_id != int(user_id):
         return jsonify({"msg": "Unauthorized to update this visit"}), 403
@@ -1224,7 +1246,7 @@ def create_or_update_parked_visit():
     except (ValueError, TypeError):
         return jsonify({"msg": "Invalid user identity"}), 401
 
-    if not Patient.query.get(patient_id):
+    if not db.session.get(Patient, patient_id):
         return jsonify({"msg": "Patient not found"}), 404
 
     items = data.get('items') or []
@@ -1232,7 +1254,7 @@ def create_or_update_parked_visit():
         return jsonify({"msg": "items must be a list"}), 400
 
     ttl_hours = _parked_ttl_hours()
-    now = datetime.utcnow()
+    now = utcnow()
     expires_at = now + timedelta(hours=ttl_hours)
 
     # 行锁：防止同一医生+患者并发写入
@@ -1249,9 +1271,11 @@ def create_or_update_parked_visit():
         pv = ParkedVisit.query.filter_by(patient_id=patient_id, doctor_id=doctor_id).first()
 
     try:
-        consultation_fee = float(data.get('consultation_fee') or 0)
-    except (TypeError, ValueError):
-        consultation_fee = 0.0
+        consultation_fee = _parse_nonnegative_money(
+            data.get('consultation_fee') or 0, 'consultation_fee'
+        )
+    except ValueError:
+        return jsonify({"msg": "Invalid consultation_fee", "field": "consultation_fee"}), 400
 
     payload = dict(
         chief_complaint=data.get('chief_complaint') or '',
@@ -1299,7 +1323,7 @@ def list_parked_visits():
     except (ValueError, TypeError):
         return jsonify({"msg": "Invalid user identity"}), 401
 
-    now = datetime.utcnow()
+    now = utcnow()
     rows = (
         ParkedVisit.query
         .filter(ParkedVisit.doctor_id == doctor_id, ParkedVisit.expires_at > now)
@@ -1321,7 +1345,7 @@ def get_parked_visit(parked_id):
     pv = ParkedVisit.query.filter_by(id=parked_id, doctor_id=doctor_id).first()
     if not pv:
         return jsonify({"msg": "Parked visit not found"}), 404
-    if pv.expires_at and pv.expires_at <= datetime.utcnow():
+    if pv.expires_at and pv.expires_at <= utcnow():
         # 已过期：顺手清理并返回 410
         try:
             db.session.delete(pv)
@@ -1362,7 +1386,7 @@ def get_patient_parked_visit(patient_id):
     pv = ParkedVisit.query.filter_by(patient_id=patient_id, doctor_id=doctor_id).first()
     if not pv:
         return jsonify({"data": None})
-    if pv.expires_at and pv.expires_at <= datetime.utcnow():
+    if pv.expires_at and pv.expires_at <= utcnow():
         try:
             db.session.delete(pv)
             db.session.commit()

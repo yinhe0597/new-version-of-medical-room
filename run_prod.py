@@ -17,7 +17,9 @@ import threading
 import traceback
 import time as time_module
 import ctypes
-from datetime import datetime as dt_now, date as date_type, time as time_type
+from datetime import timedelta
+from dotenv import load_dotenv
+from werkzeug.exceptions import HTTPException
 
 # ---------------------------------------------------------------------------
 # 1. 计算 APP_ROOT（exe 所在目录 or 项目根目录）
@@ -28,9 +30,12 @@ else:
     APP_ROOT = os.path.dirname(os.path.abspath(__file__))
 
 os.environ['APP_ROOT'] = APP_ROOT
+load_dotenv(os.path.join(APP_ROOT, '.env'))
 
 if APP_ROOT not in sys.path:
     sys.path.insert(0, APP_ROOT)
+
+from backend.runtime_secrets import ensure_runtime_secrets
 
 # ---------------------------------------------------------------------------
 # 2. 自动创建必要的目录
@@ -42,6 +47,21 @@ BACKUPS_DIR = os.path.join(DATA_DIR, 'backups')
 os.makedirs(DATA_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 os.makedirs(BACKUPS_DIR, exist_ok=True)
+
+ensure_runtime_secrets(DATA_DIR)
+
+
+def handle_all_exceptions(error):
+    """Keep HTTP status semantics while hiding unexpected server details."""
+    if isinstance(error, HTTPException):
+        return error
+    logging.error(
+        'Unhandled exception: %s: %s',
+        type(error).__name__,
+        error,
+        exc_info=True,
+    )
+    return {'msg': '服务器内部错误，请稍后重试'}, 500
 
 # ---------------------------------------------------------------------------
 # 2.1 禁用 Windows Console QuickEdit 模式
@@ -77,7 +97,7 @@ disable_quickedit()
 # 3. 设置数据库路径（相对于 exe 所在目录）
 # ---------------------------------------------------------------------------
 DB_PATH = os.path.join(DATA_DIR, 'app.db')
-os.environ['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///' + os.path.abspath(DB_PATH)
+os.environ.setdefault('SQLALCHEMY_DATABASE_URI', 'sqlite:///' + os.path.abspath(DB_PATH))
 
 # ---------------------------------------------------------------------------
 # 4. 配置日志（带日志轮转，防止日志文件无限增长）
@@ -115,14 +135,17 @@ def get_local_ip():
 # 6. 导入 Flask 工厂（仅导入函数，不创建 app）
 # ---------------------------------------------------------------------------
 from backend.app import create_app, db
+from backend.app.models import utcnow as dt_utcnow
+from backend.app.services.time_utils import local_now
+from backend.app.services.stock_lock import StockMutationBusy, stock_mutation_guard
 
 
-def take_daily_snapshot(flask_app):
-    """保存所有活跃药品的当日库存快照"""
+def take_daily_snapshot(flask_app, snapshot_date=None):
+    """Save the opening stock at local midnight for the current date."""
     with flask_app.app_context():
         from backend.app.models import DailyStockSnapshot, Drug
-        from datetime import date
-        today = date.today()
+        today = snapshot_date or local_now().date()
+        captured_at = dt_utcnow()
 
         existing = db.session.query(DailyStockSnapshot).filter_by(date=today).first()
         if existing:
@@ -135,40 +158,58 @@ def take_daily_snapshot(flask_app):
             snapshot = DailyStockSnapshot(
                 drug_id=drug.id,
                 date=today,
-                stock=drug.stock
+                stock=drug.stock,
+                created_at=captured_at,
             )
             db.session.add(snapshot)
             count += 1
 
-        db.session.commit()
+        try:
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+            raise
         logging.info(f'Daily snapshot saved: {count} drugs for {today}')
 
 
 def snapshot_scheduler(flask_app):
     """后台线程：每天0点执行快照"""
     while True:
-        now = dt_now.now()
-        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0)
-        if now.hour >= 0 and now.minute >= 0:
-            from datetime import timedelta
-            tomorrow = tomorrow + timedelta(days=1)
+        now = local_now()
+        tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
         seconds_until_midnight = (tomorrow - now).total_seconds()
 
         logging.info(f'Snapshot scheduler: next snapshot in {seconds_until_midnight:.0f} seconds')
-        time_module.sleep(seconds_until_midnight)
+        time_module.sleep(max(seconds_until_midnight - 1, 0))
 
-        try:
-            take_daily_snapshot(flask_app)
-        except Exception as e:
-            logging.error(f'Snapshot error: {e}')
+        while True:
+            try:
+                with flask_app.app_context():
+                    with stock_mutation_guard():
+                        remaining = (tomorrow - local_now()).total_seconds()
+                        if remaining > 0:
+                            time_module.sleep(remaining)
+                        take_daily_snapshot(flask_app, snapshot_date=tomorrow.date())
+                break
+            except StockMutationBusy:
+                logging.warning(
+                    'Snapshot delayed because the stock mutation lock stayed busy; retrying'
+                )
+            except Exception:
+                logging.exception('Snapshot failed; retrying')
+            time_module.sleep(30)
 
 
 def start_server():
     """启动服务器（可被外层重启循环调用）"""
     PORT = 5000
+    bind_host = os.environ.get('SERVER_HOST', '127.0.0.1')
 
     logging.info(f'APP_ROOT: {APP_ROOT}')
-    logging.info(f'Database: {DB_PATH}')
+    using_external_database = bool(os.environ.get('DATABASE_URL')) or not os.environ.get(
+        'SQLALCHEMY_DATABASE_URI', ''
+    ).startswith('sqlite')
+    logging.info('Database: %s', 'external database from environment' if using_external_database else DB_PATH)
 
     # 创建 Flask 应用（此时会初始化数据库表、检查并兼容旧表结构）
     logging.info('Creating Flask application...')
@@ -176,33 +217,22 @@ def start_server():
     logging.info('Flask application created successfully.')
 
     # 注册全局异常处理器，防止未捕获异常导致 500 空响应
-    @app.errorhandler(Exception)
-    def handle_all_exceptions(e):
-        logging.error(f'Unhandled exception: {type(e).__name__}: {e}', exc_info=True)
-        return {'msg': '服务器内部错误，请稍后重试', 'error': str(e)}, 500
+    app.register_error_handler(Exception, handle_all_exceptions)
 
     # 初始化默认用户
-    from backend.app.models import User
-    from werkzeug.security import generate_password_hash
+    from backend.app.services.bootstrap import add_missing_bootstrap_users
 
     with app.app_context():
         logging.info('Ensuring default users exist...')
-        if not User.query.filter_by(username='admin').first():
-            db.session.add(User(username='admin', password_hash=generate_password_hash('123456'), role='admin', real_name='管理员'))
-            logging.info('Created admin user')
-        if not User.query.filter_by(username='doctor').first():
-            db.session.add(User(username='doctor', password_hash=generate_password_hash('123456'), role='doctor', real_name='张医生'))
-            logging.info('Created doctor user')
-        if not User.query.filter_by(username='nurse').first():
-            db.session.add(User(username='nurse', password_hash=generate_password_hash('123456'), role='nurse', real_name='李护士'))
-            logging.info('Created nurse user')
+        created_users, bootstrap_password = add_missing_bootstrap_users()
         db.session.commit()
+        if created_users:
+            logging.warning('Created bootstrap users: %s. Change their passwords immediately.', ', '.join(created_users))
+            print(f'  首次启动临时密码: {bootstrap_password}')
         logging.info('Default user initialization completed.')
 
-    # 启动时补建今天的库存快照（如果不存在）
-    take_daily_snapshot(app)
-
-    # 启动后台快照调度线程
+    # Only the midnight scheduler may create a daily opening snapshot. Creating
+    # one during a daytime restart would record a partial day as its opening.
     snapshot_thread = threading.Thread(target=snapshot_scheduler, args=(app,), daemon=True)
     snapshot_thread.start()
     logging.info('Daily snapshot scheduler started.')
@@ -214,8 +244,10 @@ def start_server():
     print('    医务室诊疗管理系统 open0.0.20')
     print('=' * 60)
     print(f'  本机访问:   http://127.0.0.1:{PORT}')
-    print(f'  局域网访问: http://{local_ip}:{PORT}')
-    print(f'  数据库位置: {os.path.abspath(DB_PATH)}')
+    if bind_host in ('0.0.0.0', '::'):
+        print(f'  局域网访问: http://{local_ip}:{PORT}（生产环境请通过 HTTPS 反向代理）')
+    database_label = '外部数据库（环境变量配置）' if using_external_database else os.path.abspath(DB_PATH)
+    print(f'  数据库位置: {database_label}')
     print('=' * 60)
     if sys.platform == 'win32':
         print('  ⚠ 请勿点击本窗口内部（会导致系统暂停）')
@@ -230,15 +262,15 @@ def start_server():
     # waitress 特性：多线程、稳定、不会因单个请求异常而崩溃
     try:
         from waitress import serve
-        logging.info(f'Starting waitress server on 0.0.0.0:{PORT}')
-        serve(app, host='0.0.0.0', port=PORT, threads=4,
+        logging.info(f'Starting waitress server on {bind_host}:{PORT}')
+        serve(app, host=bind_host, port=PORT, threads=4,
               channel_timeout=120, recv_bytes=65536,
               url_scheme='http')
     except ImportError:
         # waitress 未安装时回退到 Flask 开发服务器
         logging.warning('waitress not installed, falling back to Flask dev server (NOT recommended for production)')
-        logging.info(f'Starting Flask dev server on 0.0.0.0:{PORT}')
-        app.run(debug=False, host='0.0.0.0', port=PORT, use_reloader=False)
+        logging.info(f'Starting Flask dev server on {bind_host}:{PORT}')
+        app.run(debug=False, host=bind_host, port=PORT, use_reloader=False)
 
 
 if __name__ == '__main__':

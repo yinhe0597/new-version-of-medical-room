@@ -6,23 +6,23 @@ if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
 from backend.app import create_app, db
-from backend.app.models import User, Drug, Patient
-from werkzeug.security import generate_password_hash
+from backend.app.models import Drug, Patient
+from backend.app.services.bootstrap import add_missing_bootstrap_users
 import sqlalchemy
+import re
 
-def _mysql_no_db_uri(uri: str) -> str:
-    base, sep, query = uri.partition("?")
-    prefix = base.rsplit("/", 1)[0] + "/"
-    if sep and query:
-        return prefix + "?" + query
-    return prefix
-
-def create_database_if_not_exists(app):
-    uri = app.config['SQLALCHEMY_DATABASE_URI']
+def create_database_if_not_exists(app_or_uri):
+    uri = (
+        app_or_uri.config['SQLALCHEMY_DATABASE_URI']
+        if hasattr(app_or_uri, 'config')
+        else str(app_or_uri)
+    )
     if uri.startswith('mysql'):
-        base = uri.split("?", 1)[0]
-        db_name = base.rsplit("/", 1)[1]
-        engine = sqlalchemy.create_engine(_mysql_no_db_uri(uri))
+        url = sqlalchemy.engine.make_url(uri)
+        db_name = url.database
+        if not db_name or not re.fullmatch(r'[A-Za-z0-9_]+', db_name):
+            raise RuntimeError('MySQL database name may only contain letters, numbers, and underscores')
+        engine = sqlalchemy.create_engine(url.set(database=None))
         try:
             with engine.connect() as conn:
                 conn.execute(sqlalchemy.text(f"CREATE DATABASE IF NOT EXISTS `{db_name}` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"))
@@ -30,29 +30,15 @@ def create_database_if_not_exists(app):
                 print(f"Ensured database '{db_name}' exists.")
         except Exception as e:
             print(f"Failed to create database '{db_name}': {e}")
+            raise
+        finally:
+            engine.dispose()
 
 def init_db(app):
     create_database_if_not_exists(app)
     with app.app_context():
         db.create_all()
-        # Create Users
-        admin = User.query.filter_by(username='admin').first()
-        if not admin:
-            admin = User(username='admin', password_hash=generate_password_hash('123456'), role='admin', real_name='管理员')
-            db.session.add(admin)
-            print("Created admin user.")
-
-        doctor = User.query.filter_by(username='doctor').first()
-        if not doctor:
-            doctor = User(username='doctor', password_hash=generate_password_hash('123456'), role='doctor', real_name='张医生')
-            db.session.add(doctor)
-            print("Created doctor user.")
-
-        nurse = User.query.filter_by(username='nurse').first()
-        if not nurse:
-            nurse = User(username='nurse', password_hash=generate_password_hash('123456'), role='nurse', real_name='李护士')
-            db.session.add(nurse)
-            print("Created nurse user.")
+        created_users, bootstrap_password = add_missing_bootstrap_users()
 
         # Create Drugs
         if Drug.query.count() == 0:
@@ -77,7 +63,13 @@ def init_db(app):
 
         db.session.commit()
         print("Database initialized successfully.")
+        if created_users:
+            print(f"Created bootstrap users: {', '.join(created_users)}")
+            print(f"First-run temporary password: {bootstrap_password}")
 
 if __name__ == '__main__':
+    from backend.config import Config
+
+    create_database_if_not_exists(Config.SQLALCHEMY_DATABASE_URI)
     app = create_app()
     init_db(app)

@@ -31,7 +31,7 @@
 
 > ⚠️ **Project Status: Active Development**
 > 
-> The system is still in **small-scale trial and feedback collection**. Now supports **Windows + Linux** dual-platform deployment (tar.gz / AppImage). **MySQL + Docker** migration planned for late 2026. Currently runs on SQLite, suitable for standalone or small LAN setups.
+> The system is still in **small-scale trial and feedback collection**. It supports **Windows + Linux** dual-platform deployment (tar.gz / AppImage), uses SQLite by default, and can connect to MySQL through `DATABASE_URL`. Docker packaging remains planned work.
 >
 > Despite active development, **the current version can smoothly run the full workflow** and can be used in real business scenarios.
 >
@@ -55,7 +55,7 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 - 💊 **Smart Inventory**: Supports "whole pack + split unit" linked inbound and deduction
 - 🏗️ **Role Clarity**: Admin / Doctor / Nurse / Finance — capabilities separated by role
 - 🚀 **Easy Deployment**: SQLite zero-config startup, PyInstaller single-file packaging
-- 🔄 **Smooth Upgrade**: Automatic detection and migration of missing columns and tables
+- 🔄 **Controlled Upgrade**: Safely adds nullable fields and indexes; complex changes use reviewed migrations
 - 📊 **Data Insights**: Revenue stats (drugs/services/consumables split), drug consumption, multi-dimension reports
 
 ---
@@ -89,7 +89,7 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 | 📊 **Admin** | Patient Records | Student/employee/temporary personnel management |
 | 📊 **Admin** | Operation Logs | Full audit trail for all system operations |
 | 👤 **System** | Role Permissions | 4 independent interfaces with role isolation |
-| 🔧 **System** | Smooth Upgrade | Auto database migration, zero data loss |
+| 🔧 **System** | Controlled Upgrade | Safe additive sync; complex type and constraint changes use formal migrations |
 
 </details>
 
@@ -101,8 +101,8 @@ The system features **Doctor / Nurse / Admin / Finance** four independent interf
 |:---:|------|------|------|
 | 🖥️ Backend | Python / Flask / SQLAlchemy / JWT | 3.8+ | |
 | 🎨 Frontend | Vue 3 / Element Plus / Vite / Axios | Vue 3.x | |
-| 💾 Database | SQLite (current) / MySQL (planned) | — | Auto DB creation + schema migration, zero-config |
-| 🔧 Migration | Alembic + auto column migration | — | |
+| 💾 Database | SQLite (default) / MySQL (optional) | — | Zero-config SQLite or an external MySQL connection |
+| 🔧 Migration | Alembic + additive schema sync | — | Formal migrations for complex changes |
 | 📦 Deployment | PyInstaller (Windows + Linux) | — | Windows EXE / Linux tar.gz + AppImage |
 
 ---
@@ -166,14 +166,29 @@ npm install
 npm run dev
 ```
 
-### 🔑 Default Accounts
+### 🔑 Bootstrap Accounts
 
-| Role | Username | Password |
+| Role | Username | Initial Password |
 |:---:|:---:|:---:|
-| Admin | `admin` | `123456` |
-| Doctor | `doctor` | `123456` |
-| Nurse | `nurse` | `123456` |
-| Finance | `finance` | `123456` |
+| Admin | `admin` | `BOOTSTRAP_PASSWORD` or a generated temporary password |
+| Doctor | `doctor` | `BOOTSTRAP_PASSWORD` or a generated temporary password |
+| Nurse | `nurse` | `BOOTSTRAP_PASSWORD` or a generated temporary password |
+
+All startup paths use `BOOTSTRAP_PASSWORD` or print a generated temporary password when
+bootstrap accounts are missing. No public fixed password is provided. Change bootstrap
+passwords immediately after the first login.
+The default database is consistently stored at `data/app.db`; see `.env.example` for
+external database and secret configuration. Finance accounts are created by an admin.
+
+When `SECRET_KEY` and `JWT_SECRET_KEY` are not configured, strong random values are
+generated in `data/.runtime-secrets.json` and reused across processes. Treat this file as
+sensitive runtime data and do not commit it. Deleting a user is a reversible deactivation:
+historical visits, payments, inventory records, and audit ownership remain intact.
+
+Prescription dispensing and reversal now create structured inventory ledger rows. Monthly
+reports use Beijing-time boundaries and preserve stock conservation across a cross-day
+reversal. SQLite is the verified default path; the remaining real-MySQL acceptance work is
+listed in the [2026-07-10 development log](docs/开发日志-2026-07-10-main全方位修复.md).
 
 ---
 
@@ -195,10 +210,24 @@ Consultation → Doctor Prescribes → Nurse Reviews → Dispense & Settlement �
 | 📂 [Code Structure (中文)](docs/代码结构说明.md) | Directory structure and responsibilities |
 | 🏗️ [Architecture (中文)](docs/架构说明.md) | Module interaction, state machines, review logic |
 | 🔌 [API List (中文)](docs/接口清单.md) | All APIs organized by role |
+| 🧪 [Main Hardening Record (中文)](docs/主线全方位修复记录-2026-07-10.md) | Baseline, implementation details, and verification |
+| 📝 [2026-07-10 Development Log (中文)](docs/开发日志-2026-07-10-main全方位修复.md) | Changes, test results, and remaining work |
 
 ---
 
 ## 📋 Changelog
+
+### Main Branch Hardening (2026-07-10, unreleased)
+
+- Unified local data at `data/app.db`, removed public bootstrap passwords, and added stable runtime secrets.
+- Added reversible account deactivation with immediate invalidation of older JWTs.
+- Added structured dispensing/reversal inventory ledgers and stock-conserving cross-day monthly reports.
+- Hardened payment allocation, privacy, backup, smart-inventory confirmation, and frontend authentication workflows.
+
+See the [development log](docs/开发日志-2026-07-10-main全方位修复.md) for the
+`64/64` backend test result and explicitly deferred real-MySQL and frontend automation work.
+
+---
 
 ### 🏷️ open0.0.20 (2026-06-25) 📦🐛💊📄
 

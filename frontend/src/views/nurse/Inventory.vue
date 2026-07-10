@@ -1,6 +1,10 @@
 <template>
   <div class="inventory-container">
     <el-tabs v-model="activeTab" class="inventory-tabs">
+      <el-tab-pane label="入库录入" name="entry">
+        <DrugEntry @submitted="handleInboundSubmitted" />
+      </el-tab-pane>
+
       <!-- 盘点操作标签页 -->
       <el-tab-pane label="库存盘点" name="inventory">
         <el-card>
@@ -131,7 +135,12 @@
               <el-button type="primary" @click="fetchMonthlyReport" :loading="monthlyLoading">
                 生成报表
               </el-button>
-              <el-button type="success" @click="exportMonthlyReport" :disabled="monthlyData.length === 0">
+              <el-button
+                type="success"
+                @click="exportMonthlyReport"
+                :disabled="monthlyData.length === 0"
+                :loading="monthlyExporting"
+              >
                 导出Excel
               </el-button>
             </el-form-item>
@@ -254,12 +263,51 @@
       
         <div v-if="smartResult">
           <el-alert
-            :title="`本次盘库共合并 ${smartResult.merged_groups} 组重复项，清理了 ${smartResult.deleted_duplicates} 条冗余记录。`"
-            type="success"
+            :title="smartResult.merge_confirmation_required
+              ? `发现 ${(smartResult.merge_candidates || []).length} 组可安全合并的重复项，尚未修改数据。`
+              : `本次盘库共合并 ${smartResult.merged_groups} 组重复项，清理了 ${smartResult.deleted_duplicates} 条冗余记录。`"
+            :type="smartResult.merge_confirmation_required ? 'warning' : 'success'"
             show-icon
             :closable="false"
             style="margin-bottom: 16px"
           />
+
+          <div v-if="smartResult.merge_confirmation_required" class="merge-candidates">
+            <h3>待合并重复记录</h3>
+            <el-table
+              :data="smartResult.merge_candidates || []"
+              border
+              stripe
+              size="small"
+              max-height="360"
+              empty-text="无待合并记录"
+            >
+              <el-table-column type="index" label="序号" width="58" />
+              <el-table-column prop="name" label="名称" min-width="140" />
+              <el-table-column prop="specification" label="规格" width="110" />
+              <el-table-column label="批次" width="100">
+                <template #default="scope">{{ scope.row.batch_no || '无' }}</template>
+              </el-table-column>
+              <el-table-column label="有效期" width="110">
+                <template #default="scope">{{ scope.row.expiry_date || '无' }}</template>
+              </el-table-column>
+              <el-table-column prop="record_count" label="记录数" width="80" align="center" />
+              <el-table-column prop="combined_stock" label="合计库存" width="90" align="center" />
+              <el-table-column label="逐项核对" width="100" align="center" fixed="right">
+                <template #default="scope">
+                  <el-checkbox
+                    :model-value="isMergeCandidateReviewed(scope.row)"
+                    @change="checked => setMergeCandidateReviewed(scope.row, checked)"
+                  >
+                    已核对
+                  </el-checkbox>
+                </template>
+              </el-table-column>
+            </el-table>
+            <div class="merge-review-status">
+              已核对 {{ reviewedMergeCandidateCount }} / {{ mergeCandidates.length }} 组；全部核对后方可合并。
+            </div>
+          </div>
       
           <div v-if="showStockWarnings">
             <h3 style="margin: 0 0 12px 0; font-size: 15px;">📦 库存预警清单 (库存 &lt; {{ smartThreshold }})</h3>
@@ -317,6 +365,15 @@
           </div>
         </div>
         <template #footer>
+          <el-button
+            v-if="smartResult?.merge_confirmation_required"
+            type="warning"
+            :disabled="!allMergeCandidatesReviewed"
+            :loading="smartMerging"
+            @click="confirmSmartMerge"
+          >
+            确认合并
+          </el-button>
           <el-button @click="smartDialogVisible = false">关 闭</el-button>
         </template>
       </el-dialog>
@@ -328,24 +385,30 @@
         width="450px"
       >
         <div style="margin-bottom: 20px; font-size: 13px; color: #606266; line-height: 1.5;">
-          该药品为整散共享库存，调整需同时输入<strong>实际物理存在的整盒数</strong>与<strong>实际物理存在的散件数</strong>，系统将自动核算新的库存总量并同步。
+          该药品为整散共享库存，请填写整装数量和不足一整装的零售份数。
         </div>
         <el-form :model="groupForm" :rules="groupRules" ref="groupFormRef" label-width="100px">
           <el-form-item label="药品名称">
             <span style="font-weight: bold;">{{ currentDrug?.base_name || currentDrug?.name }}</span>
           </el-form-item>
           <el-form-item label="包装规格">
-            <span>{{ currentDrug?.unit_amount || '未知' }} 最小单位 / 整件</span>
+            <span>{{ currentDrug?.group_pack_amount || '未知' }} {{ currentDrug?.group_unit_name || '最小单位' }} / 整装</span>
           </el-form-item>
           <el-form-item label="实际整件数" prop="actual_packs">
             <el-input-number v-model="groupForm.actual_packs" :min="0" :step="1" />
           </el-form-item>
-          <el-form-item label="实际散件数" prop="actual_retail_units">
-            <el-input-number v-model="groupForm.actual_retail_units" :min="0" :step="1" />
+          <el-form-item label="零售份数" prop="actual_retail_units">
+            <el-input-number
+              v-model="groupForm.actual_retail_units"
+              :min="0"
+              :max="groupRetailLimit"
+              :step="1"
+              :disabled="!currentDrug?.group_retail_amount"
+            />
           </el-form-item>
           <el-form-item label="盘点后总计">
             <el-tag type="warning" size="large">
-              {{ groupForm.actual_packs * (currentDrug?.unit_amount || 0) + groupForm.actual_retail_units }} 最小单位
+              {{ groupTotalUnits }} {{ currentDrug?.group_unit_name || '最小单位' }}
             </el-tag>
           </el-form-item>
           <el-form-item label="盘点备注" prop="remark">
@@ -370,10 +433,11 @@
   </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { computed, ref, onMounted, watch } from 'vue'
 import { Search, Cpu } from '@element-plus/icons-vue'
-import { ElMessage, ElLoading } from 'element-plus'
+import { ElMessage, ElLoading, ElMessageBox } from 'element-plus'
 import request from '@/api/request'
+import DrugEntry from '@/components/DrugEntry.vue'
 
 const activeTab = ref('inventory')
 
@@ -397,14 +461,46 @@ const monthlyStartDate = ref('')
 const monthlyEndDate = ref('')
 const monthlyData = ref([])
 const monthlyLoading = ref(false)
+const monthlyExporting = ref(false)
 // Smart Inventory
 const smartDialogVisible = ref(false)
 const smartResult = ref(null)
+const smartPayload = ref(null)
+const smartMerging = ref(false)
+const reviewedMergeCandidateKeys = ref([])
 const smartThreshold = ref(30)
 const smartScatteredOnly = ref(false)
 const smartExpiryThreshold = ref(30)
 const showStockWarnings = ref(true)
 const showExpiryWarnings = ref(true)
+
+const mergeCandidates = computed(() => smartResult.value?.merge_candidates || [])
+const mergeCandidateKey = candidate => (candidate.record_ids || [])
+  .map(value => Number(value))
+  .sort((left, right) => left - right)
+  .join(',')
+const isMergeCandidateReviewed = candidate => reviewedMergeCandidateKeys.value.includes(
+  mergeCandidateKey(candidate)
+)
+const setMergeCandidateReviewed = (candidate, checked) => {
+  const key = mergeCandidateKey(candidate)
+  if (!key) return
+  if (checked) {
+    reviewedMergeCandidateKeys.value = [...new Set([...reviewedMergeCandidateKeys.value, key])]
+  } else {
+    reviewedMergeCandidateKeys.value = reviewedMergeCandidateKeys.value.filter(item => item !== key)
+  }
+}
+const reviewedMergeCandidateCount = computed(() => mergeCandidates.value.filter(
+  candidate => isMergeCandidateReviewed(candidate)
+).length)
+const allMergeCandidatesReviewed = computed(() => (
+  mergeCandidates.value.length > 0
+  && reviewedMergeCandidateCount.value === mergeCandidates.value.length
+))
+const resetMergeCandidateReview = () => {
+  reviewedMergeCandidateKeys.value = []
+}
 
 const onFilterCategoryChange = () => {
   // 确保至少勾选一项时自动触发筛选
@@ -436,9 +532,22 @@ const groupForm = ref({
 
 const groupRules = {
   actual_packs: [{ required: true, message: '请输入实际整件数', trigger: 'blur' }],
-  actual_retail_units: [{ required: true, message: '请输入实际散件数', trigger: 'blur' }],
+  actual_retail_units: [{ required: true, message: '请输入零售份数', trigger: 'blur' }],
   remark: [{ required: true, message: '请填写盘点备注', trigger: 'blur' }]
 }
+
+const groupRetailLimit = computed(() => {
+  const packAmount = Number(currentDrug.value?.group_pack_amount || 0)
+  const retailAmount = Number(currentDrug.value?.group_retail_amount || 0)
+  if (!packAmount || !retailAmount) return 0
+  return Math.max(0, Math.floor(packAmount / retailAmount) - 1)
+})
+
+const groupTotalUnits = computed(() => {
+  const packAmount = Number(currentDrug.value?.group_pack_amount || 0)
+  const retailAmount = Number(currentDrug.value?.group_retail_amount || 0)
+  return groupForm.value.actual_packs * packAmount + groupForm.value.actual_retail_units * retailAmount
+})
 
 const fetchDrugs = async () => {
   loading.value = true
@@ -485,13 +594,13 @@ const fetchRecords = async () => {
 const openInventoryDialog = (drug) => {
   currentDrug.value = drug
   if (drug && drug.stock_group_code) {
-    // 根据当前库存和换算率，大致推算当前的整散件，方便护士参考
-    const isRetail = drug.variant_type === 'retail'
-    const packs = isRetail ? Math.floor(drug.stock / (drug.unit_amount || 1)) : drug.stock
-    const loose = isRetail ? (drug.stock % (drug.unit_amount || 1)) : 0
-    
-    groupForm.value.actual_packs = packs
-    groupForm.value.actual_retail_units = loose
+    const totalUnits = Number(drug.group_total_units || 0)
+    const packAmount = Number(drug.group_pack_amount || 1)
+    const retailAmount = Number(drug.group_retail_amount || 0)
+    const remainder = totalUnits % packAmount
+
+    groupForm.value.actual_packs = Math.floor(totalUnits / packAmount)
+    groupForm.value.actual_retail_units = retailAmount ? Math.floor(remainder / retailAmount) : 0
     groupForm.value.remark = ''
     groupDialogVisible.value = true
   } else {
@@ -560,23 +669,75 @@ const submitInventory = async () => {
 }
 
 const handleSmartInventory = async () => {
-  const loadingInstance = ElLoading.service({
+  let loadingInstance = ElLoading.service({
     lock: true,
     text: '正在智能盘点库存，请稍候...',
     background: 'rgba(0, 0, 0, 0.7)',
   })
   try {
-    const res = await request.post('/admin/drugs/smart-inventory', {
+    const payload = {
       threshold: smartThreshold.value,
       scattered_only: smartScatteredOnly.value,
       expiry_threshold: smartExpiryThreshold.value
-    })
-    smartResult.value = res.data?.data || res.data
+    }
+    const res = await request.post('/admin/drugs/smart-inventory', payload, { timeout: 120000 })
+    const result = res.data?.data || res.data
+    smartPayload.value = payload
+    resetMergeCandidateReview()
+    smartResult.value = result
     smartDialogVisible.value = true
   } catch (error) {
     ElMessage.error(error.msg || '智能盘库失败')
   } finally {
-    loadingInstance.close()
+    if (loadingInstance) loadingInstance.close()
+  }
+}
+
+const handleInboundSubmitted = async () => {
+  drugPage.value = 1
+  await fetchDrugs()
+}
+
+const confirmSmartMerge = async () => {
+  const candidates = mergeCandidates.value
+  if (!allMergeCandidatesReviewed.value || candidates.length === 0) return
+
+  try {
+    await ElMessageBox.confirm(
+      `将合并已逐项核对的 ${candidates.length} 组重复记录，并迁移其历史引用。是否继续？`,
+      '确认合并重复记录',
+      { type: 'warning', confirmButtonText: '确认合并', cancelButtonText: '取消' }
+    )
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return
+    ElMessage.error('无法打开合并确认窗口')
+    return
+  }
+
+  smartMerging.value = true
+  try {
+    const confirmed = await request.post('/admin/drugs/smart-inventory', {
+      ...smartPayload.value,
+      confirm_merge: true,
+      merge_candidate_ids: candidates.map(candidate => candidate.record_ids)
+    }, { timeout: 120000 })
+    smartResult.value = confirmed.data?.data || confirmed.data
+    resetMergeCandidateReview()
+    await fetchDrugs()
+    ElMessage.success('重复记录合并完成')
+  } catch (error) {
+    const latestCandidates = error.data?.merge_candidates
+    if (error.code === 409 && Array.isArray(latestCandidates)) {
+      smartResult.value = {
+        ...smartResult.value,
+        merge_candidates: latestCandidates,
+        merge_confirmation_required: true
+      }
+      resetMergeCandidateReview()
+    }
+    ElMessage.error(error.msg || '合并重复记录失败')
+  } finally {
+    smartMerging.value = false
   }
 }
 
@@ -601,26 +762,50 @@ const fetchMonthlyReport = async () => {
   }
 }
 
-const exportMonthlyReport = () => {
+const exportMonthlyReport = async () => {
   if (!monthlyStartDate.value || !monthlyEndDate.value) {
     ElMessage.warning('请选择日期范围')
     return
   }
-  const token = localStorage.getItem('token')
-  const url = `/api/nurse/inventory/monthly-report/export?start_date=${monthlyStartDate.value}&end_date=${monthlyEndDate.value}`
-  
-  fetch(url, {
-    headers: { 'Authorization': `Bearer ${token}` }
-  })
-  .then(res => res.blob())
-  .then(blob => {
+  monthlyExporting.value = true
+  try {
+    const blob = await request.get('/nurse/inventory/monthly-report/export', {
+      params: {
+        start_date: monthlyStartDate.value,
+        end_date: monthlyEndDate.value
+      },
+      responseType: 'blob'
+    })
+
+    if (!(blob instanceof Blob)) {
+      throw new Error('导出接口未返回文件')
+    }
+    const contentType = (blob.type || '').toLowerCase()
+    if (contentType.includes('application/json') || contentType.startsWith('text/')) {
+      const body = (await blob.text()).trim()
+      let message = body
+      try {
+        message = JSON.parse(body).msg || body
+      } catch {
+        // Plain-text error responses are shown as-is.
+      }
+      throw new Error(message || '导出接口未返回 Excel 文件')
+    }
+
+    if (blob.size === 0) throw new Error('导出的 Excel 文件为空')
     const link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
+    const downloadUrl = URL.createObjectURL(blob)
+    link.href = downloadUrl
     link.download = `月度盘点报表_${monthlyStartDate.value}_${monthlyEndDate.value}.xlsx`
+    document.body.appendChild(link)
     link.click()
-    URL.revokeObjectURL(link.href)
-  })
-  .catch(() => ElMessage.error('导出失败'))
+    document.body.removeChild(link)
+    URL.revokeObjectURL(downloadUrl)
+  } catch (error) {
+    ElMessage.error(error.message || error.msg || '导出失败')
+  } finally {
+    monthlyExporting.value = false
+  }
 }
 
 // 合计行方法
@@ -646,7 +831,7 @@ watch(activeTab, (newTab) => {
     fetchRecords()
   } else if (newTab === 'monthly') {
     // 月度盘点不自动加载，等用户点击"生成报表"
-  } else {
+  } else if (newTab === 'inventory') {
     fetchDrugs()
   }
 })
@@ -675,6 +860,18 @@ onMounted(() => {
   margin-top: 20px;
   display: flex;
   justify-content: flex-end;
+}
+.merge-candidates {
+  margin-bottom: 18px;
+}
+.merge-candidates h3 {
+  margin: 0 0 12px;
+  font-size: 15px;
+}
+.merge-review-status {
+  margin-top: 12px;
+  color: #606266;
+  font-size: 13px;
 }
 
 :deep(.expired-row) {

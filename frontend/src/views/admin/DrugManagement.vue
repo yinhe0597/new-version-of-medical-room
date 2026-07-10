@@ -91,18 +91,19 @@
           <template #default="scope">
             <el-button size="small" @click="openEditDialog(scope.row)">编辑</el-button>
             <el-button 
+              v-if="!scope.row.stock_group_code && scope.row.status === 1"
               size="small" 
               type="warning" 
               @click="handleDisable(scope.row)" 
-              v-if="scope.row.status === 1"
             >停用</el-button>
             <el-button 
+              v-else-if="!scope.row.stock_group_code"
               size="small" 
               type="success" 
               @click="handleEnable(scope.row)" 
-              v-else
             >启用</el-button>
             <el-button 
+              v-if="!scope.row.stock_group_code"
               size="small" 
               type="danger" 
               @click="handleRealDelete(scope.row)" 
@@ -130,7 +131,7 @@
     >
       <el-form :model="form" :rules="rules" ref="formRef" label-width="80px">
         <el-form-item label="类型" prop="type">
-          <el-radio-group v-model="form.type" @change="handleTypeChange">
+          <el-radio-group v-model="form.type" :disabled="isGroupedStock" @change="handleTypeChange">
             <el-radio :label="1">药品</el-radio>
             <el-radio :label="2">诊疗项目 (打包收费)</el-radio>
             <el-radio :label="3">耗材</el-radio>
@@ -146,7 +147,7 @@
           </div>
         </el-form-item>
         <el-form-item label="名称" prop="name">
-          <el-input v-model="form.name" placeholder="如：阿莫西林 或 小换药"></el-input>
+          <el-input v-model="form.name" placeholder="如：阿莫西林 或 小换药" :disabled="isGroupedStock"></el-input>
         </el-form-item>
         <el-form-item label="规格" prop="specification">
           <el-input v-model="form.specification" :placeholder="form.type === 2 ? '如：次/项' : ''" :disabled="isGroupedStock && form.type === 1"></el-input>
@@ -155,7 +156,13 @@
           <el-input v-model="form.unit" :placeholder="form.type === 2 ? '如：次' : ''" :disabled="isGroupedStock && form.type === 1"></el-input>
         </el-form-item>
         <el-form-item label="购进价" prop="purchase_price">
-          <el-input-number v-model="form.purchase_price" :min="0" :precision="2" :step="0.1" />
+          <el-input-number
+            v-model="form.purchase_price"
+            :min="0"
+            :precision="2"
+            :step="0.1"
+            :disabled="isGroupedRetail"
+          />
         </el-form-item>
         <el-form-item label="零售价" prop="price">
           <el-input-number v-model="form.price" :min="0" :precision="2" :step="0.1" />
@@ -172,7 +179,7 @@
         <el-form-item :label="isEdit ? '现有库存' : '初始库存'" prop="stock" v-if="form.type === 1 || form.type === 3">
           <el-input-number v-model="form.stock" :min="0" :step="1" :disabled="isEdit || isGroupedStock" />
         </el-form-item>
-        <el-form-item label="有效期" v-if="form.type === 1 || form.type === 3">
+        <el-form-item label="有效期" v-if="!isGroupedStock && (form.type === 1 || form.type === 3)">
           <el-date-picker
             v-model="form.expiry_date"
             type="date"
@@ -184,9 +191,9 @@
         </el-form-item>
 
         <!-- 库存操作区域（仅编辑模式） -->
-        <div v-if="isEdit && (form.type === 1 || form.type === 3)" style="margin-bottom: 18px; padding: 12px; background: #f5f7fa; border-radius: 6px;">
+        <div v-if="isEdit && !isGroupedStock && (form.type === 1 || form.type === 3)" style="margin-bottom: 18px; padding: 12px; background: #f5f7fa; border-radius: 6px;">
           <div style="margin-bottom: 10px;">
-            <el-button type="warning" size="small" @click="showCorrectionForm = !showCorrectionForm">
+            <el-button v-if="isNurse" type="warning" size="small" @click="showCorrectionForm = !showCorrectionForm">
               盘点勘误
             </el-button>
             <el-button type="success" size="small" @click="showInboundForm = !showInboundForm">
@@ -195,7 +202,7 @@
           </div>
 
           <!-- 盘点勘误表单 -->
-          <div v-if="showCorrectionForm" style="margin-top: 10px; padding: 10px; background: #fff; border-radius: 4px;">
+          <div v-if="isNurse && showCorrectionForm" style="margin-top: 10px; padding: 10px; background: #fff; border-radius: 4px;">
             <el-form-item label="实际数量" style="margin-bottom: 8px;">
               <el-input-number v-model="correctionStock" :min="0" :step="1" />
             </el-form-item>
@@ -267,6 +274,7 @@ const inboundRemark = ref('')
 const inboundLoading = ref(false)
 
 const submitCorrection = async () => {
+  if (!isNurse.value || isGroupedStock.value) return
   if (correctionStock.value === form.value.stock) {
     ElMessage.warning('实际数量未发生变化')
     return
@@ -291,6 +299,7 @@ const submitCorrection = async () => {
 }
 
 const submitInbound = async () => {
+  if (isGroupedStock.value) return
   if (!inboundQuantity.value || inboundQuantity.value <= 0) {
     ElMessage.warning('入库数量必须大于0')
     return
@@ -339,6 +348,7 @@ const form = ref({
 })
 
 const isGroupedStock = computed(() => Boolean(form.value && form.value.stock_group_code))
+const isGroupedRetail = computed(() => isGroupedStock.value && form.value.variant_type === 'retail')
 
 // 有效期计算工具
 const getExpiryDays = (expiryDate) => {
@@ -529,10 +539,15 @@ const submitForm = async () => {
           payload.conversion_rate = null
         }
         if (payload.stock_group_code) {
-          delete payload.stock
-          delete payload.has_scattered
-          delete payload.scattered_price
-          delete payload.conversion_rate
+          const allowedFields = new Set(['id', 'price', 'storage_location'])
+          if (payload.variant_type !== 'retail') {
+            allowedFields.add('purchase_price')
+          }
+          Object.keys(payload).forEach((key) => {
+            if (!allowedFields.has(key)) {
+              delete payload[key]
+            }
+          })
         }
         
         if (isEdit.value) {

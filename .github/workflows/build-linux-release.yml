@@ -139,12 +139,15 @@ jobs:
 
           【访问地址】
             本机:     http://127.0.0.1:5000
-            局域网:   http://<本机IP>:5000
+            局域网:   需在 .env 显式设置 SERVER_HOST=0.0.0.0，
+                      并通过 HTTPS 反向代理访问
 
-          【默认账号】
-            管理员: admin / 123456
-            医生:   doctor / 123456
-            护士:   nurse / 123456
+          【初始账号】
+            管理员: admin
+            医生:   doctor
+            护士:   nurse
+            首次启动前可通过 BOOTSTRAP_PASSWORD 设置临时密码；未设置时，
+            系统会生成随机临时密码并写入启动日志（./run.sh log）。
 
           【系统要求】
             Linux x86_64 (glibc 2.17+)
@@ -262,22 +265,25 @@ jobs:
             | `*.tar.gz` | 压缩包 | 服务器 / 远程机器 | `tar xzf *.tar.gz && cd * && ./run.sh start` |
             | `*.AppImage` | 单文件 | 桌面 Linux / U盘 | `chmod +x *.AppImage && ./*.AppImage` |
 
-            ### 🔑 默认账号
+            ### 🔑 初始账号
 
-            | 角色 | 用户名 | 密码 |
-            |:---:|:---:|:---:|
-            | 管理员 | admin | 123456 |
-            | 医生 | doctor | 123456 |
-            | 护士 | nurse | 123456 |
+            | 角色 | 用户名 |
+            |:---:|:---:|
+            | 管理员 | admin |
+            | 医生 | doctor |
+            | 护士 | nurse |
+
+            首次启动前可通过 `BOOTSTRAP_PASSWORD` 设置临时密码；未设置时，
+            系统会生成随机临时密码并写入启动日志。登录后请立即修改密码。
 
             ### 💡 说明
             - 启动后自动在程序同级目录创建 `data/` 和 `logs/`
-            - 数据库自动建表，旧数据库自动迁移补字段
+            - 数据库自动建表并安全增量补齐；复杂结构升级需正式 migration
             - 系统要求：Linux x86_64 (glibc 2.17+)
 
             ### 🔗 访问地址
             - 本机：http://127.0.0.1:5000
-            - 局域网：http://<本机IP>:5000
+            - 局域网：在 `.env` 显式设置 `SERVER_HOST=0.0.0.0` 后，通过 HTTPS 反向代理访问
           draft: false
           prerelease: ${{ github.event.inputs.prerelease || false }}
           files: |

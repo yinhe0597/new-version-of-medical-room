@@ -2,18 +2,31 @@ from flask import request, jsonify, send_file, make_response, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import User, Drug, Payment, Visit, PrescriptionItem, Patient, InventoryRecord, OperationLog
+from backend.app.models import (
+    User, Drug, DrugStockGroup, Payment, Visit, PrescriptionItem, Patient, InventoryRecord,
+    DailyStockSnapshot, OperationLog,
+    INVENTORY_OPERATION_ADJUSTMENT, INVENTORY_OPERATION_INBOUND, INVENTORY_OPERATION_MERGE,
+)
 from backend.app.utils.decorators import role_required
+from backend.app.services.stock_lock import serialized_stock_mutation
+from backend.app.services.revenue import allocate_payment_revenue
+from backend.app.services.time_utils import local_naive_to_utc, local_now, parse_local_datetime, utc_naive_to_local
+from backend.app.services.bootstrap import validate_password
+from backend.app.utils.query import nulls_last_asc
 from datetime import datetime, date, timedelta
 from sqlalchemy import func
 from sqlalchemy.orm import aliased
+from sqlalchemy.engine import make_url
 import os
-import shutil
 import csv
 import io
 import json
+import math
 import re
 import subprocess
+import sqlite3
+import tempfile
+import zipfile
 from sqlalchemy.exc import IntegrityError
 
 from pypinyin import pinyin, Style
@@ -56,7 +69,7 @@ def _age_from_id_card(id_card: str):
         return None
     try:
         birth = datetime.strptime(id_card[6:14], "%Y%m%d")
-        today = datetime.today()
+        today = local_now()
         age = today.year - birth.year
         if (today.month, today.day) < (birth.month, birth.day):
             age -= 1
@@ -73,17 +86,23 @@ def _check_upload_size(file_storage):
     return True
 
 
-def _mask_patient_name(name):
+def _mask_patient_name(name, finance_view=None):
     """对财务角色脱敏患者姓名"""
-    try:
-        current_user_id = get_jwt_identity()
-        user = User.query.get(current_user_id)
-        if user and user.role == 'finance':
-            if name and len(name) > 1:
-                return name[0] + '*' * (len(name) - 1)
-    except Exception:
-        pass
+    if finance_view is None:
+        finance_view = _current_user_is_finance()
+    if finance_view and name:
+        if len(name) == 1:
+            return '*'
+        return name[0] + '*' * (len(name) - 1)
     return name or ''
+
+
+def _current_user_is_finance():
+    try:
+        user = db.session.get(User, int(get_jwt_identity()))
+        return bool(user and user.role == 'finance')
+    except (TypeError, ValueError):
+        return False
 
 def _name_pinyin_parts(text):
     if not isinstance(text, str) or not text:
@@ -94,66 +113,148 @@ def _name_pinyin_parts(text):
     full = "".join([x[0] for x in full_list if x]).lower()
     return full, initials
 
+
+def _nonnegative_float(value, field):
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        raise ValueError(field)
+    if not math.isfinite(result) or result < 0:
+        raise ValueError(field)
+    return result
+
+
+def _nonnegative_int(value, field):
+    if isinstance(value, bool):
+        raise ValueError(field)
+    try:
+        result = int(value)
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        raise ValueError(field)
+    if not math.isfinite(numeric) or numeric != result or result < 0:
+        raise ValueError(field)
+    return result
+
+
+def _mysql_backup_response(uri):
+    url = make_url(uri)
+    if not url.drivername.startswith("mysql") or not url.database:
+        return jsonify({"msg": "当前数据库不是 MySQL"}), 400
+
+    command = [
+        "mysqldump",
+        "-h", url.host or "127.0.0.1",
+        "-P", str(url.port or 3306),
+        "-u", url.username or "root",
+        "--single-transaction",
+        "--default-character-set=utf8mb4",
+        url.database,
+    ]
+    env = os.environ.copy()
+    if url.password:
+        env["MYSQL_PWD"] = url.password
+
+    fd, backup_path = tempfile.mkstemp(prefix="medical_backup_", suffix=".sql")
+    os.close(fd)
+    try:
+        with open(backup_path, "wb") as output:
+            process = subprocess.run(
+                command,
+                stdout=output,
+                stderr=subprocess.PIPE,
+                env=env,
+                check=False,
+                timeout=300,
+            )
+    except FileNotFoundError:
+        os.remove(backup_path)
+        return jsonify({"msg": "未找到 mysqldump，请安装 MySQL 客户端工具"}), 500
+    except subprocess.TimeoutExpired:
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        current_app.logger.error("mysqldump timed out after 300 seconds")
+        return jsonify({"msg": "MySQL 备份超时，请检查数据库负载"}), 504
+    except OSError:
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        current_app.logger.exception("Failed to start mysqldump")
+        return jsonify({"msg": "MySQL 备份失败，请检查客户端工具和临时目录"}), 500
+
+    if process.returncode != 0:
+        current_app.logger.error(
+            "mysqldump failed: %s",
+            process.stderr.decode("utf-8", errors="replace"),
+        )
+        os.remove(backup_path)
+        return jsonify({"msg": "MySQL 备份失败，请检查服务和日志"}), 500
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    try:
+        response = send_file(
+            backup_path,
+            as_attachment=True,
+            download_name=f"{url.database}_backup_{timestamp}.sql",
+            mimetype="application/sql",
+        )
+    except Exception:
+        os.remove(backup_path)
+        raise
+    response.direct_passthrough = False
+    response.call_on_close(lambda: os.path.exists(backup_path) and os.remove(backup_path))
+    return response
+
+
+def _create_sqlite_backup(uri):
+    url = make_url(uri)
+    if not url.drivername.startswith("sqlite") or not url.database or url.database == ":memory:":
+        return None, (jsonify({"msg": "当前数据库不是可备份的 SQLite 文件"}), 400)
+
+    db_path = os.path.abspath(url.database)
+    if not os.path.isfile(db_path):
+        return None, (jsonify({"msg": "数据库文件不存在"}), 500)
+
+    backup_dir = os.path.join(os.path.dirname(db_path), "backups")
+    os.makedirs(backup_dir, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
+    source = sqlite3.connect(db_path, timeout=15)
+    destination = sqlite3.connect(backup_path, timeout=15)
+    try:
+        source.backup(destination)
+    except Exception:
+        destination.close()
+        source.close()
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        raise
+    else:
+        destination.close()
+        source.close()
+    return backup_path, None
+
+
+def _prune_sqlite_backups(backup_path, keep=20):
+    backup_dir = os.path.dirname(backup_path)
+    backups = sorted(
+        (
+            os.path.join(backup_dir, name)
+            for name in os.listdir(backup_dir)
+            if name.startswith("backup_") and name.endswith(".db")
+        ),
+        key=os.path.getmtime,
+        reverse=True,
+    )
+    for stale_path in backups[keep:]:
+        try:
+            os.remove(stale_path)
+        except OSError:
+            current_app.logger.warning("Failed to prune backup: %s", stale_path)
+
 @bp.route('/admin/backup/mysql', methods=['GET'])
 @role_required('admin')
 def backup_mysql_database():
-    try:
-        uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
-        if not uri.startswith('mysql'):
-            return jsonify({"msg": "Backup is only supported for MySQL databases in this version."}), 400
-
-        # 解析 mysql 连接字符串
-        # 格式: mysql+pymysql://user:password@host:port/dbname?charset=utf8mb4
-        # 移除 'mysql+pymysql://'
-        conn_str = uri.split('://', 1)[1]
-        
-        # 提取 user:password
-        auth_part, rest = conn_str.split('@', 1)
-        user, password = auth_part.split(':', 1)
-        
-        # 提取 host:port 和 dbname
-        host_port_part, db_part = rest.split('/', 1)
-        if ':' in host_port_part:
-            host, port = host_port_part.split(':', 1)
-        else:
-            host = host_port_part
-            port = '3306'
-            
-        dbname = db_part.split('?')[0]
-
-        # 构造 mysqldump 命令
-        dump_cmd = [
-            'mysqldump',
-            '-h', host,
-            '-P', port,
-            '-u', user,
-            f'-p{password}',
-            dbname
-        ]
-
-        # 执行导出
-        try:
-            process = subprocess.Popen(dump_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            stdout, stderr = process.communicate()
-        except FileNotFoundError:
-            return jsonify({"msg": "Backup failed: 'mysqldump' command not found. Please ensure MySQL client tools are installed."}), 500
-
-        if process.returncode != 0:
-            error_msg = stderr.decode('utf-8', errors='ignore')
-            return jsonify({"msg": f"Backup failed: {error_msg}"}), 500
-
-        # 返回 sql 文件流
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f"{dbname}_backup_{timestamp}.sql"
-        
-        response = make_response(stdout)
-        response.headers["Content-Disposition"] = f"attachment; filename={filename}"
-        response.headers["Content-type"] = "application/sql"
-        
-        return response
-
-    except Exception as e:
-        return jsonify({"msg": f"An error occurred during backup: {str(e)}"}), 500
+    return _mysql_backup_response(current_app.config.get('SQLALCHEMY_DATABASE_URI', ''))
 
 @bp.route('/admin/patients/template', methods=['GET'])
 @role_required('admin')
@@ -257,8 +358,6 @@ def import_patients():
                     )
                     db.session.add(new_patient)
                 success_count += 1
-                if success_count % 100 == 0:
-                    db.session.commit()
 
         elif import_type == 'shop':
             # 商铺员工导入: 姓名,性别,身份证号,手机号码,商铺名称
@@ -298,8 +397,6 @@ def import_patients():
                     )
                     db.session.add(new_patient)
                 success_count += 1
-                if success_count % 100 == 0:
-                    db.session.commit()
 
         else:
             # 学生导入（保持原有逻辑）
@@ -332,6 +429,14 @@ def import_patients():
 
                 full_py, initials_py = _name_pinyin_parts(name)
 
+                age_val = None
+                if age_raw:
+                    try:
+                        age_val = int(age_raw)
+                    except ValueError:
+                        error_count += 1
+                        continue
+
                 existing = Patient.query.filter_by(student_id=student_id).first()
                 if existing:
                     existing.name = name
@@ -350,21 +455,10 @@ def import_patients():
                     existing.class_name = class_name
                     existing.counselor_name = counselor_name
                     if age_raw:
-                        try:
-                            existing.age = int(age_raw)
-                        except ValueError:
-                            error_count += 1
-                            continue
+                        existing.age = age_val
                     if phone is not None:
                         existing.phone = phone
                 else:
-                    age_val = None
-                    if age_raw:
-                        try:
-                            age_val = int(age_raw)
-                        except ValueError:
-                            error_count += 1
-                            continue
                     new_patient = Patient(
                         student_id=student_id, name=name, name_pinyin=full_py, name_initials=initials_py,
                         gender=gender or None, grade=grade or None, college=college or None,
@@ -375,10 +469,7 @@ def import_patients():
                     db.session.add(new_patient)
 
                 success_count += 1
-                if success_count % 100 == 0:
-                    db.session.commit()
 
-        db.session.commit()
         type_label = PATIENT_TYPES.get(import_type, '人员')
         log = OperationLog(
             user_id=int(get_jwt_identity()),
@@ -391,9 +482,10 @@ def import_patients():
         db.session.commit()
         return jsonify({"msg": f"Import complete. Success: {success_count}, Errors: {error_count}"}), 200
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"Error parsing CSV: {str(e)}"}), 500
+        current_app.logger.exception("Patient CSV import failed")
+        return jsonify({"msg": "CSV 导入失败，请检查文件格式或联系管理员"}), 500
 
 @bp.route('/admin/patients', methods=['GET'])
 @role_required('admin')
@@ -467,7 +559,12 @@ def admin_create_patient():
     gender = (data.get('gender') or '').strip() or None
     phone = (data.get('phone') or '').strip() or None
     id_card = (data.get('id_card') or '').strip() or None
-    age = int(data['age']) if data.get('age') else None
+    try:
+        age = _nonnegative_int(data['age'], 'age') if data.get('age') else None
+    except ValueError:
+        return jsonify({"msg": "年龄必须为非负整数", "field": "age"}), 400
+    if patient_type not in PATIENT_TYPES:
+        return jsonify({"msg": "人员类型不合法", "field": "patient_type"}), 400
 
     # 类型专属字段初始化
     student_id = None
@@ -521,7 +618,7 @@ def admin_create_patient():
         patient_type=patient_type, department=department, shop_name=shop_name,
     )
     db.session.add(patient)
-    db.session.commit()
+    db.session.flush()
 
     type_label = PATIENT_TYPES.get(patient_type, '人员')
     log = OperationLog(
@@ -539,7 +636,7 @@ def admin_create_patient():
 @bp.route('/admin/patients/<int:id>', methods=['PUT'])
 @role_required('admin')
 def admin_update_patient(id):
-    patient = Patient.query.get_or_404(id)
+    patient = db.get_or_404(Patient, id)
     data = request.get_json() or {}
 
     # 类型变更处理
@@ -593,8 +690,6 @@ def admin_update_patient(id):
     elif 'age' in data:
         patient.age = int(data['age']) if data['age'] else None
 
-    db.session.commit()
-
     log = OperationLog(
         user_id=int(get_jwt_identity()),
         action_type='update_patient',
@@ -609,7 +704,7 @@ def admin_update_patient(id):
 @bp.route('/admin/patients/<int:id>', methods=['DELETE'])
 @role_required('admin')
 def delete_patient(id):
-    patient = Patient.query.get_or_404(id)
+    patient = db.get_or_404(Patient, id)
     if patient.visits.count() > 0:
         return jsonify({"msg": "该人员已有就诊记录，无法删除"}), 400
 
@@ -620,7 +715,7 @@ def delete_patient(id):
 @bp.route('/admin/patients/<int:id>/visits', methods=['GET'])
 @role_required('admin')
 def get_patient_visits(id):
-    patient = Patient.query.get_or_404(id)
+    patient = db.get_or_404(Patient, id)
     visits = patient.visits.order_by(Visit.timestamp.desc()).all()
 
     data = []
@@ -641,7 +736,7 @@ def get_patient_visits(id):
 @bp.route('/admin/visits/<int:visit_id>', methods=['GET'])
 @role_required('admin')
 def admin_get_visit_detail(visit_id):
-    visit = Visit.query.get_or_404(visit_id)
+    visit = db.get_or_404(Visit, visit_id)
 
     items = []
     for item in visit.items:
@@ -689,7 +784,7 @@ def get_drugs():
     per_page = request.args.get('size', 20, type=int)
     keyword = request.args.get('keyword', '')
 
-    query = Drug.query.order_by(Drug.storage_location.asc().nullslast())
+    query = Drug.query.order_by(*nulls_last_asc(Drug.storage_location))
     if keyword:
         query = query.filter(Drug.name.contains(keyword))
 
@@ -731,10 +826,16 @@ def get_drugs():
 
 @bp.route('/admin/drugs', methods=['POST'])
 @role_required(['admin', 'nurse'])
+@serialized_stock_mutation
 def create_drug():
     data = request.get_json() or {}
 
-    drug_type = data.get('type', 1)
+    try:
+        drug_type = int(data.get('type', 1))
+    except (TypeError, ValueError):
+        return jsonify({"msg": "Invalid type", "field": "type"}), 400
+    if drug_type not in (1, 2, 3):
+        return jsonify({"msg": "Invalid type", "field": "type"}), 400
 
     if drug_type == 1 or drug_type == 3:
         required_fields = ['name', 'specification', 'unit', 'price', 'stock']
@@ -746,12 +847,29 @@ def create_drug():
         if field not in data:
             return jsonify({"msg": f"Missing required field: {field}"}), 400
 
+    if not all(str(data.get(field) or '').strip() for field in ('name', 'specification', 'unit')):
+        return jsonify({"msg": "名称、规格和单位不能为空"}), 400
+
+    try:
+        price = _nonnegative_float(data['price'], 'price')
+        purchase_price = _nonnegative_float(data.get('purchase_price', 0), 'purchase_price')
+        stock = _nonnegative_int(data.get('stock', 0), 'stock') if drug_type in (1, 3) else -1
+        scattered_price = None
+        conversion_rate = None
+        if data.get('has_scattered') and drug_type == 1:
+            scattered_price = _nonnegative_float(data.get('scattered_price'), 'scattered_price')
+            conversion_rate = _nonnegative_int(data.get('conversion_rate'), 'conversion_rate')
+            if scattered_price <= 0 or conversion_rate <= 0:
+                raise ValueError('scattered_price')
+    except ValueError as exc:
+        return jsonify({"msg": "价格、库存或拆零参数不合法", "field": str(exc)}), 400
+
     # 有效期验证
     expiry_val = None
     if data.get('expiry_date'):
         try:
             expiry_val = date.fromisoformat(data['expiry_date'])
-            if expiry_val < date.today():
+            if expiry_val < local_now().date():
                 return jsonify({"msg": "有效期不能早于当前日期"}), 400
         except ValueError:
             return jsonify({"msg": "有效期格式错误，请使用 YYYY-MM-DD 格式"}), 400
@@ -762,12 +880,12 @@ def create_drug():
         type=drug_type,
         specification=data['specification'],
         unit=data['unit'],
-        purchase_price=float(data.get('purchase_price', 0.0)),
-        price=float(data['price']),
+        purchase_price=purchase_price,
+        price=price,
         has_scattered=data.get('has_scattered', False) if drug_type != 3 else False,
-        scattered_price=float(data.get('scattered_price', 0.0)) if data.get('scattered_price') and drug_type != 3 else None,
-        conversion_rate=int(data.get('conversion_rate', 1)) if data.get('conversion_rate') and drug_type != 3 else None,
-        stock=int(data['stock']),
+        scattered_price=scattered_price,
+        conversion_rate=conversion_rate,
+        stock=stock,
         status=data.get('status', 1),
         batch_no=data.get('batch_no'),
         inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None,
@@ -785,11 +903,10 @@ def create_drug():
             nurse_id=int(get_jwt_identity()),
             old_stock=0,
             new_stock=int(data['stock']),
+            operation_type=INVENTORY_OPERATION_INBOUND,
             remark='初始入库(管理员新增)',
         )
         db.session.add(ir)
-
-    db.session.commit()
 
     # 记录运营日志
     log = OperationLog(
@@ -813,15 +930,41 @@ def create_drug():
 
 @bp.route('/admin/drugs/<int:id>', methods=['PUT'])
 @role_required(['admin', 'nurse'])
+@serialized_stock_mutation
 def update_drug(id):
-    drug = Drug.query.get_or_404(id)
+    drug = Drug.query.filter_by(id=id).with_for_update().first_or_404()
     data = request.get_json() or {}
 
     if drug.stock_group_code:
+        allowed_group_fields = {'id', 'price', 'purchase_price', 'storage_location'}
+        unsupported = sorted(set(data) - allowed_group_fields)
+        if unsupported:
+            return jsonify({
+                "msg": "库存组物资只能单独修改售价、购进价和库位",
+                "fields": unsupported,
+            }), 400
+        if 'purchase_price' in data and drug.variant_type == 'retail':
+            return jsonify({"msg": "整散库存组购进价请在整装记录上修改"}), 400
+
+    try:
+        if 'type' in data:
+            data['type'] = int(data['type'])
+            if data['type'] not in (1, 2, 3):
+                raise ValueError('type')
+        if 'purchase_price' in data:
+            data['purchase_price'] = _nonnegative_float(data['purchase_price'], 'purchase_price')
+        if 'price' in data:
+            data['price'] = _nonnegative_float(data['price'], 'price')
         if 'stock' in data:
-            return jsonify({"msg": "Grouped stock item cannot be updated via stock field"}), 400
-        if 'specification' in data or 'unit' in data:
-            return jsonify({"msg": "Grouped stock item cannot change specification/unit"}), 400
+            data['stock'] = _nonnegative_int(data['stock'], 'stock')
+        if data.get('scattered_price') not in (None, ''):
+            data['scattered_price'] = _nonnegative_float(data['scattered_price'], 'scattered_price')
+        if data.get('conversion_rate') not in (None, ''):
+            data['conversion_rate'] = _nonnegative_int(data['conversion_rate'], 'conversion_rate')
+            if data['conversion_rate'] <= 0:
+                raise ValueError('conversion_rate')
+    except (TypeError, ValueError) as exc:
+        return jsonify({"msg": "价格、库存或类型参数不合法", "field": str(exc)}), 400
 
     old_stock = drug.stock
     if 'name' in data: drug.name = data['name']
@@ -842,12 +985,12 @@ def update_drug(id):
             drug.variant_type = None
     if 'specification' in data: drug.specification = data['specification']
     if 'unit' in data: drug.unit = data['unit']
-    if 'purchase_price' in data: drug.purchase_price = float(data['purchase_price'])
-    if 'price' in data: drug.price = float(data['price'])
+    if 'purchase_price' in data: drug.purchase_price = data['purchase_price']
+    if 'price' in data: drug.price = data['price']
     if 'has_scattered' in data: drug.has_scattered = data['has_scattered']
-    if 'scattered_price' in data: drug.scattered_price = float(data['scattered_price']) if data['scattered_price'] else None
-    if 'conversion_rate' in data: drug.conversion_rate = int(data['conversion_rate']) if data['conversion_rate'] else None
-    if 'stock' in data: drug.stock = int(data['stock'])
+    if 'scattered_price' in data: drug.scattered_price = data['scattered_price'] if data['scattered_price'] not in (None, '') else None
+    if 'conversion_rate' in data: drug.conversion_rate = data['conversion_rate'] if data['conversion_rate'] not in (None, '') else None
+    if 'stock' in data: drug.stock = data['stock']
     if 'status' in data: drug.status = int(data['status'])
     if 'batch_no' in data: drug.batch_no = data['batch_no'] or None
     if 'inbound_at' in data: drug.inbound_at = datetime.fromisoformat(data['inbound_at']) if data['inbound_at'] else None
@@ -856,13 +999,23 @@ def update_drug(id):
         if data['expiry_date']:
             try:
                 new_expiry = date.fromisoformat(data['expiry_date'])
-                if new_expiry < date.today():
+                if new_expiry < local_now().date():
                     return jsonify({"msg": "有效期不能早于当前日期"}), 400
                 drug.expiry_date = new_expiry
             except ValueError:
                 return jsonify({"msg": "有效期格式错误，请使用 YYYY-MM-DD 格式"}), 400
         else:
             drug.expiry_date = None
+
+    if drug.stock_group_code and 'purchase_price' in data:
+        group = DrugStockGroup.query.filter_by(
+            group_code=drug.stock_group_code
+        ).with_for_update().populate_existing().first()
+        if group and group.retail_drug and group.retail_amount:
+            group.retail_drug.purchase_price = round(
+                float(data['purchase_price']) * float(group.retail_amount) / float(group.pack_amount),
+                2,
+            )
 
     # 若库存发生变化，记录盘点记录
     if 'stock' in data and drug.type in (1, 3) and int(data['stock']) != old_stock:
@@ -871,11 +1024,10 @@ def update_drug(id):
             nurse_id=int(get_jwt_identity()),
             old_stock=old_stock,
             new_stock=int(data['stock']),
+            operation_type=INVENTORY_OPERATION_ADJUSTMENT,
             remark='管理员编辑库存',
         )
         db.session.add(ir)
-
-    db.session.commit()
 
     log = OperationLog(
         user_id=int(get_jwt_identity()),
@@ -890,18 +1042,26 @@ def update_drug(id):
 
 @bp.route('/admin/drugs/<int:drug_id>/inbound', methods=['POST'])
 @role_required(['admin', 'nurse'])
+@serialized_stock_mutation
 def drug_inbound(drug_id):
     """药品入库（进货/补货）"""
-    drug = Drug.query.get_or_404(drug_id)
-    data = request.get_json()
+    drug = Drug.query.filter_by(id=drug_id).with_for_update().first_or_404()
+    data = request.get_json() or {}
 
-    quantity = data.get('quantity')
+    try:
+        quantity = _nonnegative_int(data.get('quantity'), 'quantity')
+    except ValueError:
+        return jsonify({"msg": "入库数量必须为正整数", "field": "quantity"}), 400
     remark = data.get('remark', '')
 
-    if not quantity or quantity <= 0:
+    if quantity <= 0:
         return jsonify({"msg": "入库数量必须大于0"}), 400
+    if drug.type not in (1, 3) and drug.type is not None:
+        return jsonify({"msg": "诊疗项目不支持库存入库"}), 400
+    if drug.stock_group_code:
+        return jsonify({"msg": "库存组物资请使用护士入库流程补货"}), 400
 
-    old_stock = drug.stock
+    old_stock = int(drug.stock or 0)
     drug.stock = old_stock + quantity
 
     # 创建入库记录
@@ -910,6 +1070,7 @@ def drug_inbound(drug_id):
         nurse_id=int(get_jwt_identity()),
         old_stock=old_stock,
         new_stock=drug.stock,
+        operation_type=INVENTORY_OPERATION_INBOUND,
         remark=f"入库: {remark}" if remark else "入库"
     )
     db.session.add(record)
@@ -927,8 +1088,9 @@ def drug_inbound(drug_id):
 
 @bp.route('/admin/drugs/<int:id>', methods=['DELETE'])
 @role_required(['admin', 'nurse'])
+@serialized_stock_mutation
 def delete_drug(id):
-    drug = Drug.query.get_or_404(id)
+    drug = Drug.query.filter_by(id=id).with_for_update().first_or_404()
     if drug.stock_group_code:
         return jsonify({"msg": "整散库存组药品不支持直接删除，请先停用或由管理员做库存组清理"}), 400
     try:
@@ -938,12 +1100,14 @@ def delete_drug(id):
     except IntegrityError:
         db.session.rollback()
         return jsonify({"msg": "已被处方引用的项目无法彻底删除，请使用停用功能"}), 400
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"删除失败: {str(e)}"}), 500
+        current_app.logger.exception("Drug deletion failed: id=%s", id)
+        return jsonify({"msg": "删除失败，请稍后重试"}), 500
 
 @bp.route('/admin/drugs/import', methods=['POST'])
 @role_required(['admin', 'nurse'])
+@serialized_stock_mutation
 def import_drugs():
     if 'file' not in request.files:
         return jsonify({"msg": "No file part"}), 400
@@ -972,26 +1136,42 @@ def import_drugs():
         error_count = 0
 
         for row in csv_input:
+            savepoint = db.session.begin_nested()
             try:
-                name = row.get('name')
-                specification = row.get('specification')
-                unit = row.get('unit')
-                purchase_price = float(row.get('purchase_price') or 0.0)
-                price = float(row.get('price') or 0.0)
+                name = (row.get('name') or '').strip()
+                specification = (row.get('specification') or '').strip()
+                unit = (row.get('unit') or '').strip()
+                purchase_price = _nonnegative_float(row.get('purchase_price') or 0.0, 'purchase_price')
+                price = _nonnegative_float(row.get('price') or 0.0, 'price')
                 has_scattered = str(row.get('has_scattered', '')).strip() == '1'
-                scattered_price = float(row.get('scattered_price')) if row.get('scattered_price') else None
-                conversion_rate = int(row.get('conversion_rate')) if row.get('conversion_rate') else None
+                scattered_price = _nonnegative_float(row.get('scattered_price'), 'scattered_price') if row.get('scattered_price') else None
+                conversion_rate = _nonnegative_int(row.get('conversion_rate'), 'conversion_rate') if row.get('conversion_rate') else None
+                if conversion_rate is not None and conversion_rate <= 0:
+                    raise ValueError('conversion_rate')
                 batch_no = (row.get('batch_no') or '').strip() or None
                 inbound_at = (row.get('inbound_at') or '').strip() or None
+                expiry_raw = (row.get('expiry_date') or '').strip()
+                expiry_date = date.fromisoformat(expiry_raw) if expiry_raw else None
+                if expiry_date and expiry_date < local_now().date():
+                    raise ValueError('expiry_date')
                 
                 stock_str = str(row.get('stock', '')).strip()
-                stock = int(stock_str) if stock_str else 0
+                stock = _nonnegative_int(stock_str, 'stock') if stock_str else 0
 
                 if not name or not specification:
+                    savepoint.rollback()
                     error_count += 1
                     continue
 
-                existing = Drug.query.filter_by(name=name, specification=specification).first()
+                existing = Drug.query.filter(
+                    Drug.type == 1,
+                    Drug.name == name,
+                    Drug.specification == specification,
+                    Drug.batch_no == batch_no,
+                    Drug.expiry_date == expiry_date,
+                    Drug.stock_group_code.is_(None),
+                    Drug.variant_type.is_(None),
+                ).first()
                 if existing:
                     old_stock_existing = existing.stock
                     existing.stock += stock
@@ -1000,8 +1180,6 @@ def import_drugs():
                     existing.has_scattered = has_scattered
                     existing.scattered_price = scattered_price
                     existing.conversion_rate = conversion_rate
-                    if batch_no is not None:
-                        existing.batch_no = batch_no
                     if inbound_at:
                         existing.inbound_at = datetime.fromisoformat(inbound_at)
                     existing.status = 1
@@ -1012,6 +1190,7 @@ def import_drugs():
                             nurse_id=int(get_jwt_identity()),
                             old_stock=old_stock_existing,
                             new_stock=existing.stock,
+                            operation_type=INVENTORY_OPERATION_INBOUND,
                             remark='CSV批量入库',
                         ))
                 else:
@@ -1027,7 +1206,8 @@ def import_drugs():
                         stock=stock,
                         status=1,
                         batch_no=batch_no,
-                        inbound_at=datetime.fromisoformat(inbound_at) if inbound_at else None
+                        inbound_at=datetime.fromisoformat(inbound_at) if inbound_at else None,
+                        expiry_date=expiry_date,
                     )
                     db.session.add(new_drug)
                     db.session.flush()
@@ -1038,24 +1218,38 @@ def import_drugs():
                             nurse_id=int(get_jwt_identity()),
                             old_stock=0,
                             new_stock=stock,
+                            operation_type=INVENTORY_OPERATION_INBOUND,
                             remark='CSV初始入库',
                         ))
 
+                db.session.flush()
+                savepoint.commit()
                 success_count += 1
-            except ValueError:
+            except Exception:
+                savepoint.rollback()
                 error_count += 1
 
+        db.session.add(OperationLog(
+            user_id=int(get_jwt_identity()),
+            action_type='import_data',
+            target_type='drug',
+            target_id=0,
+            summary=f'CSV批量导入药品: 成功{success_count}条, 失败{error_count}条',
+        ))
         db.session.commit()
         return jsonify({
             "msg": f"Import completed. Success: {success_count}, Failed: {error_count}",
             "data": {"success": success_count, "failed": error_count}
         }), 200
 
-    except Exception as e:
-        return jsonify({"msg": f"Import failed: {str(e)}"}), 500
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Drug CSV import failed")
+        return jsonify({"msg": "导入失败，请检查文件格式或联系管理员"}), 500
 
 @bp.route('/admin/drugs/import_xls', methods=['POST'])
 @role_required(['admin', 'nurse'])
+@serialized_stock_mutation
 def import_drugs_xls():
     if 'file' not in request.files:
         return jsonify({"msg": "No file part"}), 400
@@ -1067,21 +1261,34 @@ def import_drugs_xls():
         return jsonify({"msg": "Only Excel files (.xls, .xlsx) are allowed"}), 400
     if not _check_upload_size(file):
         return jsonify({"msg": "File too large, max 10MB"}), 400
+    if file.filename.lower().endswith('.xlsx'):
+        try:
+            with zipfile.ZipFile(file.stream) as archive:
+                expanded_size = sum(item.file_size for item in archive.infolist())
+                if expanded_size > 100 * 1024 * 1024:
+                    return jsonify({"msg": "Excel 解压后体积过大"}), 400
+        except zipfile.BadZipFile:
+            return jsonify({"msg": "Excel 文件格式无效"}), 400
+        finally:
+            file.stream.seek(0)
 
     try:
         import pandas as pd
-        import numpy as np
-
         df = pd.read_excel(file, sheet_name=0)
+        if len(df.index) > 10000 or len(df.columns) > 100:
+            return jsonify({"msg": "Excel 最多允许 10000 行、100 列"}), 400
         df.columns = [str(col).strip() for col in df.columns]
 
         success_count = 0
         error_count = 0
 
         for seq, group in df.groupby('序号'):
+            savepoint = db.session.begin_nested()
             try:
                 base_name = str(group.iloc[0].get('药  名', '')).strip()
                 if not base_name or base_name == 'nan':
+                    savepoint.rollback()
+                    error_count += 1
                     continue
 
                 spec = str(group.iloc[0].get('规格', '')).strip()
@@ -1094,8 +1301,8 @@ def import_drugs_xls():
                 else:
                     whole_row = whole_row.iloc[[0]]
 
-                purchase_price = float(whole_row['购进价'].values[0]) if pd.notnull(whole_row['购进价'].values[0]) else 0.0
-                price = float(whole_row['盒装价'].values[0]) if pd.notnull(whole_row['盒装价'].values[0]) else 0.0
+                purchase_price = _nonnegative_float(whole_row['购进价'].values[0], 'purchase_price') if pd.notnull(whole_row['购进价'].values[0]) else 0.0
+                price = _nonnegative_float(whole_row['盒装价'].values[0], 'price') if pd.notnull(whole_row['盒装价'].values[0]) else 0.0
                 
                 # Scattered info
                 scattered_row = group[group['散装价'].notna() & (group['散装价'] != '')]
@@ -1105,8 +1312,8 @@ def import_drugs_xls():
                 conversion_rate = None
 
                 if has_scattered:
-                    scattered_price = float(scattered_row['盒装价'].values[0])
-                    scattered_total = float(scattered_row['散装价'].values[0])
+                    scattered_price = _nonnegative_float(scattered_row['盒装价'].values[0], 'scattered_price')
+                    scattered_total = _nonnegative_float(scattered_row['散装价'].values[0], 'scattered_total')
                     if scattered_price > 0:
                         conversion_rate = int(round(scattered_total / scattered_price))
                     else:
@@ -1115,7 +1322,7 @@ def import_drugs_xls():
                 stock = 0
                 if '库存' in group.columns:
                     val = group.iloc[0].get('库存')
-                    stock = int(val) if pd.notnull(val) else 0
+                    stock = _nonnegative_int(val, 'stock') if pd.notnull(val) else 0
 
                 batch_no = None
                 if '批号' in group.columns:
@@ -1150,19 +1357,32 @@ def import_drugs_xls():
                         nurse_id=int(get_jwt_identity()),
                         old_stock=0,
                         new_stock=stock,
+                        operation_type=INVENTORY_OPERATION_INBOUND,
                         remark='Excel批量初始入库',
                     ))
+                db.session.flush()
+                savepoint.commit()
                 success_count += 1
-            except Exception as e:
+            except Exception:
+                savepoint.rollback()
                 error_count += 1
 
+        db.session.add(OperationLog(
+            user_id=int(get_jwt_identity()),
+            action_type='import_data',
+            target_type='drug',
+            target_id=0,
+            summary=f'Excel批量导入药品: 成功{success_count}条, 失败{error_count}条',
+        ))
         db.session.commit()
         return jsonify({
             "msg": f"Import completed. Success: {success_count}, Failed: {error_count}",
             "data": {"success": success_count, "failed": error_count}
         }), 200
-    except Exception as e:
-        return jsonify({"msg": f"Import failed: {str(e)}"}), 500
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Drug Excel import failed")
+        return jsonify({"msg": "导入失败，请检查文件格式或联系管理员"}), 500
 
 @bp.route('/admin/drugs/template', methods=['GET'])
 @role_required(['admin', 'nurse', 'finance'])
@@ -1185,51 +1405,187 @@ def get_drug_template():
 
 @bp.route('/admin/drugs/smart-inventory', methods=['POST'])
 @role_required(['admin', 'nurse'])
+@serialized_stock_mutation
 def smart_inventory():
     data = request.get_json() or {}
-    threshold = int(data.get('threshold', 30))
+    try:
+        threshold = int(data.get('threshold', 30))
+        expiry_threshold = int(data.get('expiry_threshold', 30))
+    except (TypeError, ValueError):
+        return jsonify({"msg": "预警阈值必须为整数"}), 400
+    if threshold < 0 or threshold > 100000:
+        return jsonify({"msg": "库存预警阈值超出范围"}), 400
+    if expiry_threshold < 1 or expiry_threshold > 3650:
+        return jsonify({"msg": "有效期预警天数超出范围"}), 400
     scattered_only = data.get('scattered_only', False)
+    confirm_merge = data.get('confirm_merge') is True
+    requested_candidate_ids = []
+    if confirm_merge:
+        raw_candidates = data.get('merge_candidate_ids')
+        if not isinstance(raw_candidates, list) or not raw_candidates:
+            return jsonify({"msg": "确认合并时必须提交预览候选记录"}), 400
+        used_ids = set()
+        try:
+            for raw_group in raw_candidates:
+                if not isinstance(raw_group, list) or len(raw_group) < 2:
+                    raise ValueError
+                group_ids = tuple(sorted(int(value) for value in raw_group))
+                if any(value <= 0 for value in group_ids) or len(set(group_ids)) != len(group_ids):
+                    raise ValueError
+                if used_ids.intersection(group_ids):
+                    raise ValueError
+                used_ids.update(group_ids)
+                requested_candidate_ids.append(group_ids)
+        except (TypeError, ValueError):
+            return jsonify({"msg": "合并候选记录格式不合法"}), 400
 
     total_merged = 0
     total_deleted = 0
 
     try:
-        duplicates_query = db.session.query(
+        merge_fields = (
+            Drug.type,
             Drug.name,
             Drug.specification,
+            Drug.unit,
+            Drug.batch_no,
+            Drug.expiry_date,
+            Drug.price,
+            Drug.purchase_price,
+            Drug.variant_type,
+            Drug.has_scattered,
+            Drug.scattered_price,
+            Drug.conversion_rate,
+            Drug.storage_location,
+            Drug.status,
+            Drug.inbound_at,
+        )
+        duplicates_query = db.session.query(
+            *merge_fields,
             func.count(Drug.id).label('count')
-        ).group_by(
-            Drug.name,
-            Drug.specification
-        ).having(
-            func.count(Drug.id) > 1
-        ).all()
+        ).filter(
+            Drug.stock_group_code.is_(None)
+        ).group_by(*merge_fields).having(func.count(Drug.id) > 1).all()
+
+        merge_candidates = []
+        candidate_groups = []
 
         for dup in duplicates_query:
-            name = dup.name
-            spec = dup.specification
-
-            drugs = Drug.query.filter_by(name=name, specification=spec).order_by(Drug.id.asc()).all()
+            filters = [
+                Drug.stock_group_code.is_(None),
+                Drug.type == dup.type,
+                Drug.name == dup.name,
+                Drug.specification == dup.specification,
+                Drug.unit == dup.unit,
+                Drug.batch_no == dup.batch_no,
+                Drug.expiry_date == dup.expiry_date,
+                Drug.price == dup.price,
+                Drug.purchase_price == dup.purchase_price,
+                Drug.variant_type == dup.variant_type,
+                Drug.has_scattered == dup.has_scattered,
+                Drug.scattered_price == dup.scattered_price,
+                Drug.conversion_rate == dup.conversion_rate,
+                Drug.storage_location == dup.storage_location,
+                Drug.status == dup.status,
+                Drug.inbound_at == dup.inbound_at,
+            ]
+            drugs = Drug.query.filter(*filters).order_by(Drug.id.asc()).all()
             if len(drugs) <= 1:
                 continue
 
-            primary_drug = drugs[0]
-            duplicate_drugs = drugs[1:]
+            record_ids = tuple(drug.id for drug in drugs)
+            candidate_groups.append((record_ids, filters))
+            merge_candidates.append({
+                "name": dup.name,
+                "specification": dup.specification,
+                "batch_no": dup.batch_no,
+                "expiry_date": dup.expiry_date.isoformat() if dup.expiry_date else None,
+                "record_ids": list(record_ids),
+                "record_count": len(drugs),
+                "combined_stock": sum(int(drug.stock or 0) for drug in drugs),
+            })
 
-            for dup_drug in duplicate_drugs:
-                if primary_drug.type in (1, 3) and dup_drug.stock > 0:
-                    primary_drug.stock += dup_drug.stock
+        if confirm_merge:
+            candidate_map = {record_ids: filters for record_ids, filters in candidate_groups}
+            if any(record_ids not in candidate_map for record_ids in requested_candidate_ids):
+                db.session.rollback()
+                return jsonify({
+                    "msg": "合并候选已发生变化，请重新预览后确认",
+                    "data": {"merge_candidates": merge_candidates},
+                }), 409
 
-                items_to_update = PrescriptionItem.query.filter_by(drug_id=dup_drug.id).all()
-                for item in items_to_update:
-                    item.drug_id = primary_drug.id
+            selected_candidates = []
+            for record_ids in sorted(requested_candidate_ids):
+                filters = candidate_map[record_ids]
+                drugs = (
+                    Drug.query.filter(*filters)
+                    .order_by(Drug.id.asc())
+                    .with_for_update()
+                    .all()
+                )
+                if tuple(drug.id for drug in drugs) != record_ids:
+                    db.session.rollback()
+                    return jsonify({"msg": "合并候选已发生变化，请重新预览后确认"}), 409
 
-                db.session.delete(dup_drug)
-                total_deleted += 1
+                selected_candidates.append(next(
+                    candidate for candidate in merge_candidates
+                    if tuple(candidate["record_ids"]) == record_ids
+                ))
 
-            total_merged += 1
+                primary_drug = drugs[0]
+                duplicate_drugs = drugs[1:]
+                for dup_drug in duplicate_drugs:
+                    if (primary_drug.type in (1, 3) or primary_drug.type is None) and dup_drug.stock:
+                        primary_drug.stock = int(primary_drug.stock or 0) + int(dup_drug.stock)
 
-        db.session.commit()
+                    PrescriptionItem.query.filter_by(drug_id=dup_drug.id).update(
+                        {PrescriptionItem.drug_id: primary_drug.id},
+                        synchronize_session=False,
+                    )
+                    InventoryRecord.query.filter_by(drug_id=dup_drug.id).update(
+                        {InventoryRecord.drug_id: primary_drug.id},
+                        synchronize_session=False,
+                    )
+
+                    for snapshot in DailyStockSnapshot.query.filter_by(drug_id=dup_drug.id).all():
+                        primary_snapshot = DailyStockSnapshot.query.filter_by(
+                            drug_id=primary_drug.id,
+                            date=snapshot.date,
+                        ).first()
+                        if primary_snapshot:
+                            primary_snapshot.stock = int(primary_snapshot.stock or 0) + int(snapshot.stock or 0)
+                            db.session.delete(snapshot)
+                        else:
+                            snapshot.drug_id = primary_drug.id
+
+                    db.session.delete(dup_drug)
+                    total_deleted += 1
+
+                if primary_drug.type in (1, 3) or primary_drug.type is None:
+                    merged_stock = int(primary_drug.stock or 0)
+                    db.session.add(InventoryRecord(
+                        drug_id=primary_drug.id,
+                        nurse_id=int(get_jwt_identity()),
+                        old_stock=merged_stock,
+                        new_stock=merged_stock,
+                        operation_type=INVENTORY_OPERATION_MERGE,
+                        remark='智能盘库确认合并重复记录',
+                    ))
+                total_merged += 1
+
+            if total_merged:
+                db.session.add(OperationLog(
+                    user_id=int(get_jwt_identity()),
+                    action_type='smart_inventory_merge',
+                    target_type='drug',
+                    summary=f'智能盘库确认合并 {total_merged} 组重复记录',
+                    details=json.dumps({
+                        "merged_groups": total_merged,
+                        "deleted_records": total_deleted,
+                        "candidates": selected_candidates,
+                    }, ensure_ascii=False),
+                ))
+            db.session.commit()
 
         # 库存预警药品
         query = Drug.query.filter(
@@ -1248,8 +1604,7 @@ def smart_inventory():
         warnings = [{"id": d.id, "name": d.name, "specification": d.specification, "stock": d.stock} for d in low_stock_drugs]
         
         # 有效期预警药品（阈值天数内到期）
-        expiry_threshold = int(data.get('expiry_threshold', 30))
-        today = date.today()
+        today = local_now().date()
         warn_date = today + timedelta(days=expiry_threshold)
         expiry_query = Drug.query.filter(
             Drug.type.in_([1, 3]),
@@ -1276,6 +1631,8 @@ def smart_inventory():
             "data": {
                 "merged_groups": total_merged,
                 "deleted_duplicates": total_deleted,
+                "merge_candidates": merge_candidates,
+                "merge_confirmation_required": bool(merge_candidates) and not confirm_merge,
                 "warnings": warnings,
                 "threshold": threshold,
                 "expiry_warnings": expiry_warnings,
@@ -1283,36 +1640,19 @@ def smart_inventory():
             }
         }), 200
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"智能盘库失败: {str(e)}"}), 500
+        current_app.logger.exception("Smart inventory failed")
+        return jsonify({"msg": "智能盘库失败，请稍后重试"}), 500
 
 @bp.route('/admin/statistics/revenue', methods=['GET'])
 @role_required(['admin', 'nurse', 'finance'])
 def get_revenue_stats():
     def parse_dt(value, is_end=False):
-        if not value:
-            return None
-        s = str(value).strip()
-        if not s:
-            return None
-        fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
-        for fmt in fmts:
-            try:
-                dt = datetime.strptime(s, fmt)
-                if fmt == "%Y-%m-%d":
-                    if is_end:
-                        return dt + timedelta(days=1)
-                    return dt
-                if is_end:
-                    return dt + timedelta(seconds=1)
-                return dt
-            except Exception:
-                continue
-        raise ValueError("Invalid date format")
+        return parse_local_datetime(value, is_end=is_end)
 
     stats_type = request.args.get("type", "daily")
-    target_date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    target_date_str = request.args.get("date", local_now().strftime("%Y-%m-%d"))
     start_time_str = request.args.get("start_time") or request.args.get("start_date")
     end_time_str = request.args.get("end_time") or request.args.get("end_date")
 
@@ -1342,19 +1682,19 @@ def get_revenue_stats():
         else:
             if stats_type == "daily":
                 target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-                start = datetime.combine(target_date, datetime.min.time())
+                start = local_naive_to_utc(datetime.combine(target_date, datetime.min.time()))
                 end = start + timedelta(days=1)
             elif stats_type == "monthly":
                 target_year, target_month = map(int, target_date_str.split("-")[:2])
-                start = datetime(target_year, target_month, 1)
+                start = local_naive_to_utc(datetime(target_year, target_month, 1))
                 if target_month == 12:
-                    end = datetime(target_year + 1, 1, 1)
+                    end = local_naive_to_utc(datetime(target_year + 1, 1, 1))
                 else:
-                    end = datetime(target_year, target_month + 1, 1)
+                    end = local_naive_to_utc(datetime(target_year, target_month + 1, 1))
             else:
                 target_year = int(target_date_str.split("-")[0])
-                start = datetime(target_year, 1, 1)
-                end = datetime(target_year + 1, 1, 1)
+                start = local_naive_to_utc(datetime(target_year, 1, 1))
+                end = local_naive_to_utc(datetime(target_year + 1, 1, 1))
 
         query = Payment.query.join(Visit).filter(
             Payment.payment_date >= start,
@@ -1391,31 +1731,20 @@ def get_revenue_stats():
         total_profit = 0.0
 
         details = []
+        finance_view = _current_user_is_finance()
         for p in payments:
             v = p.visit
             if v is None:
                 continue
 
-            consult = float(v.consultation_fee or 0.0)
-            drug_amt = 0.0
-            service_amt = 0.0
-            consumable_amt = 0.0
-            cost = 0.0
-            for it in items_by_visit.get(v.id, []):
-                amount_val = it.new_amount if it.new_amount is not None else it.amount
-                amount_val = float(amount_val or 0.0)
-                d = getattr(it, "drug", None)
-                drug_type = int(getattr(d, "type", 1) or 1)
-                if drug_type == 1:
-                    drug_amt += amount_val
-                elif drug_type == 3:
-                    consumable_amt += amount_val
-                else:
-                    service_amt += amount_val
-                cost += float(it.purchase_cost or 0.0)
-
-            amount = float(p.amount or 0.0)
-            profit = amount - cost
+            breakdown = allocate_payment_revenue(p, v, items_by_visit.get(v.id, []))
+            consult = breakdown["consultation"]
+            drug_amt = breakdown["drug"]
+            service_amt = breakdown["service"]
+            consumable_amt = breakdown["consumable"]
+            amount = breakdown["total"]
+            cost = breakdown["cost"]
+            profit = breakdown["profit"]
 
             total_revenue += amount
             drug_revenue += drug_amt
@@ -1428,12 +1757,12 @@ def get_revenue_stats():
             details.append({
                 "date": (p.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else "",
                 "visit_id": p.visit_id,
-                "patient_name": v.patient.name if v.patient else "",
-                "student_id": v.patient.student_id if v.patient else "",
+                "patient_name": _mask_patient_name(v.patient.name if v.patient else "", finance_view),
+                "student_id": "" if finance_view else (v.patient.student_id if v.patient else ""),
                 "doctor_name": v.doctor.real_name if getattr(v, "doctor", None) else "",
                 "nurse_name": p.nurse.real_name if getattr(p, "nurse", None) else "",
-                "diagnosis": v.diagnosis or "",
-                "chief_complaint": v.chief_complaint or "",
+                "diagnosis": "" if finance_view else (v.diagnosis or ""),
+                "chief_complaint": "" if finance_view else (v.chief_complaint or ""),
                 "drug_amount": drug_amt,
                 "service_amount": service_amt,
                 "consumable_amount": consumable_amt,
@@ -1463,8 +1792,8 @@ def get_revenue_stats():
                 "page": page,
                 "per_page": per_page,
                 "range": {
-                    "start": start.strftime("%Y-%m-%d %H:%M:%S"),
-                    "end": (end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
+                    "start": utc_naive_to_local(start).strftime("%Y-%m-%d %H:%M:%S"),
+                    "end": utc_naive_to_local(end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
                 }
             }
         }), 200
@@ -1494,7 +1823,7 @@ def export_revenue_stats():
     from openpyxl import Workbook
 
     stats_type = request.args.get("type", "daily")
-    target_date_str = request.args.get("date", datetime.now().strftime("%Y-%m-%d"))
+    target_date_str = request.args.get("date", local_now().strftime("%Y-%m-%d"))
     start_time_str = request.args.get("start_time") or request.args.get("start_date")
     end_time_str = request.args.get("end_time") or request.args.get("end_date")
 
@@ -1503,25 +1832,7 @@ def export_revenue_stats():
 
     try:
         def parse_dt(value, is_end=False):
-            if not value:
-                return None
-            s = str(value).strip()
-            if not s:
-                return None
-            fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
-            for fmt in fmts:
-                try:
-                    dt = datetime.strptime(s, fmt)
-                    if fmt == "%Y-%m-%d":
-                        if is_end:
-                            return dt + timedelta(days=1)
-                        return dt
-                    if is_end:
-                        return dt + timedelta(seconds=1)
-                    return dt
-                except Exception:
-                    continue
-            raise ValueError("Invalid date format")
+            return parse_local_datetime(value, is_end=is_end)
 
         if start_time_str or end_time_str:
             start = parse_dt(start_time_str, is_end=False) if start_time_str else None
@@ -1532,25 +1843,25 @@ def export_revenue_stats():
                 start = end - timedelta(days=1)
             if end is None:
                 end = start + timedelta(days=1)
-            date_label = f"{start.strftime('%Y%m%d_%H%M')}-{(end - timedelta(seconds=1)).strftime('%Y%m%d_%H%M')}"
+            date_label = f"{utc_naive_to_local(start).strftime('%Y%m%d_%H%M')}-{utc_naive_to_local(end - timedelta(seconds=1)).strftime('%Y%m%d_%H%M')}"
         else:
             if stats_type == "daily":
                 target_date = datetime.strptime(target_date_str, "%Y-%m-%d").date()
-                start = datetime.combine(target_date, datetime.min.time())
+                start = local_naive_to_utc(datetime.combine(target_date, datetime.min.time()))
                 end = start + timedelta(days=1)
                 date_label = target_date_str
             elif stats_type == "monthly":
                 target_year, target_month = map(int, target_date_str.split("-")[:2])
-                start = datetime(target_year, target_month, 1)
+                start = local_naive_to_utc(datetime(target_year, target_month, 1))
                 if target_month == 12:
-                    end = datetime(target_year + 1, 1, 1)
+                    end = local_naive_to_utc(datetime(target_year + 1, 1, 1))
                 else:
-                    end = datetime(target_year, target_month + 1, 1)
+                    end = local_naive_to_utc(datetime(target_year, target_month + 1, 1))
                 date_label = f"{target_year:04d}-{target_month:02d}"
             elif stats_type == "yearly":
                 target_year = int(target_date_str.split("-")[0])
-                start = datetime(target_year, 1, 1)
-                end = datetime(target_year + 1, 1, 1)
+                start = local_naive_to_utc(datetime(target_year, 1, 1))
+                end = local_naive_to_utc(datetime(target_year + 1, 1, 1))
                 date_label = f"{target_year:04d}"
             else:
                 return jsonify({"msg": "Invalid type"}), 400
@@ -1618,29 +1929,19 @@ def export_revenue_stats():
     total_cost = 0.0
     total_profit = 0.0
 
+    finance_view = _current_user_is_finance()
     for p in payments:
         v = p.visit
         if v is None:
             continue
-        consult = float(v.consultation_fee or 0.0)
-        amount = float(p.amount or 0.0)
-        cost = 0.0
-        drug_amt = 0.0
-        service_amt = 0.0
-        consumable_amt = 0.0
-        for it in items_by_visit.get(v.id, []):
-            amount_val = it.new_amount if it.new_amount is not None else it.amount
-            amount_val = float(amount_val or 0.0)
-            d = getattr(it, "drug", None)
-            drug_type = int(getattr(d, "type", 1) or 1)
-            if drug_type == 1:
-                drug_amt += amount_val
-            elif drug_type == 3:
-                consumable_amt += amount_val
-            else:
-                service_amt += amount_val
-            cost += float(it.purchase_cost or 0.0)
-        profit = amount - cost
+        breakdown = allocate_payment_revenue(p, v, items_by_visit.get(v.id, []))
+        consult = breakdown["consultation"]
+        drug_amt = breakdown["drug"]
+        service_amt = breakdown["service"]
+        consumable_amt = breakdown["consumable"]
+        amount = breakdown["total"]
+        cost = breakdown["cost"]
+        profit = breakdown["profit"]
 
         total_revenue += amount
         consultation_revenue += consult
@@ -1654,8 +1955,8 @@ def export_revenue_stats():
             [
                 safe_text((p.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else ""),
                 v.id,
-                safe_text(_mask_patient_name(v.patient.name if v.patient else "")),
-                safe_text(v.patient.student_id if v.patient else ""),
+                safe_text(_mask_patient_name(v.patient.name if v.patient else "", finance_view)),
+                safe_text("" if finance_view else (v.patient.student_id if v.patient else "")),
                 safe_text(v.doctor.real_name if v.doctor else ""),
                 safe_text(p.nurse.real_name if getattr(p, "nurse", None) else ""),
                 safe_text(p.payment_method or ""),
@@ -1666,16 +1967,16 @@ def export_revenue_stats():
                 round(amount, 2),
                 round(cost, 2),
                 round(profit, 2),
-                safe_text(v.diagnosis or ""),
-                safe_text(v.chief_complaint or ""),
+                safe_text("" if finance_view else (v.diagnosis or "")),
+                safe_text("" if finance_view else (v.chief_complaint or "")),
             ]
         )
 
     ws2 = wb.create_sheet("summary")
     ws2.append(["维度", safe_text(stats_type)])
     ws2.append(["日期", safe_text(date_label)])
-    ws2.append(["开始时间", safe_text(start.strftime("%Y-%m-%d %H:%M:%S"))])
-    ws2.append(["结束时间", safe_text((end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"))])
+    ws2.append(["开始时间", safe_text(utc_naive_to_local(start).strftime("%Y-%m-%d %H:%M:%S"))])
+    ws2.append(["结束时间", safe_text(utc_naive_to_local(end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"))])
     ws2.append(["doctor_id", safe_text(doctor_id if doctor_id else "")])
     ws2.append(["nurse_id", safe_text(nurse_id if nurse_id else "")])
     ws2.append(["总收入", round(total_revenue, 2)])
@@ -1701,30 +2002,12 @@ def export_revenue_stats():
 @role_required(['admin', 'nurse', 'finance'])
 def get_drug_outbound_records():
     def parse_dt(value, is_end=False):
-        if not value:
-            return None
-        s = str(value).strip()
-        if not s:
-            return None
-        fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
-        for fmt in fmts:
-            try:
-                dt = datetime.strptime(s, fmt)
-                if fmt == "%Y-%m-%d":
-                    if is_end:
-                        return dt + timedelta(days=1)
-                    return dt
-                if is_end:
-                    return dt + timedelta(seconds=1)
-                return dt
-            except Exception:
-                continue
-        raise ValueError("Invalid date format")
+        return parse_local_datetime(value, is_end=is_end)
 
     start_time_str = request.args.get("start_time") or request.args.get("start_date")
     end_time_str = request.args.get("end_time") or request.args.get("end_date")
     if not start_time_str and not end_time_str:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = local_now().strftime("%Y-%m-%d")
         start_time_str = f"{today} 00:00:00"
         end_time_str = f"{today} 23:59:59"
 
@@ -1807,12 +2090,13 @@ def get_drug_outbound_records():
     )
 
     details = []
+    finance_view = _current_user_is_finance()
     for r in rows:
         details.append({
             "date": (r.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else "",
             "visit_id": r.visit_id,
-            "patient_name": r.patient_name,
-            "student_id": r.student_id,
+            "patient_name": _mask_patient_name(r.patient_name, finance_view),
+            "student_id": "" if finance_view else r.student_id,
             "doctor_name": r.doctor_name,
             "nurse_name": r.nurse_name,
             "payment_method": r.payment_method,
@@ -1843,8 +2127,8 @@ def get_drug_outbound_records():
                 "pages": pages,
             },
             "range": {
-                "start": start.strftime("%Y-%m-%d %H:%M:%S"),
-                "end": (end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
+                "start": utc_naive_to_local(start).strftime("%Y-%m-%d %H:%M:%S"),
+                "end": utc_naive_to_local(end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"),
             }
         }
     }), 200
@@ -1856,25 +2140,7 @@ def export_drug_outbound_records():
     from openpyxl import Workbook
 
     def parse_dt(value, is_end=False):
-        if not value:
-            return None
-        s = str(value).strip()
-        if not s:
-            return None
-        fmts = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"]
-        for fmt in fmts:
-            try:
-                dt = datetime.strptime(s, fmt)
-                if fmt == "%Y-%m-%d":
-                    if is_end:
-                        return dt + timedelta(days=1)
-                    return dt
-                if is_end:
-                    return dt + timedelta(seconds=1)
-                return dt
-            except Exception:
-                continue
-        raise ValueError("Invalid date format")
+        return parse_local_datetime(value, is_end=is_end)
 
     def safe_text(val):
         s = "" if val is None else str(val)
@@ -1885,7 +2151,7 @@ def export_drug_outbound_records():
     start_time_str = request.args.get("start_time") or request.args.get("start_date")
     end_time_str = request.args.get("end_time") or request.args.get("end_date")
     if not start_time_str and not end_time_str:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = local_now().strftime("%Y-%m-%d")
         start_time_str = f"{today} 00:00:00"
         end_time_str = f"{today} 23:59:59"
 
@@ -1965,6 +2231,7 @@ def export_drug_outbound_records():
 
     total_amount = 0.0
     total_quantity = 0
+    finance_view = _current_user_is_finance()
     for r in rows:
         qty = int(r.quantity or 0)
         amt = float(r.amount or 0.0)
@@ -1973,8 +2240,8 @@ def export_drug_outbound_records():
         ws.append([
             safe_text((r.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else ""),
             r.visit_id,
-            safe_text(_mask_patient_name(r.patient_name)),
-            safe_text(r.student_id),
+            safe_text(_mask_patient_name(r.patient_name, finance_view)),
+            safe_text("" if finance_view else r.student_id),
             safe_text(r.doctor_name),
             safe_text(r.nurse_name),
             safe_text(r.payment_method),
@@ -2017,7 +2284,8 @@ def get_users():
             "id": u.id,
             "username": u.username,
             "real_name": u.real_name,
-            "role": u.role
+            "role": u.role,
+            "is_active": u.is_active is not False,
         })
     return jsonify({"data": data}), 200
 
@@ -2035,6 +2303,10 @@ def create_user():
 
     if data['role'] not in ['doctor', 'nurse', 'finance']:
         return jsonify({"msg": "角色无效，有效角色: doctor/nurse/finance"}), 400
+    try:
+        validate_password(data['password'])
+    except ValueError:
+        return jsonify({"msg": "密码长度不能少于12位", "field": "password"}), 400
 
     user = User(
         username=data['username'],
@@ -2050,7 +2322,7 @@ def create_user():
 @bp.route('/admin/users/<int:id>', methods=['PUT'])
 @role_required('admin')
 def update_user(id):
-    user = User.query.get_or_404(id)
+    user = db.get_or_404(User, id)
     if user.role == 'admin':
         return jsonify({"msg": "Cannot modify admin user"}), 403
 
@@ -2067,7 +2339,20 @@ def update_user(id):
     if 'role' in data and data['role'] in ['doctor', 'nurse', 'finance']:
         user.role = data['role']
 
+    if 'is_active' in data:
+        if type(data['is_active']) is not bool:
+            return jsonify({"msg": "is_active must be a boolean", "field": "is_active"}), 400
+        requested_active = data['is_active']
+        current_active = user.is_active is not False
+        if requested_active != current_active or user.is_active is None:
+            user.is_active = requested_active
+            user.token_version = int(user.token_version or 0) + 1
+
     if data.get('password'):
+        try:
+            validate_password(data['password'])
+        except ValueError:
+            return jsonify({"msg": "密码长度不能少于12位", "field": "password"}), 400
         user.set_password(data['password'])
 
     db.session.commit()
@@ -2075,14 +2360,15 @@ def update_user(id):
 
 @bp.route('/admin/users/<int:id>', methods=['DELETE'])
 @role_required('admin')
-def delete_user(id):
-    user = User.query.get_or_404(id)
+def disable_user(id):
+    user = db.get_or_404(User, id)
     if user.role == 'admin':
-        return jsonify({"msg": "Cannot delete admin user"}), 403
+        return jsonify({"msg": "Cannot disable admin user"}), 403
 
-    db.session.delete(user)
+    user.is_active = False
+    user.token_version = int(user.token_version or 0) + 1
     db.session.commit()
-    return jsonify({"msg": "User deleted successfully"}), 200
+    return jsonify({"msg": "User disabled successfully"}), 200
 
 @bp.route('/admin/operation-logs', methods=['GET'])
 @role_required(['admin'])
@@ -2140,34 +2426,38 @@ def get_operation_logs():
         }
     }), 200
 
-@bp.route('/admin/backup', methods=['POST'])
+@bp.route('/admin/backup', methods=['GET', 'POST'])
 @role_required('admin')
 def backup_database():
     try:
-        # 从配置中解析实际数据库文件路径
         uri = current_app.config.get('SQLALCHEMY_DATABASE_URI', '')
-        if uri.startswith('sqlite:///'):
-            db_path = uri.replace('sqlite:///', '')
-        else:
-            # 非 SQLite 数据库不支持文件备份
-            return jsonify({"msg": "Only SQLite database supports file backup"}), 400
+        if uri.startswith('mysql'):
+            return _mysql_backup_response(uri)
 
-        if not os.path.exists(db_path):
-            return jsonify({"msg": "Database file not found"}), 500
+        backup_path, error_response = _create_sqlite_backup(uri)
+        if error_response:
+            return error_response
 
-        backup_dir = os.path.join(os.path.dirname(db_path), 'backups')
-        if not os.path.exists(backup_dir):
-            os.makedirs(backup_dir)
+        if request.method == 'POST':
+            _prune_sqlite_backups(backup_path)
+            return jsonify({
+                "msg": "Backup successful",
+                "filename": os.path.basename(backup_path),
+            }), 200
 
-        timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
-        backup_filename = f"backup_{timestamp}.db"
-        backup_path = os.path.join(backup_dir, backup_filename)
-
-        shutil.copy2(db_path, backup_path)
-
-        return jsonify({
-            "msg": "Backup successful",
-            "filename": backup_filename
-        }), 200
+        try:
+            response = send_file(
+                backup_path,
+                as_attachment=True,
+                download_name=os.path.basename(backup_path),
+                mimetype='application/vnd.sqlite3',
+            )
+        except Exception:
+            os.remove(backup_path)
+            raise
+        response.direct_passthrough = False
+        response.call_on_close(lambda: os.path.exists(backup_path) and os.remove(backup_path))
+        return response
     except Exception as e:
-        return jsonify({"msg": f"Backup failed: {str(e)}"}), 500
+        current_app.logger.exception("Database backup failed")
+        return jsonify({"msg": "备份失败，请检查服务日志"}), 500

@@ -6,6 +6,85 @@ import { ElNotification } from 'element-plus'
 // ---------------------------------------------------------------------------
 let _offlineBannerVisible = false
 let _healthCheckTimer = null
+let _authRedirectInProgress = false
+
+const JWT_422_MESSAGE_PATTERNS = [
+  /^not enough segments$/,
+  /^signature verification failed$/,
+  /^invalid (header|payload|crypto) (padding|string)(:.*)?$/,
+  /^invalid token type\. token must be .+$/,
+  /^missing claim: .+$/,
+  /^subject must be a string$/,
+  /^invalid audience$/,
+  /^audience doesn't match$/,
+  /^invalid issuer$/,
+  /^the token is not yet valid \((iat|nbf)\)$/,
+  /^token is missing the ".+" claim$/,
+  /^only (refresh|non-refresh) tokens are allowed$/,
+  /^fresh token required$/,
+  /^algorithm not (allowed|supported)$/,
+  /^the specified alg value is not allowed$/,
+  /^(expiration time|issued at|not before) claim \((exp|iat|nbf)\) must be an integer\.?$/,
+  /^audience claim \(aud\) must be a string or a list of strings$/,
+  /^issuer claim \(iss\) must be a string$/
+]
+
+const _getErrorMessage = payload => {
+  if (typeof payload === 'string') return payload
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return ''
+  return String(payload.msg || payload.message || payload.error || '')
+}
+
+const _normalizeErrorPayload = async payload => {
+  if (typeof Blob === 'undefined' || !(payload instanceof Blob)) return payload
+
+  try {
+    const body = (await payload.text()).trim()
+    if (!body) return ''
+    if (payload.type.includes('application/json') || body.startsWith('{') || body.startsWith('[')) {
+      try {
+        return JSON.parse(body)
+      } catch {
+        return body
+      }
+    }
+    return body
+  } catch {
+    return payload
+  }
+}
+
+const _isJwtValidationError = (status, payload) => {
+  if (status === 401) return true
+  if (status !== 422 || !payload || typeof payload !== 'object' || Array.isArray(payload)) {
+    return false
+  }
+
+  // Flask-JWT-Extended's default invalid-token response only contains its
+  // error message. Business 422 responses may carry fields/details and must
+  // remain visible to the page instead of forcing a logout.
+  const keys = Object.keys(payload)
+  const messageOnlyPayload = keys.length === 1 && keys[0] === 'msg'
+  if (!messageOnlyPayload) return false
+
+  const message = _getErrorMessage(payload).toLowerCase()
+  return JWT_422_MESSAGE_PATTERNS.some(pattern => pattern.test(message))
+}
+
+export const handleAuthenticationFailure = ({ status, payload, requestUrl = '' }) => {
+  if (String(requestUrl).includes('/auth/login') || !_isJwtValidationError(status, payload)) {
+    return false
+  }
+
+  localStorage.removeItem('token')
+  localStorage.removeItem('user')
+
+  if (window.location.pathname !== '/login' && !_authRedirectInProgress) {
+    _authRedirectInProgress = true
+    window.location.replace('/login')
+  }
+  return true
+}
 
 function _showOfflineBanner() {
   if (_offlineBannerVisible) return
@@ -85,27 +164,15 @@ service.interceptors.response.use(
     // Assuming backend returns { code: 200, data: ... } or just data
     return res
   },
-  error => {
+  async error => {
     console.log('err' + error)
     if (error.response) {
-        if (error.response.status === 401) {
-            const requestUrl = (error.config && error.config.url) ? String(error.config.url) : ''
-            const isLoginRequest = requestUrl.includes('/auth/login')
-            const isOnLoginPage = window.location.pathname === '/login'
-            if (!isLoginRequest && !isOnLoginPage) {
-                // 只在确认是认证失败时才清除token
-                const errorData = error.response.data
-                if (errorData && (errorData.msg === 'Bad username or password' || errorData.msg === 'Token has expired')) {
-                    localStorage.removeItem('token')
-                    localStorage.removeItem('user')
-                    window.location.href = '/login'
-                } else {
-                    // 其他401错误可能是权限问题，不清除token
-                    return Promise.reject({ msg: '权限不足', code: 401 })
-                }
-            }
-        }
-        const payload = error.response.data
+        const payload = await _normalizeErrorPayload(error.response.data)
+        handleAuthenticationFailure({
+          status: error.response.status,
+          payload,
+          requestUrl: error.config && error.config.url
+        })
         if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
             return Promise.reject({ ...payload, code: error.response.status })
         }

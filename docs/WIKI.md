@@ -522,14 +522,13 @@ DiagnosisDict          TextTemplate          OperationLog
 | POST | `/admin/drugs/smart-inventory` | 智能盘库（合并重复 + 低库存预警） |
 | GET | `/admin/users` | 用户列表 |
 | POST | `/admin/users` | 创建用户 |
-| PUT/DELETE | `/admin/users/<id>` | 修改/删除用户 |
+| PUT/DELETE | `/admin/users/<id>` | 修改/启停用户（DELETE 为软停用） |
 | GET | `/admin/statistics/revenue` | 营收统计 |
 | GET | `/admin/statistics/revenue/export` | 导出营收报表 (Excel) |
 | GET | `/admin/statistics/revenue/users` | 获取医生/护士列表（统计筛选用） |
 | GET | `/admin/statistics/drug-outbound` | 药品出库明细 |
 | GET | `/admin/statistics/drug-outbound/export` | 导出出库明细 (Excel) |
-| POST | `/admin/backup` | SQLite 数据库备份 |
-| GET | `/admin/backup/mysql` | MySQL 数据库备份 |
+| GET/POST | `/admin/backup` | 下载当前数据库备份；POST 保留 SQLite 服务端备份兼容行为 |
 | GET | `/admin/patients/template` | 患者导入模板 (CSV) |
 | POST | `/admin/patients/import` | CSV 导入患者 |
 | GET | `/admin/operation-logs` | 运营日志 |
@@ -615,17 +614,21 @@ DiagnosisDict          TextTemplate          OperationLog
 ```
 
 - 从 `DailyStockSnapshot` 取快照
+- 快照代表北京时间当天 0 点期初，历史期末读取截止日期次日 0 点快照
+- 整散库存组按最小基础单位合并为一行，避免整装和零售变体重复计量
+- 入库与盘点调整优先按 `InventoryRecord.operation_type` 分类
 - 回退计算空缺日期的库存
+- 已停用但存在历史库存的药品仍保留在历史报表
 - 支持导出为 Excel
 
 ### 10.5 智能盘库
 
-管理员可一键执行智能盘库：
+管理员执行智能盘库时先扫描、再确认：
 
-1. 查找同名同规格的重复药品
-2. 合并库存、迁移处方引用
-3. 删除重复药品记录
-4. 返回低库存预警列表（低于阈值）
+1. 查找全部关键属性一致且不属于库存组的重复药品
+2. 展示候选记录、批次和库存总量，等待人工确认
+3. 确认时校验候选未发生变化，再合并库存及迁移关联记录
+4. 写入零差额库存审计和操作日志，并返回低库存预警
 
 ---
 
@@ -652,7 +655,7 @@ npm install
 npm run dev          # 启动 http://127.0.0.1:5888
 ```
 
-**默认账号（密码均为 `123456`）：**
+**首次账号：**
 
 | 角色 | 用户名 |
 |------|--------|
@@ -660,11 +663,14 @@ npm run dev          # 启动 http://127.0.0.1:5888
 | 医生 | doctor |
 | 护士 | nurse |
 
+密码使用 `BOOTSTRAP_PASSWORD` 或初始化/首次启动控制台打印的随机临时密码。
+旧数据库中仍使用公开默认密码的基础账号会自动旋转。
+
 ### 11.2 生产部署
 
 **方式一：前后端分离部署**
 
-- 后端：使用 `gunicorn` / `waitress` 等 WSGI 服务器（参考 `run.py` 中的 `create_app()`）
+- 后端：使用 `gunicorn` / `waitress` 等 WSGI 服务器，并通过 HTTPS 反向代理访问。生产环境建议显式配置同一组 `SECRET_KEY`、`JWT_SECRET_KEY`；未配置时各进程会通过共享 `data/.runtime-secrets.json` 安全复用同一组随机密钥
 - 前端：`npm run build` 生成 `dist/` 目录，使用 Nginx 托管
 
 **方式二：Flask 托管前端（当前配置）**
@@ -687,8 +693,8 @@ export DATABASE_URL="mysql+pymysql://user:password@host:port/dbname?charset=utf8
 
 ### 11.4 数据库备份
 
-- **SQLite**：`POST /api/admin/backup` 复制数据库文件到 `backups/` 目录
-- **MySQL**：`GET /api/admin/backup/mysql` 通过 `mysqldump` 导出
+- **统一下载入口**：`GET /api/admin/backup`，SQLite 下载 `.db`，MySQL 通过 `mysqldump` 下载 `.sql`
+- **兼容入口**：`POST /api/admin/backup` 仅保留旧版 SQLite 服务端备份行为；`GET /api/admin/backup/mysql` 为 MySQL 下载兼容入口
 
 ---
 
@@ -722,7 +728,9 @@ flask db upgrade       # 应用到数据库
 
 ### 12.4 数据库兼容性
 
-`create_app()` 中的 `_ensure_sqlite_column()` 函数提供了 SQLite 的在线列添加（SQLite 不支持原生 `ALTER TABLE ADD COLUMN`）。当添加新字段到模型时，需要同时在 `create_app()` 中注册对应的兼容性处理。
+`create_app()` 中的 `_sync_model_schema()` 会以当前 ORM 模型为准，为历史 SQLite/MySQL
+数据库幂等补齐缺失表、可空字段和索引，并且不会删除旧列。字段改型、非空约束、唯一约束、
+外键变更和复杂数据回填仍必须使用 Alembic migration。
 
 ### 12.5 拼音搜索
 
@@ -750,11 +758,11 @@ flask db upgrade       # 应用到数据库
 
 ### Q: 如何重置密码？
 
-运行 `backend/reset_default_passwords.py` 将默认用户密码重置为 `123456`。
+设置至少 12 位的 `RESET_PASSWORD` 后运行 `backend/reset_default_passwords.py`。重置后旧 JWT 立即失效。
 
 ### Q: 数据库文件在哪？
 
-默认路径为 `backend/app.db`，可通过 `DATABASE_URL` 环境变量修改。
+默认路径为项目根目录 `data/app.db`，可通过 `DATABASE_URL` 环境变量修改。
 
 ### Q: 如何从 SQLite 迁移到 MySQL？
 

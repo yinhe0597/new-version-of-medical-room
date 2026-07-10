@@ -38,6 +38,10 @@
           <el-icon><List /></el-icon>
           <span>历史记录</span>
         </el-menu-item>
+        <el-menu-item index="/doctor/account-settings">
+          <el-icon><Setting /></el-icon>
+          <span>账号设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
     
@@ -60,7 +64,7 @@
 import { ref, computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { User, List, ShoppingCart, Expand, Fold } from '@element-plus/icons-vue'
+import { User, List, ShoppingCart, Expand, Fold, Setting } from '@element-plus/icons-vue'
 
 const isCollapsed = ref(false)
 

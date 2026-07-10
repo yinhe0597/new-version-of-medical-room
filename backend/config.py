@@ -1,5 +1,14 @@
 import os
 import sys
+from pathlib import Path
+
+from dotenv import load_dotenv
+from backend.runtime_secrets import ensure_runtime_secrets
+
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+load_dotenv(PROJECT_ROOT / ".env")
+
 
 def _ensure_mysql_utf8mb4(uri: str) -> str:
     if not isinstance(uri, str) or not uri:
@@ -14,17 +23,32 @@ def _ensure_mysql_utf8mb4(uri: str) -> str:
 
 from datetime import timedelta
 
-def _default_db_uri():
-    """Calculate default database URI based on APP_ROOT for deployment safety."""
+
+def _data_dir():
     app_root = os.environ.get('APP_ROOT', '')
-    if app_root:
-        return "sqlite:///" + os.path.join(app_root, 'data', 'app.db')
-    if getattr(sys, 'frozen', False):
-        return "sqlite:///" + os.path.join(os.path.dirname(sys.executable), 'data', 'app.db')
-    return "sqlite:///" + os.path.abspath("app.db")
+    if not app_root and getattr(sys, 'frozen', False):
+        app_root = os.path.dirname(sys.executable)
+    root = Path(app_root).resolve() if app_root else PROJECT_ROOT
+    return root / "data"
+
+
+def _default_db_uri():
+    """Use one project-local data directory for source and packaged runs."""
+    data_dir = _data_dir()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return "sqlite:///" + str((data_dir / "app.db").resolve())
+
+
+def _cors_origins():
+    raw = os.environ.get("CORS_ORIGINS", "http://localhost:5888,http://127.0.0.1:5888")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+_RUNTIME_SECRETS = ensure_runtime_secrets(_data_dir())
+
 
 class Config:
-    SECRET_KEY = os.environ.get("SECRET_KEY") or "dev-secret-change-me"
+    SECRET_KEY = _RUNTIME_SECRETS["SECRET_KEY"]
 
     _RAW_SQLALCHEMY_DATABASE_URI = (
         os.environ.get("DATABASE_URL")
@@ -33,13 +57,17 @@ class Config:
     )
     SQLALCHEMY_DATABASE_URI = _ensure_mysql_utf8mb4(_RAW_SQLALCHEMY_DATABASE_URI)
     SQLALCHEMY_TRACK_MODIFICATIONS = False
-    JWT_SECRET_KEY = os.environ.get("JWT_SECRET_KEY") or "dev-jwt-secret-change-me"
+    JWT_SECRET_KEY = _RUNTIME_SECRETS["JWT_SECRET_KEY"]
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(days=7)  # 延长令牌过期时间到7天
     JSON_AS_ASCII = False
+    CORS_ORIGINS = _cors_origins()
+    MAX_CONTENT_LENGTH = 12 * 1024 * 1024
+    SCHEDULER_ENABLED = True
+    STARTUP_DATA_REPAIRS_ENABLED = True
     SQLALCHEMY_ENGINE_OPTIONS = (
         {"pool_pre_ping": True, "connect_args": {"charset": "utf8mb4"}}
         if isinstance(SQLALCHEMY_DATABASE_URI, str) and SQLALCHEMY_DATABASE_URI.startswith("mysql")
-        else {"pool_pre_ping": True}
+        else {"pool_pre_ping": True, "connect_args": {"timeout": 15}}
     )
 
     # 挂单（草稿就诊）过期时长，默认 12 小时

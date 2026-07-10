@@ -11,7 +11,7 @@ python -m venv .venv
 # Linux/Mac: source .venv/bin/activate
 pip install -r requirements.txt
 
-# 初始化数据库结构与基础账号（admin/doctor/nurse，默认密码 123456）
+# 初始化数据库结构与基础账号（密码由 BOOTSTRAP_PASSWORD 或控制台随机生成）
 python init_db.py
 
 # 启动开发服务器（默认 http://127.0.0.1:5000）
@@ -19,8 +19,11 @@ python run.py
 ```
 
 ## 数据库
-- 默认：未设置 `DATABASE_URL` 时使用 SQLite（落盘在 `instance/app.db`）
+- 默认：未设置 `DATABASE_URL` 时使用 SQLite（统一落盘在项目 `data/app.db`）
 - 可选：使用 MySQL（参考仓库根目录 `init_database.sql` 与 `docs/部署与维护说明.md`）
+
+开发配置可从根目录 `.env.example` 开始。生产打包入口会在未配置密钥时生成
+`data/.runtime-secrets.json`，不要复制或提交该文件。
 
 ## 结构
 - `app/api/`：按角色划分接口（admin/doctor/nurse/auth）

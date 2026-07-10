@@ -7,7 +7,7 @@ from backend.app.models import Patient
 class TestConfig:
     TESTING = True
     SECRET_KEY = "test"
-    JWT_SECRET_KEY = "test-jwt"
+    JWT_SECRET_KEY = "test-jwt-secret-key-at-least-32-bytes"
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -38,7 +38,7 @@ class PatientModelTestCase(unittest.TestCase):
         db.session.add(p)
         db.session.commit()
 
-        loaded = Patient.query.get(p.id)
+        loaded = db.session.get(Patient, p.id)
         self.assertEqual(loaded.student_id, "2024001")
         self.assertEqual(loaded.class_name, "计算机1班")
         self.assertEqual(loaded.grade, "2024")

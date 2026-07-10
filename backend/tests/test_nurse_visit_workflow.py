@@ -1,4 +1,5 @@
 import unittest
+from datetime import timedelta
 
 from backend.app import create_app, db
 from backend.app.models import (
@@ -12,13 +13,19 @@ from backend.app.models import (
     VISIT_STATUS_PENDING,
     VISIT_STATUS_REJECTED,
     Payment,
+    InventoryRecord,
+    OperationLog,
+    INVENTORY_OPERATION_DISPENSE,
+    INVENTORY_OPERATION_REVERSAL,
+    utcnow,
 )
+from backend.app.services.inventory_ledger import backfill_revoked_inventory_movements
 
 
 class TestConfig:
     TESTING = True
     SECRET_KEY = "test"
-    JWT_SECRET_KEY = "test-jwt"
+    JWT_SECRET_KEY = "test-jwt-secret-key-at-least-32-bytes"
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
 
@@ -122,9 +129,79 @@ class NurseVisitWorkflowTestCase(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
 
-        visit = Visit.query.get(visit_id)
+        visit = db.session.get(Visit, visit_id)
         self.assertEqual(visit.status, VISIT_STATUS_COMPLETED)
         self.assertIsNotNone(Payment.query.filter_by(visit_id=visit_id).first())
+
+    def test_execute_and_revoke_write_balancing_inventory_ledger(self):
+        visit_id, _ = self._create_visit_with_item(
+            status=VISIT_STATUS_NURSE_VERIFIED,
+            quantity=2,
+        )
+        token = self._login("nurse1", "123456")
+        headers = self._auth_headers(token)
+
+        executed = self.client.post(
+            f"/api/nurse/visits/{visit_id}/execute",
+            headers=headers,
+            json={"payment_method": "cash"},
+        )
+        self.assertEqual(executed.status_code, 200)
+        dispense = InventoryRecord.query.filter_by(
+            visit_id=visit_id,
+            operation_type=INVENTORY_OPERATION_DISPENSE,
+        ).one()
+        self.assertEqual((dispense.old_stock, dispense.new_stock), (100, 98))
+
+        reason = "收费录入错误" * 50
+        revoked = self.client.post(
+            f"/api/nurse/visits/{visit_id}/revoke",
+            headers=headers,
+            json={"reason": reason},
+        )
+        self.assertEqual(revoked.status_code, 200)
+        reversal = InventoryRecord.query.filter_by(
+            visit_id=visit_id,
+            operation_type=INVENTORY_OPERATION_REVERSAL,
+        ).one()
+        self.assertEqual((reversal.old_stock, reversal.new_stock), (98, 100))
+        self.assertLessEqual(len(reversal.remark), 200)
+        self.assertEqual(db.session.get(Visit, visit_id).revoke_reason, reason)
+        self.assertEqual(db.session.get(Drug, self.drug.id).stock, 100)
+        self.assertIsNone(Payment.query.filter_by(visit_id=visit_id).first())
+
+    def test_legacy_revoked_visit_ledger_backfill_is_idempotent(self):
+        visit_id, _ = self._create_visit_with_item(status="revoked", quantity=2)
+        visit = db.session.get(Visit, visit_id)
+        verified_at = utcnow() - timedelta(days=2)
+        executed_at = utcnow() - timedelta(days=3)
+        visit.verified_by = self.doctor.id
+        visit.verified_at = verified_at
+        visit.revoked_by = self.nurse.id
+        visit.revoked_at = utcnow() - timedelta(days=1)
+        db.session.add(OperationLog(
+            user_id=self.nurse.id,
+            action_type="nurse_execute",
+            target_type="visit",
+            target_id=visit.id,
+            summary="历史执行日志",
+            timestamp=executed_at,
+        ))
+        db.session.commit()
+
+        self.assertEqual(backfill_revoked_inventory_movements(), 2)
+        self.assertEqual(backfill_revoked_inventory_movements(), 0)
+        records = InventoryRecord.query.filter_by(visit_id=visit_id).all()
+        self.assertEqual(
+            {record.operation_type for record in records},
+            {INVENTORY_OPERATION_DISPENSE, INVENTORY_OPERATION_REVERSAL},
+        )
+        dispense = next(
+            record for record in records
+            if record.operation_type == INVENTORY_OPERATION_DISPENSE
+        )
+        self.assertEqual(dispense.timestamp, executed_at)
+        self.assertEqual(dispense.nurse_id, self.nurse.id)
 
     def test_can_reject_with_reason(self):
         visit_id, _ = self._create_visit_with_item(status=VISIT_STATUS_PENDING)
@@ -137,7 +214,7 @@ class NurseVisitWorkflowTestCase(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
 
-        visit = Visit.query.get(visit_id)
+        visit = db.session.get(Visit, visit_id)
         self.assertEqual(visit.status, VISIT_STATUS_REJECTED)
         self.assertEqual(visit.reject_reason, "信息不完整")
 
@@ -155,8 +232,8 @@ class NurseVisitWorkflowTestCase(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 200)
 
-        visit = Visit.query.get(visit_id)
-        item = PrescriptionItem.query.get(item_id)
+        visit = db.session.get(Visit, visit_id)
+        item = db.session.get(PrescriptionItem, item_id)
         self.assertEqual(item.quantity, 2)
         self.assertAlmostEqual(item.new_price, 12.0, places=6)
         self.assertAlmostEqual(item.new_amount, 24.0, places=6)
@@ -211,8 +288,93 @@ class NurseVisitWorkflowTestCase(unittest.TestCase):
         )
         self.assertEqual(resp.status_code, 400)
 
-        item = PrescriptionItem.query.get(item_id)
+        item = db.session.get(PrescriptionItem, item_id)
         self.assertEqual(item.quantity, 2)
+
+    def test_execute_rejects_invalid_payment_values(self):
+        visit_id, _ = self._create_visit_with_item(status=VISIT_STATUS_NURSE_VERIFIED)
+        token = self._login("nurse1", "123456")
+        headers = self._auth_headers(token)
+
+        invalid_method = self.client.post(
+            f"/api/nurse/visits/{visit_id}/execute",
+            headers=headers,
+            json={"payment_method": "crypto"},
+        )
+        self.assertEqual(invalid_method.status_code, 400)
+
+        non_staff_discount = self.client.post(
+            f"/api/nurse/visits/{visit_id}/execute",
+            headers=headers,
+            json={
+                "payment_method": "cash",
+                "employee_discount": True,
+                "actual_consultation_fee": 1,
+                "actual_drug_amount": 10,
+            },
+        )
+        self.assertEqual(non_staff_discount.status_code, 400)
+
+        self.patient.patient_type = "staff"
+        db.session.commit()
+        negative_discount = self.client.post(
+            f"/api/nurse/visits/{visit_id}/execute",
+            headers=headers,
+            json={
+                "payment_method": "cash",
+                "employee_discount": True,
+                "actual_consultation_fee": -1,
+                "actual_drug_amount": 10,
+            },
+        )
+        self.assertEqual(negative_discount.status_code, 400)
+        self.assertIsNone(Payment.query.filter_by(visit_id=visit_id).first())
+        self.assertEqual(self.drug.stock, 100)
+
+    def test_employee_discount_uses_validated_split_amounts(self):
+        self.patient.patient_type = "staff"
+        db.session.commit()
+        visit_id, _ = self._create_visit_with_item(
+            status=VISIT_STATUS_NURSE_VERIFIED,
+            quantity=2,
+            unit_price=10,
+            consultation_fee=5,
+        )
+        token = self._login("nurse1", "123456")
+
+        response = self.client.post(
+            f"/api/nurse/visits/{visit_id}/execute",
+            headers=self._auth_headers(token),
+            json={
+                "payment_method": "card",
+                "employee_discount": True,
+                "actual_consultation_fee": 2,
+                "actual_drug_amount": 15,
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        payment = Payment.query.filter_by(visit_id=visit_id).first()
+        self.assertAlmostEqual(payment.amount, 17.0, places=6)
+        self.assertAlmostEqual(payment.original_amount, 25.0, places=6)
+        self.assertAlmostEqual(payment.actual_consultation_fee, 2.0, places=6)
+        self.assertAlmostEqual(payment.actual_drug_amount, 15.0, places=6)
+
+    def test_execute_rejects_legacy_negative_visit_amount(self):
+        visit_id, _ = self._create_visit_with_item(
+            status=VISIT_STATUS_NURSE_VERIFIED,
+            quantity=2,
+            unit_price=10,
+            consultation_fee=-30,
+        )
+        token = self._login("nurse1", "123456")
+        response = self.client.post(
+            f"/api/nurse/visits/{visit_id}/execute",
+            headers=self._auth_headers(token),
+            json={"payment_method": "cash"},
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNone(Payment.query.filter_by(visit_id=visit_id).first())
+        self.assertEqual(self.drug.stock, 100)
 
 
 if __name__ == "__main__":

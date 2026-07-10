@@ -313,6 +313,14 @@ const getStatusText = (status) => {
   return map[status] || status
 }
 
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;'
+})[char])
+
 const openCaseReview = async (visitId) => {
   dialogVisible.value = true
   detailLoading.value = true
@@ -343,6 +351,9 @@ const exportCaseReviewPdf = async () => {
   const patientName = visitDetail.value.patient?.name || '患者'
   const createdAt = visitDetail.value.created_at || ''
   const title = `${patientName}-病例复盘${createdAt ? `-${createdAt}` : ''}`
+  const safeTitle = escapeHtml(title)
+  const safePatientName = escapeHtml(patientName)
+  const safeCreatedAt = escapeHtml(createdAt)
   const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
     .map((el) => el.outerHTML)
     .join('\n')
@@ -355,7 +366,7 @@ const exportCaseReviewPdf = async () => {
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${title}</title>
+    <title>${safeTitle}</title>
     ${styles}
     <style>
       @page { size: A4; margin: 12mm; }
@@ -367,7 +378,7 @@ const exportCaseReviewPdf = async () => {
   </head>
   <body>
     <div class="print-header">病例复盘</div>
-    <div class="print-sub">${patientName}${createdAt ? ` · ${createdAt}` : ''}</div>
+    <div class="print-sub">${safePatientName}${createdAt ? ` · ${safeCreatedAt}` : ''}</div>
     ${contentHtml}
     ${scriptTagOpen}
       window.onload = () => {

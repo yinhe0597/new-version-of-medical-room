@@ -1,4 +1,4 @@
-from flask import request, jsonify, send_file
+from flask import request, jsonify, send_file, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
@@ -18,9 +18,16 @@ from backend.app.models import (
     VISIT_STATUS_PENDING,
     VISIT_STATUS_REJECTED,
     VISIT_STATUS_REVOKED,
+    INVENTORY_OPERATION_ADJUSTMENT,
+    INVENTORY_OPERATION_DISPENSE,
+    INVENTORY_OPERATION_INBOUND,
+    INVENTORY_OPERATION_REVERSAL,
     is_visit_status_transition_allowed,
+    utcnow,
 )
 from backend.app.utils.decorators import role_required
+from backend.app.utils.query import nulls_last_asc
+from backend.app.utils.spreadsheet import safe_spreadsheet_text
 from backend.app.services.drug_stock import (
     ValidationError,
     compute_deduct_units,
@@ -31,8 +38,11 @@ from backend.app.services.drug_stock import (
     validate_pack_spec,
     validate_prices,
 )
+from backend.app.services.stock_lock import lock_stock_rows, serialized_stock_mutation
+from backend.app.services.time_utils import local_now, utc_naive_to_local
 from datetime import datetime, date, timezone, timedelta
-from sqlalchemy import or_, func
+from sqlalchemy import and_, or_, func
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 import math
 import json
@@ -41,13 +51,41 @@ import io
 _DIAG_LINE_CODE_RE = re.compile(r"^(?P<name>.*?)[（(](?P<code>[^）)]+)[）)]\s*$")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _GARBLED_Q_RE = re.compile(r"\?{2,}")
+_ALLOWED_PAYMENT_METHODS = {"cash", "card", "other"}
+_MAX_STOCK_VALUE = 2_147_483_647
+_INVENTORY_REMARK_MAX_LENGTH = 200
+
+
+def _parse_nonnegative_money(value, field):
+    if isinstance(value, bool):
+        raise ValueError(field)
+    try:
+        amount = Decimal(str(value))
+    except (InvalidOperation, TypeError, ValueError):
+        raise ValueError(field)
+    if not amount.is_finite() or amount < 0:
+        raise ValueError(field)
+    return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
     if dt is None:
         return None
-    if getattr(dt, "tzinfo", None) is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return dt.astimezone().strftime(fmt)
+    if getattr(dt, "tzinfo", None) is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return utc_naive_to_local(dt).strftime(fmt)
+
+
+def _stock_group_ledger_variant(group):
+    if group.retail_drug is not None and int(group.retail_amount or 0) > 0:
+        return group.retail_drug, int(group.retail_amount)
+    if group.pack_drug is not None and int(group.pack_amount or 0) > 0:
+        return group.pack_drug, int(group.pack_amount)
+    raise ValueError(f"库存组记账变体无效: {group.group_code}")
+
+
+def _inventory_remark(value):
+    """Keep ledger remarks portable to the model's VARCHAR(200) column."""
+    return str(value or "")[:_INVENTORY_REMARK_MAX_LENGTH]
 
 def _looks_garbled_name(name: str) -> bool:
     if not isinstance(name, str):
@@ -190,9 +228,15 @@ def search_drug_names():
 
 @bp.route("/nurse/inbound", methods=["POST"])
 @role_required(["nurse", "admin"])
+@serialized_stock_mutation
 def inbound_stock():
     data = request.get_json() or {}
-    item_type = int(data.get("type") or 1)
+    try:
+        item_type = int(data.get("type") or 1)
+    except (TypeError, ValueError):
+        return jsonify({"msg": "Invalid type"}), 400
+    if item_type not in (1, 2, 3):
+        return jsonify({"msg": "Invalid type"}), 400
 
     name = (data.get("name") or "").strip()
     if not name:
@@ -208,8 +252,8 @@ def inbound_stock():
         specification = (data.get("specification") or "").strip()
         unit = (data.get("unit") or "").strip() or "次"
         try:
-            price_val = float(data.get("price"))
-        except Exception:
+            price_val = _parse_nonnegative_money(data.get("price"), "price")
+        except ValueError:
             return jsonify({"msg": "Invalid price"}), 400
         if price_val <= 0:
             return jsonify({"msg": "price must be > 0"}), 400
@@ -235,10 +279,18 @@ def inbound_stock():
             stock=-1,
             status=1,
             batch_no=batch_no,
-            inbound_at=datetime.utcnow(),
+            inbound_at=utcnow(),
             variant_type="service",
         )
         db.session.add(drug)
+        db.session.flush()
+        db.session.add(OperationLog(
+            user_id=int(user_id),
+            action_type='nurse_inbound',
+            target_type='drug',
+            target_id=drug.id,
+            summary=f"新增诊疗项目: {drug.name}",
+        ))
         db.session.commit()
         return jsonify({"data": {"drug_id": drug.id}}), 201
 
@@ -246,8 +298,11 @@ def inbound_stock():
         specification = (data.get("specification") or "").strip()
         unit = (data.get("unit") or "").strip() or "个"
         try:
-            price_val = float(data.get("price"))
-        except Exception:
+            price_val = _parse_nonnegative_money(data.get("price"), "price")
+            purchase_price_val = _parse_nonnegative_money(
+                data.get("purchase_price"), "purchase_price"
+            )
+        except ValueError:
             return jsonify({"msg": "Invalid price"}), 400
         if price_val <= 0:
             return jsonify({"msg": "price must be > 0"}), 400
@@ -266,7 +321,7 @@ def inbound_stock():
                 expiry_val = datetime.strptime(expiry_str, "%Y-%m-%d").date()
             except ValueError:
                 return jsonify({"msg": "Invalid expiry_date format, use YYYY-MM-DD"}), 400
-            if expiry_val < date.today():
+            if expiry_val < local_now().date():
                 return jsonify({"msg": "expiry_date cannot be in the past"}), 400
 
         existing = Drug.query.filter(
@@ -280,7 +335,7 @@ def inbound_stock():
         if existing:
             return jsonify({"msg": "Duplicate consumable for same batch", "data": {"drug_id": existing.id}}), 409
 
-        now = datetime.utcnow()
+        now = utcnow()
         drug = Drug(
             name=name,
             base_name=name,
@@ -293,23 +348,22 @@ def inbound_stock():
             batch_no=batch_no,
             inbound_at=now,
             variant_type="consumable",
-            purchase_price=float(data.get("purchase_price") or 0.0),
+            purchase_price=purchase_price_val,
             expiry_date=expiry_val,
         )
         db.session.add(drug)
-        db.session.commit()
+        db.session.flush()
 
         ir = InventoryRecord(
             drug_id=drug.id,
             nurse_id=int(user_id),
             old_stock=0,
             new_stock=inbound_qty,
+            operation_type=INVENTORY_OPERATION_INBOUND,
             remark="入库耗材",
             timestamp=now,
         )
         db.session.add(ir)
-        db.session.commit()
-
         log = OperationLog(
             user_id=int(user_id),
             action_type='nurse_inbound',
@@ -350,11 +404,16 @@ def inbound_stock():
 
     try:
         prices = validate_prices(data.get("pack_price"), min_sale_price if retail_enabled else None, pack_amount, retail_amount or 1)
+        purchase_price_val = _parse_nonnegative_money(
+            data.get("purchase_price"), "purchase_price"
+        )
     except ValidationError as e:
         extra = {"msg": e.message, "field": e.field}
         if e.field == "min_sale_price" and retail_enabled:
             extra["threshold"] = float(data.get("pack_price") or 0) * (float(retail_amount) / float(pack_amount))
         return jsonify(extra), 400
+    except ValueError:
+        return jsonify({"msg": "Invalid purchase_price", "field": "purchase_price"}), 400
 
     try:
         qty_info = compute_initial_stocks(data.get("inbound_quantity"), pack_amount, retail_amount if retail_enabled else None)
@@ -369,7 +428,7 @@ def inbound_stock():
             expiry_val = datetime.strptime(expiry_str, "%Y-%m-%d").date()
         except ValueError:
             return jsonify({"msg": "Invalid expiry_date format, use YYYY-MM-DD"}), 400
-        if expiry_val < date.today():
+        if expiry_val < local_now().date():
             return jsonify({"msg": "expiry_date cannot be in the past"}), 400
 
     existing_pack = Drug.query.filter(
@@ -393,10 +452,11 @@ def inbound_stock():
         specification=pack_spec,
         unit=pack_unit,
         price=prices["pack_price"],
+        purchase_price=purchase_price_val,
         stock=qty_info["packs"],
         status=1,
         batch_no=batch_no,
-        inbound_at=datetime.utcnow(),
+        inbound_at=utcnow(),
         variant_type="pack",
         stock_group_code=group_code,
         unit_amount=pack_amount,
@@ -425,10 +485,13 @@ def inbound_stock():
             specification=retail_unit_text,
             unit=unit_name,
             price=prices["min_sale_price"],
+            purchase_price=round(
+                purchase_price_val * float(retail_amount) / float(pack_amount), 2
+            ),
             stock=int(qty_info["retail_units"] or 0),
             status=1,
             batch_no=batch_no,
-            inbound_at=datetime.utcnow(),
+            inbound_at=utcnow(),
             variant_type="retail",
             stock_group_code=group_code,
             unit_amount=retail_amount,
@@ -453,21 +516,22 @@ def inbound_stock():
     db.session.flush()
 
     stocks = recompute_variant_stocks(group.total_units, group.pack_amount, group.retail_amount)
-    pack_old = pack_drug.stock
+    pack_old = 0
     pack_drug.stock = stocks["pack_stock"]
     if retail_drug is not None:
-        retail_old = retail_drug.stock
+        retail_old = 0
         retail_drug.stock = stocks["retail_stock"]
     else:
         retail_old = None
 
-    now = datetime.utcnow()
+    now = utcnow()
     db.session.add(
         InventoryRecord(
             drug_id=pack_drug.id,
             nurse_id=int(user_id),
             old_stock=pack_old,
             new_stock=pack_drug.stock,
+            operation_type=INVENTORY_OPERATION_INBOUND,
             remark=f"入库 批次:{batch_no}",
             timestamp=now,
         )
@@ -479,12 +543,11 @@ def inbound_stock():
                 nurse_id=int(user_id),
                 old_stock=retail_old,
                 new_stock=retail_drug.stock,
+                operation_type=INVENTORY_OPERATION_INBOUND,
                 remark=f"入库(散) 批次:{batch_no}",
                 timestamp=now,
             )
         )
-
-    db.session.commit()
 
     log = OperationLog(
         user_id=int(user_id),
@@ -510,6 +573,7 @@ def inbound_stock():
 
 @bp.route('/nurse/inventory', methods=['POST'])
 @role_required('nurse')
+@serialized_stock_mutation
 def update_inventory():
     data = request.get_json() or {}
     drug_id = data.get('drug_id')
@@ -519,7 +583,16 @@ def update_inventory():
     if drug_id is None or new_stock is None or not remark:
         return jsonify({"msg": "Missing required fields"}), 400
 
-    drug = Drug.query.get_or_404(drug_id)
+    if isinstance(new_stock, bool):
+        return jsonify({"msg": "Invalid stock", "field": "new_stock"}), 400
+    try:
+        new_stock = int(new_stock)
+    except (TypeError, ValueError):
+        return jsonify({"msg": "Invalid stock", "field": "new_stock"}), 400
+    if new_stock < 0:
+        return jsonify({"msg": "Stock cannot be negative", "field": "new_stock"}), 400
+
+    drug = Drug.query.filter_by(id=drug_id).with_for_update().first_or_404()
     user_id = get_jwt_identity()
     if drug.stock_group_code:
         return jsonify({"msg": "Grouped stock item cannot be adjusted via inventory endpoint"}), 400
@@ -529,25 +602,24 @@ def update_inventory():
             drug_id=drug.id,
             nurse_id=int(user_id),
             old_stock=drug.stock,
-            new_stock=int(new_stock),
-            remark=remark
+            new_stock=new_stock,
+            operation_type=INVENTORY_OPERATION_ADJUSTMENT,
+            remark=_inventory_remark(f"盘点调整: {remark}"),
         )
         db.session.add(record)
 
-        drug.stock = int(new_stock)
-
-        db.session.commit()
+        drug.stock = new_stock
 
         log = OperationLog(
             user_id=int(user_id),
             action_type='nurse_inventory_adjust',
             target_type='drug',
             target_id=drug_id,
-            summary=f"库存调整: {drug.name} {record.old_stock}→{int(new_stock)}",
+            summary=f"库存调整: {drug.name} {record.old_stock}→{new_stock}",
             details=json.dumps({
                 "drug_name": drug.name,
                 "old_stock": record.old_stock,
-                "new_stock": int(new_stock),
+                "new_stock": new_stock,
                 "remark": remark
             }, ensure_ascii=False)
         )
@@ -555,12 +627,14 @@ def update_inventory():
         db.session.commit()
 
         return jsonify({"msg": "Inventory updated successfully"}), 200
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"Failed to update inventory: {str(e)}"}), 500
+        current_app.logger.exception("Inventory update failed: drug_id=%s", drug_id)
+        return jsonify({"msg": "库存调整失败，请稍后重试"}), 500
 
 @bp.route('/nurse/inventory/group', methods=['POST'])
 @role_required('nurse')
+@serialized_stock_mutation
 def update_group_inventory():
     data = request.get_json() or {}
     group_code = data.get('group_code')
@@ -572,32 +646,57 @@ def update_group_inventory():
         return jsonify({"msg": "Missing required fields"}), 400
 
     try:
-        actual_packs = int(actual_packs)
-        actual_retail_units = int(actual_retail_units)
-    except ValueError:
+        parsed_packs = Decimal(str(actual_packs))
+        parsed_retail_units = Decimal(str(actual_retail_units))
+        if (
+            isinstance(actual_packs, bool)
+            or isinstance(actual_retail_units, bool)
+            or not parsed_packs.is_finite()
+            or not parsed_retail_units.is_finite()
+            or parsed_packs != parsed_packs.to_integral_value()
+            or parsed_retail_units != parsed_retail_units.to_integral_value()
+        ):
+            raise ValueError
+        actual_packs = int(parsed_packs)
+        actual_retail_units = int(parsed_retail_units)
+    except (InvalidOperation, TypeError, ValueError):
         return jsonify({"msg": "Invalid quantity values"}), 400
 
     if actual_packs < 0 or actual_retail_units < 0:
         return jsonify({"msg": "Quantity cannot be negative"}), 400
 
-    group = DrugStockGroup.query.filter_by(group_code=group_code).first()
+    group = DrugStockGroup.query.filter_by(group_code=group_code).with_for_update().first()
     if not group:
         return jsonify({"msg": "Stock group not found"}), 404
+
+    if group.retail_drug_id and group.retail_amount:
+        retail_units_per_pack = int(group.pack_amount) // int(group.retail_amount)
+        if actual_retail_units >= retail_units_per_pack:
+            return jsonify({
+                "msg": "零售份数必须小于一整装所含份数，请折算到整装数量",
+                "field": "actual_retail_units",
+            }), 400
+    elif actual_retail_units != 0:
+        return jsonify({
+            "msg": "该库存组未启用零售，零售份数必须为0",
+            "field": "actual_retail_units",
+        }), 400
 
     user_id = get_jwt_identity()
 
     try:
-        retail_amount = group.retail_amount if group.retail_amount is not None else 1
+        retail_amount = int(group.retail_amount or 0)
         new_total_units = actual_packs * group.pack_amount + actual_retail_units * retail_amount
+        if new_total_units > _MAX_STOCK_VALUE:
+            return jsonify({"msg": "盘点后库存数量超过系统上限", "field": "actual_packs"}), 400
 
         if new_total_units == group.total_units:
             return jsonify({"msg": "Inventory is already accurate, no changes made"}), 200
 
-        old_total_units = group.total_units
         group.total_units = new_total_units
         stocks = recompute_variant_stocks(group.total_units, group.pack_amount, group.retail_amount)
         
-        now = datetime.utcnow()
+        now = utcnow()
 
         if group.pack_drug:
             pack_old = group.pack_drug.stock
@@ -608,7 +707,8 @@ def update_group_inventory():
                     nurse_id=int(user_id),
                     old_stock=pack_old,
                     new_stock=group.pack_drug.stock,
-                    remark=f"联合盘点({remark})",
+                    operation_type=INVENTORY_OPERATION_ADJUSTMENT,
+                    remark=_inventory_remark(f"联合盘点({remark})"),
                     timestamp=now,
                 )
             )
@@ -622,7 +722,8 @@ def update_group_inventory():
                     nurse_id=int(user_id),
                     old_stock=retail_old,
                     new_stock=group.retail_drug.stock,
-                    remark=f"联合盘点(散)({remark})",
+                    operation_type=INVENTORY_OPERATION_ADJUSTMENT,
+                    remark=_inventory_remark(f"联合盘点(散)({remark})"),
                     timestamp=now,
                 )
             )
@@ -630,9 +731,10 @@ def update_group_inventory():
         db.session.commit()
         return jsonify({"msg": "Group inventory updated successfully"}), 200
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"Failed to update group inventory: {str(e)}"}), 500
+        current_app.logger.exception("Group inventory update failed: group_code=%s", group_code)
+        return jsonify({"msg": "库存组盘点失败，请稍后重试"}), 500
 
 @bp.route('/nurse/inventory/records', methods=['GET'])
 @role_required(['nurse', 'admin'])
@@ -652,6 +754,7 @@ def get_inventory_records():
             "nurse_name": record.nurse.real_name if record.nurse else "Unknown",
             "old_stock": record.old_stock,
             "new_stock": record.new_stock,
+            "operation_type": record.operation_type,
             "remark": record.remark,
             "timestamp": (record.timestamp + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
         })
@@ -667,9 +770,7 @@ def get_inventory_records():
 
 
 def _compute_monthly_report(start_date_str, end_date_str):
-    """核心算法：计算月度盘点报表数据"""
-    from datetime import date as date_type
-
+    """Calculate inventory movement using local-day, half-open boundaries."""
     try:
         start_dt = datetime.strptime(start_date_str, '%Y-%m-%d')
         end_dt = datetime.strptime(end_date_str, '%Y-%m-%d')
@@ -678,178 +779,231 @@ def _compute_monthly_report(start_date_str, end_date_str):
 
     start_date = start_dt.date()
     end_date = end_dt.date()
+    if start_date > end_date:
+        return None, "start_date must not be later than end_date"
 
-    # 本地时间转UTC
+    # Snapshots are taken at local midnight, so the end-of-day snapshot belongs
+    # to the following calendar date.
     start_datetime_utc = start_dt - timedelta(hours=8)
-    end_datetime_utc = end_dt.replace(hour=23, minute=59, second=59) - timedelta(hours=8)
+    end_exclusive_utc = end_dt + timedelta(days=1) - timedelta(hours=8)
+    closing_snapshot_date = end_date + timedelta(days=1)
+    report_today = local_now().date()
 
-    # 查询活跃药品
+    # Historical reports must retain disabled items that had movements.
     drugs = Drug.query.filter(
-        Drug.status == 1,
         or_(Drug.type.in_([1, 3]), Drug.type.is_(None))
-    ).order_by(Drug.storage_location.asc().nullslast()).all()
+    ).order_by(
+        *nulls_last_asc(Drug.storage_location),
+        Drug.id.asc(),
+    ).all()
 
     if not drugs:
         return [], None
 
     drug_ids = [d.id for d in drugs]
     drug_map = {d.id: d for d in drugs}
+    group_codes = {drug.stock_group_code for drug in drugs if drug.stock_group_code}
+    stock_groups = (
+        DrugStockGroup.query.filter(DrugStockGroup.group_code.in_(group_codes)).all()
+        if group_codes else []
+    )
+    group_map = {group.group_code: group for group in stock_groups}
 
-    # 批量查询：期间入库（remark LIKE '入库%'）
-    inbound_query = (
-        db.session.query(
+    legacy_remark = func.coalesce(InventoryRecord.remark, '')
+    legacy_inbound_text = or_(
+        legacy_remark.like('入库%'),
+        legacy_remark.like('初始入库%'),
+        legacy_remark.like('CSV批量入库%'),
+        legacy_remark.like('CSV初始入库%'),
+        legacy_remark.like('Excel批量初始入库%'),
+    )
+    inbound_condition = or_(
+        InventoryRecord.operation_type == INVENTORY_OPERATION_INBOUND,
+        and_(InventoryRecord.operation_type.is_(None), legacy_inbound_text),
+    )
+    adjustment_condition = or_(
+        and_(
+            InventoryRecord.operation_type.isnot(None),
+            InventoryRecord.operation_type != INVENTORY_OPERATION_INBOUND,
+            InventoryRecord.operation_type != INVENTORY_OPERATION_DISPENSE,
+        ),
+        and_(InventoryRecord.operation_type.is_(None), ~legacy_inbound_text),
+    )
+    non_dispense_condition = or_(
+        InventoryRecord.operation_type.is_(None),
+        InventoryRecord.operation_type != INVENTORY_OPERATION_DISPENSE,
+    )
+
+    def inventory_delta_map(lower_bound, upper_bound=None, operation_condition=None):
+        query = db.session.query(
             InventoryRecord.drug_id,
-            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
-        )
-        .filter(
+            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock),
+        ).filter(
             InventoryRecord.drug_id.in_(drug_ids),
-            InventoryRecord.remark.like('入库%'),
-            InventoryRecord.timestamp >= start_datetime_utc,
-            InventoryRecord.timestamp <= end_datetime_utc
+            InventoryRecord.timestamp >= lower_bound,
         )
-        .group_by(InventoryRecord.drug_id)
-        .all()
-    )
-    inbound_map = {row[0]: int(row[1] or 0) for row in inbound_query}
+        if upper_bound is not None:
+            query = query.filter(InventoryRecord.timestamp < upper_bound)
+        if operation_condition is not None:
+            query = query.filter(operation_condition)
+        else:
+            query = query.filter(non_dispense_condition)
+        rows = query.group_by(InventoryRecord.drug_id).all()
+        return {drug_id: int(delta or 0) for drug_id, delta in rows}
 
-    # 批量查询：期间盘点调整（remark NOT LIKE '入库%'）
-    adjustment_query = (
-        db.session.query(
+    inbound_map = inventory_delta_map(
+        start_datetime_utc, end_exclusive_utc, inbound_condition
+    )
+    adjustment_map = inventory_delta_map(
+        start_datetime_utc, end_exclusive_utc, adjustment_condition
+    )
+    ir_after_end_map = inventory_delta_map(end_exclusive_utc)
+    ir_after_start_map = inventory_delta_map(start_datetime_utc)
+
+    def group_unit_amount(drug):
+        amount = int(drug.unit_amount or 0)
+        if amount > 0:
+            return amount
+        group = group_map.get(drug.stock_group_code)
+        if not group:
+            return 0
+        if drug.id == group.pack_drug_id:
+            return int(group.pack_amount or 0)
+        if drug.id == group.retail_drug_id:
+            return int(group.retail_amount or 0)
+        return 0
+
+    def outbound_maps(lower_bound, upper_bound=None):
+        ordinary = {}
+        grouped = {}
+
+        ledger_query = db.session.query(
             InventoryRecord.drug_id,
-            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
-        )
-        .filter(
+            func.sum(InventoryRecord.old_stock - InventoryRecord.new_stock),
+        ).filter(
             InventoryRecord.drug_id.in_(drug_ids),
-            ~InventoryRecord.remark.like('入库%'),
-            InventoryRecord.timestamp >= start_datetime_utc,
-            InventoryRecord.timestamp <= end_datetime_utc
+            InventoryRecord.operation_type == INVENTORY_OPERATION_DISPENSE,
+            InventoryRecord.timestamp >= lower_bound,
         )
-        .group_by(InventoryRecord.drug_id)
-        .all()
+        if upper_bound is not None:
+            ledger_query = ledger_query.filter(InventoryRecord.timestamp < upper_bound)
+        for drug_id, quantity in ledger_query.group_by(InventoryRecord.drug_id).all():
+            drug = drug_map.get(drug_id)
+            deduction = int(quantity or 0)
+            if not drug or deduction <= 0:
+                continue
+            if drug.stock_group_code:
+                deduction *= group_unit_amount(drug)
+                grouped[drug.stock_group_code] = grouped.get(drug.stock_group_code, 0) + deduction
+            else:
+                ordinary[drug_id] = ordinary.get(drug_id, 0) + deduction
+
+        ledger_visits = db.session.query(InventoryRecord.visit_id).filter(
+            InventoryRecord.operation_type == INVENTORY_OPERATION_DISPENSE,
+            InventoryRecord.visit_id.isnot(None),
+        )
+        legacy_query = (
+            db.session.query(
+                PrescriptionItem.drug_id,
+                PrescriptionItem.quantity,
+                PrescriptionItem.is_scattered,
+            )
+            .join(Visit, PrescriptionItem.visit_id == Visit.id)
+            .join(Payment, Payment.visit_id == Visit.id)
+            .filter(
+                PrescriptionItem.drug_id.in_(drug_ids),
+                Visit.status == VISIT_STATUS_COMPLETED,
+                Payment.payment_date >= lower_bound,
+                ~PrescriptionItem.visit_id.in_(ledger_visits),
+            )
+        )
+        if upper_bound is not None:
+            legacy_query = legacy_query.filter(Payment.payment_date < upper_bound)
+
+        for drug_id, quantity, is_scattered in legacy_query.all():
+            drug = drug_map.get(drug_id)
+            if not drug:
+                continue
+            if drug.stock_group_code:
+                deduction = int(quantity or 0) * group_unit_amount(drug)
+                grouped[drug.stock_group_code] = grouped.get(drug.stock_group_code, 0) + deduction
+            else:
+                deduction = _calc_deduction(drug, quantity, is_scattered)
+                ordinary[drug_id] = ordinary.get(drug_id, 0) + deduction
+        return ordinary, grouped
+
+    outbound_map, group_outbound_map = outbound_maps(
+        start_datetime_utc, end_exclusive_utc
     )
-    adjustment_map = {row[0]: int(row[1] or 0) for row in adjustment_query}
+    disp_after_end_map, group_disp_after_end_map = outbound_maps(end_exclusive_utc)
+    disp_after_start_map, group_disp_after_start_map = outbound_maps(start_datetime_utc)
 
-    # 批量查询：期间出库处方项
-    outbound_items = (
-        db.session.query(
-            PrescriptionItem.drug_id,
-            PrescriptionItem.quantity,
-            PrescriptionItem.is_scattered
-        )
-        .join(Visit, PrescriptionItem.visit_id == Visit.id)
-        .join(Payment, Payment.visit_id == Visit.id)
-        .filter(
-            PrescriptionItem.drug_id.in_(drug_ids),
-            Visit.status == VISIT_STATUS_COMPLETED,
-            Payment.payment_date >= start_datetime_utc,
-            Payment.payment_date <= end_datetime_utc
-        )
-        .all()
-    )
+    def normalized_snapshot_map(snapshot_date):
+        snapshots = DailyStockSnapshot.query.filter_by(date=snapshot_date).all()
+        values = {snapshot.drug_id: int(snapshot.stock or 0) for snapshot in snapshots}
+        captured_times = [snapshot.created_at for snapshot in snapshots if snapshot.created_at]
+        if not captured_times:
+            return values
 
-    # 计算出库扣减量
-    outbound_map = {}
-    for drug_id, quantity, is_scattered in outbound_items:
-        drug = drug_map.get(drug_id)
-        if not drug:
-            continue
-        deduction = _calc_deduction(drug, quantity, is_scattered)
-        outbound_map[drug_id] = outbound_map.get(drug_id, 0) + deduction
+        boundary_utc = datetime.combine(snapshot_date, datetime.min.time()) - timedelta(hours=8)
+        captured_at = max(captured_times)
+        if getattr(captured_at, "tzinfo", None) is not None:
+            captured_at = captured_at.astimezone(timezone.utc).replace(tzinfo=None)
+        if captured_at <= boundary_utc:
+            return values
 
-    # 批量获取快照
-    start_snapshots = {s.drug_id: s.stock for s in
-        DailyStockSnapshot.query.filter_by(date=start_date).all()}
-    end_snapshots = {s.drug_id: s.stock for s in
-        DailyStockSnapshot.query.filter_by(date=end_date).all()}
+        correction_end = captured_at + timedelta(microseconds=1)
+        inventory_corrections = inventory_delta_map(boundary_utc, correction_end)
+        outbound_corrections, group_outbound_corrections = outbound_maps(
+            boundary_utc, correction_end
+        )
+        for snapshot in snapshots:
+            drug = drug_map.get(snapshot.drug_id)
+            if not drug:
+                continue
+            if not drug.stock_group_code:
+                values[drug.id] = (
+                    int(snapshot.stock or 0)
+                    - inventory_corrections.get(drug.id, 0)
+                    + outbound_corrections.get(drug.id, 0)
+                )
+                continue
 
-    # 回退计算所需：期末反推
-    ir_after_end = (
-        db.session.query(
-            InventoryRecord.drug_id,
-            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
-        )
-        .filter(
-            InventoryRecord.drug_id.in_(drug_ids),
-            InventoryRecord.timestamp > end_datetime_utc
-        )
-        .group_by(InventoryRecord.drug_id)
-        .all()
-    )
-    ir_after_end_map = {row[0]: int(row[1] or 0) for row in ir_after_end}
+            group = group_map.get(drug.stock_group_code)
+            if not group:
+                continue
+            primary_drug, primary_amount = _stock_group_ledger_variant(group)
+            if drug.id != primary_drug.id:
+                continue
+            outbound_units = group_outbound_corrections.get(group.group_code, 0)
+            if outbound_units % primary_amount != 0:
+                current_app.logger.warning(
+                    "Snapshot correction skipped for group %s: %s base units cannot be represented",
+                    group.group_code,
+                    outbound_units,
+                )
+                continue
+            values[drug.id] = (
+                int(snapshot.stock or 0)
+                - inventory_corrections.get(drug.id, 0)
+                + outbound_units // primary_amount
+            )
+        return values
 
-    dispensing_after_end = (
-        db.session.query(
-            PrescriptionItem.drug_id,
-            PrescriptionItem.quantity,
-            PrescriptionItem.is_scattered
-        )
-        .join(Visit, PrescriptionItem.visit_id == Visit.id)
-        .join(Payment, Payment.visit_id == Visit.id)
-        .filter(
-            PrescriptionItem.drug_id.in_(drug_ids),
-            Visit.status == VISIT_STATUS_COMPLETED,
-            Payment.payment_date > end_datetime_utc
-        )
-        .all()
-    )
-    disp_after_end_map = {}
-    for drug_id, quantity, is_scattered in dispensing_after_end:
-        drug = drug_map.get(drug_id)
-        if not drug:
-            continue
-        deduction = _calc_deduction(drug, quantity, is_scattered)
-        disp_after_end_map[drug_id] = disp_after_end_map.get(drug_id, 0) + deduction
+    start_snapshots = normalized_snapshot_map(start_date)
+    end_snapshots = normalized_snapshot_map(closing_snapshot_date)
 
-    # 回退计算所需：期初反推
-    ir_after_start = (
-        db.session.query(
-            InventoryRecord.drug_id,
-            func.sum(InventoryRecord.new_stock - InventoryRecord.old_stock)
-        )
-        .filter(
-            InventoryRecord.drug_id.in_(drug_ids),
-            InventoryRecord.timestamp >= start_datetime_utc
-        )
-        .group_by(InventoryRecord.drug_id)
-        .all()
-    )
-    ir_after_start_map = {row[0]: int(row[1] or 0) for row in ir_after_start}
-
-    dispensing_after_start = (
-        db.session.query(
-            PrescriptionItem.drug_id,
-            PrescriptionItem.quantity,
-            PrescriptionItem.is_scattered
-        )
-        .join(Visit, PrescriptionItem.visit_id == Visit.id)
-        .join(Payment, Payment.visit_id == Visit.id)
-        .filter(
-            PrescriptionItem.drug_id.in_(drug_ids),
-            Visit.status == VISIT_STATUS_COMPLETED,
-            Payment.payment_date >= start_datetime_utc
-        )
-        .all()
-    )
-    disp_after_start_map = {}
-    for drug_id, quantity, is_scattered in dispensing_after_start:
-        drug = drug_map.get(drug_id)
-        if not drug:
-            continue
-        deduction = _calc_deduction(drug, quantity, is_scattered)
-        disp_after_start_map[drug_id] = disp_after_start_map.get(drug_id, 0) + deduction
-
-    # 组装结果
     result = []
     for drug in drugs:
+        if drug.stock_group_code:
+            continue
         current_stock = int(drug.stock or 0)
 
-        # 期初库存：优先快照，回退反推
         opening_stock = start_snapshots.get(drug.id)
         if opening_stock is None:
             opening_stock = current_stock - ir_after_start_map.get(drug.id, 0) + disp_after_start_map.get(drug.id, 0)
 
-        # 期末库存：今天用当前库存，否则优先快照，回退反推
-        if end_date == date_type.today():
+        if end_date >= report_today:
             closing_stock = current_stock
         else:
             closing_stock = end_snapshots.get(drug.id)
@@ -859,7 +1013,6 @@ def _compute_monthly_report(start_date_str, end_date_str):
         outbound = outbound_map.get(drug.id, 0)
         adjustment = adjustment_map.get(drug.id, 0)
 
-        # 过滤无变动且库存为0的药品
         if inbound == 0 and outbound == 0 and adjustment == 0 and opening_stock == 0 and closing_stock == 0:
             continue
 
@@ -871,6 +1024,7 @@ def _compute_monthly_report(start_date_str, end_date_str):
             "variant_type": drug.variant_type,
             "specification": drug.specification,
             "purchase_price": purchase_price,
+            "valuation_included": True,
             "unit": drug.unit,
             "opening_stock": opening_stock,
             "inbound": inbound,
@@ -882,6 +1036,77 @@ def _compute_monthly_report(start_date_str, end_date_str):
             "storage_location": drug.storage_location,
         })
 
+    sorted_groups = sorted(
+        stock_groups,
+        key=lambda group: (
+            (group.pack_drug.storage_location if group.pack_drug else None) is None,
+            group.pack_drug.storage_location if group.pack_drug and group.pack_drug.storage_location else '',
+            group.id,
+        ),
+    )
+    for group in sorted_groups:
+        pack_amount = int(group.pack_amount or 0)
+        if pack_amount <= 0:
+            continue
+        use_retail = bool(group.retail_drug_id and group.retail_amount and group.retail_drug)
+        primary_drug = group.retail_drug if use_retail else group.pack_drug
+        primary_amount = int(group.retail_amount or 0) if use_retail else pack_amount
+        if not primary_drug or primary_amount <= 0:
+            continue
+
+        current_stock = int(group.total_units or 0)
+        opening_snapshot = start_snapshots.get(primary_drug.id)
+        opening_stock = (
+            int(opening_snapshot) * primary_amount
+            if opening_snapshot is not None
+            else current_stock
+            - ir_after_start_map.get(primary_drug.id, 0) * primary_amount
+            + group_disp_after_start_map.get(group.group_code, 0)
+        )
+
+        if end_date >= report_today:
+            closing_stock = current_stock
+        else:
+            closing_snapshot = end_snapshots.get(primary_drug.id)
+            closing_stock = (
+                int(closing_snapshot) * primary_amount
+                if closing_snapshot is not None
+                else current_stock
+                - ir_after_end_map.get(primary_drug.id, 0) * primary_amount
+                + group_disp_after_end_map.get(group.group_code, 0)
+            )
+
+        inbound = inbound_map.get(primary_drug.id, 0) * primary_amount
+        adjustment = adjustment_map.get(primary_drug.id, 0) * primary_amount
+        outbound = group_outbound_map.get(group.group_code, 0)
+        if inbound == 0 and outbound == 0 and adjustment == 0 and opening_stock == 0 and closing_stock == 0:
+            continue
+
+        pack_drug = group.pack_drug or primary_drug
+        unit_purchase_price = round(
+            float(pack_drug.purchase_price or 0) / float(pack_amount),
+            6,
+        )
+        result.append({
+            "drug_id": pack_drug.id,
+            "stock_group_code": group.group_code,
+            "drug_name": group.base_name or pack_drug.name,
+            "type": pack_drug.type,
+            "variant_type": "group",
+            "specification": pack_drug.specification,
+            "purchase_price": unit_purchase_price,
+            "valuation_included": True,
+            "unit": group.unit_name,
+            "opening_stock": opening_stock,
+            "inbound": inbound,
+            "outbound": outbound,
+            "adjustment": adjustment,
+            "closing_stock": closing_stock,
+            "inbound_amount": round(unit_purchase_price * inbound, 2),
+            "current_stock_amount": round(unit_purchase_price * closing_stock, 2),
+            "storage_location": pack_drug.storage_location,
+        })
+
     return result, None
 
 
@@ -889,8 +1114,7 @@ def _calc_deduction(drug, quantity, is_scattered):
     """计算出库扣减量（与execute_visit一致）"""
     qty = int(quantity or 0)
     if drug.stock_group_code:
-        unit_amount = int(drug.unit_amount or 1)
-        return math.ceil(qty / unit_amount)
+        return qty
     if is_scattered and not drug.stock_group_code:
         conv_rate = drug.conversion_rate or 1
         return math.ceil(qty / conv_rate)
@@ -941,11 +1165,11 @@ def export_monthly_report():
     for idx, item in enumerate(data, 1):
         ws.append([
             idx,
-            item["drug_name"],
+            safe_spreadsheet_text(item["drug_name"]),
             "耗材" if item.get("type") == 3 else "药品",
-            item["specification"],
+            safe_spreadsheet_text(item["specification"]),
             item["purchase_price"],
-            item["unit"],
+            safe_spreadsheet_text(item["unit"]),
             item["opening_stock"],
             item["inbound"],
             item["outbound"],
@@ -973,7 +1197,7 @@ def get_visit_detail(visit_id):
     visit = Visit.query.options(
         db.joinedload(Visit.patient),
         db.joinedload(Visit.doctor),
-    ).get_or_404(visit_id)
+    ).filter_by(id=visit_id).first_or_404()
 
     items_query = visit.items
     if hasattr(items_query, "options"):
@@ -1035,6 +1259,7 @@ def get_visit_detail(visit_id):
             "patient": {
                 "name": visit.patient.name if visit.patient else "未知",
                 "student_id": visit.patient.student_id if visit.patient else "",
+                "patient_type": visit.patient.patient_type if visit.patient else None,
             },
             "doctor_name": visit.doctor.real_name if visit.doctor else "Unknown",
             "created_at": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
@@ -1056,9 +1281,10 @@ def get_visit_detail(visit_id):
 
 @bp.route('/nurse/visits/<int:visit_id>/verify', methods=['POST'])
 @role_required('nurse')
+@serialized_stock_mutation
 def verify_visit(visit_id):
     import math
-    visit = Visit.query.get_or_404(visit_id)
+    visit = Visit.query.filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
 
     if not is_visit_status_transition_allowed(visit.status, VISIT_STATUS_NURSE_VERIFIED):
         return jsonify({"msg": f"Visit status transition not allowed: {visit.status} -> {VISIT_STATUS_NURSE_VERIFIED}"}), 400
@@ -1114,7 +1340,7 @@ def verify_visit(visit_id):
         user_id = get_jwt_identity()
         visit.status = VISIT_STATUS_NURSE_VERIFIED
         visit.verified_by = int(user_id)
-        visit.verified_at = datetime.utcnow()
+        visit.verified_at = utcnow()
 
         log = OperationLog(
             user_id=int(user_id),
@@ -1130,8 +1356,9 @@ def verify_visit(visit_id):
 
 @bp.route('/nurse/visits/<int:visit_id>/reject', methods=['POST'])
 @role_required('nurse')
+@serialized_stock_mutation
 def reject_visit(visit_id):
-    visit = Visit.query.get_or_404(visit_id)
+    visit = Visit.query.filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
     data = request.get_json() or {}
     reason = (data.get("reason") or "").strip()
 
@@ -1145,7 +1372,7 @@ def reject_visit(visit_id):
         user_id = get_jwt_identity()
         visit.status = VISIT_STATUS_REJECTED
         visit.rejected_by = int(user_id)
-        visit.rejected_at = datetime.utcnow()
+        visit.rejected_at = utcnow()
         visit.reject_reason = reason
 
         log = OperationLog(
@@ -1163,8 +1390,9 @@ def reject_visit(visit_id):
 
 @bp.route('/nurse/visits/<int:visit_id>/items/<int:item_id>/modify', methods=['PUT'])
 @role_required('nurse')
+@serialized_stock_mutation
 def modify_prescription_item(visit_id, item_id):
-    visit = Visit.query.options(db.joinedload(Visit.payment)).get_or_404(visit_id)
+    visit = Visit.query.filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
 
     if visit.status != VISIT_STATUS_NURSE_VERIFIED:
         return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} to modify items"}), 400
@@ -1197,9 +1425,9 @@ def modify_prescription_item(visit_id, item_id):
         return jsonify({"msg": "Missing new_price or new_amount"}), 400
 
     try:
-        new_price_val = float(new_price) if new_price is not None else None
-        new_amount_val = float(new_amount) if new_amount is not None else None
-    except Exception:
+        new_price_val = _parse_nonnegative_money(new_price, "new_price") if new_price is not None else None
+        new_amount_val = _parse_nonnegative_money(new_amount, "new_amount") if new_amount is not None else None
+    except ValueError:
         return jsonify({"msg": "Invalid new_price/new_amount"}), 400
 
     qty = int(item.quantity or 0)
@@ -1207,9 +1435,9 @@ def modify_prescription_item(visit_id, item_id):
         return jsonify({"msg": "Invalid prescription item quantity"}), 400
 
     if new_price_val is None:
-        new_price_val = new_amount_val / qty
+        new_price_val = round(new_amount_val / qty, 2)
     if new_amount_val is None:
-        new_amount_val = new_price_val * qty
+        new_amount_val = round(new_price_val * qty, 2)
 
     if new_price is not None and new_amount is not None:
         expected = new_price_val * qty
@@ -1222,7 +1450,7 @@ def modify_prescription_item(visit_id, item_id):
         item.original_amount = item.amount
 
     user_id = get_jwt_identity()
-    now = datetime.utcnow()
+    now = utcnow()
 
     item.new_price = new_price_val
     item.new_amount = new_amount_val
@@ -1234,8 +1462,6 @@ def modify_prescription_item(visit_id, item_id):
     item.amount = new_amount_val
 
     visit.total_amount = _recompute_visit_total(visit)
-    db.session.commit()
-
     log = OperationLog(
         user_id=int(user_id),
         action_type='nurse_modify_price',
@@ -1268,8 +1494,9 @@ def modify_prescription_item(visit_id, item_id):
 
 @bp.route('/nurse/visits/<int:visit_id>/service-items', methods=['POST'])
 @role_required('nurse')
+@serialized_stock_mutation
 def add_service_item(visit_id):
-    visit = Visit.query.options(db.joinedload(Visit.payment)).get_or_404(visit_id)
+    visit = Visit.query.filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
 
     if visit.status != VISIT_STATUS_NURSE_VERIFIED:
         return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} to add service items"}), 400
@@ -1292,20 +1519,22 @@ def add_service_item(visit_id):
     if quantity <= 0:
         return jsonify({"msg": "Quantity must be > 0"}), 400
 
-    drug = Drug.query.get_or_404(drug_id)
+    drug = db.get_or_404(Drug, drug_id)
     if drug.type not in (2, 3):
         return jsonify({"msg": "Only service/consumable items (type=2/3) can be added by nurse"}), 400
 
     user_id = get_jwt_identity()
-    now = datetime.utcnow()
+    now = utcnow()
 
     amount = float(drug.price or 0) * quantity
+    purchase_cost = round(float(drug.purchase_price or 0) * quantity, 2)
     item = PrescriptionItem(
         visit_id=visit.id,
         drug_id=drug.id,
         quantity=quantity,
         price_at_visit=float(drug.price or 0),
         amount=amount,
+        purchase_cost=purchase_cost,
         modified_by=int(user_id),
         modified_at=now,
         modify_reason="护士新增诊疗项目" if drug.type == 2 else "护士新增耗材"
@@ -1313,7 +1542,7 @@ def add_service_item(visit_id):
     db.session.add(item)
 
     visit.total_amount = _recompute_visit_total(visit)
-    db.session.commit()
+    db.session.flush()
 
     log = OperationLog(
         user_id=int(user_id),
@@ -1350,8 +1579,9 @@ def add_service_item(visit_id):
 
 @bp.route('/nurse/visits/<int:visit_id>/service-items/<int:item_id>', methods=['PUT'])
 @role_required('nurse')
+@serialized_stock_mutation
 def update_service_item(visit_id, item_id):
-    visit = Visit.query.options(db.joinedload(Visit.payment)).get_or_404(visit_id)
+    visit = Visit.query.filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
 
     if visit.status != VISIT_STATUS_NURSE_VERIFIED:
         return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} to update service items"}), 400
@@ -1381,10 +1611,11 @@ def update_service_item(visit_id, item_id):
         return jsonify({"msg": "Quantity must be > 0"}), 400
 
     user_id = get_jwt_identity()
-    now = datetime.utcnow()
+    now = utcnow()
 
     item.quantity = quantity
     item.amount = float(item.price_at_visit or 0) * quantity
+    item.purchase_cost = round(float(item.drug.purchase_price or 0) * quantity, 2)
     item.modified_by = int(user_id)
     item.modified_at = now
     item.modify_reason = "护士修改诊疗项目数量"
@@ -1405,8 +1636,9 @@ def update_service_item(visit_id, item_id):
 
 @bp.route('/nurse/visits/<int:visit_id>/service-items/<int:item_id>', methods=['DELETE'])
 @role_required('nurse')
+@serialized_stock_mutation
 def delete_service_item(visit_id, item_id):
-    visit = Visit.query.options(db.joinedload(Visit.payment)).get_or_404(visit_id)
+    visit = Visit.query.filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
 
     if visit.status != VISIT_STATUS_NURSE_VERIFIED:
         return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} to delete service items"}), 400
@@ -1456,9 +1688,10 @@ def search_services():
 
 @bp.route('/nurse/visits/<int:visit_id>/execute', methods=['POST'])
 @role_required('nurse')
+@serialized_stock_mutation
 def execute_visit(visit_id):
     import math
-    visit = Visit.query.get_or_404(visit_id)
+    visit = Visit.query.filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
 
     if visit.status != VISIT_STATUS_NURSE_VERIFIED:
         return jsonify({"msg": f"Visit must be {VISIT_STATUS_NURSE_VERIFIED} before execution"}), 400
@@ -1466,19 +1699,81 @@ def execute_visit(visit_id):
     if visit.payment is not None or Payment.query.filter_by(visit_id=visit.id).first() is not None:
         return jsonify({"msg": "Visit already has payment"}), 400
 
+    items = list(visit.items or [])
+    lock_stock_rows(items)
+
     data = request.get_json() or {}
     payment_method = data.get('payment_method', 'cash')
     employee_discount = data.get('employee_discount', False)
     actual_amount = data.get('actual_amount')  # 向后兼容旧版单一实收金额
     actual_consultation_fee = data.get('actual_consultation_fee')  # 实收诊查费（新版职工优惠分项）
-    actual_drug_amount = data.get('actual_drug_amount')  # 实收药价（新版职工优惠分项）
+    actual_drug_amount = data.get('actual_drug_amount')  # 实收物资及项目金额（兼容旧字段名）
 
     visit.total_amount = _recompute_visit_total(visit)
+
+    try:
+        consultation_due = _parse_nonnegative_money(
+            visit.consultation_fee or 0, "consultation_fee"
+        )
+        final_amount = _parse_nonnegative_money(visit.total_amount or 0, "total_amount")
+        for item in items:
+            _parse_nonnegative_money(item.amount or 0, "item_amount")
+            _parse_nonnegative_money(item.price_at_visit or 0, "item_price")
+    except ValueError as exc:
+        return jsonify({"msg": "处方金额不合法，无法收费", "field": str(exc)}), 400
+
+    if payment_method not in _ALLOWED_PAYMENT_METHODS:
+        return jsonify({"msg": "Invalid payment_method", "field": "payment_method"}), 400
+    if not isinstance(employee_discount, bool):
+        return jsonify({"msg": "Invalid employee_discount", "field": "employee_discount"}), 400
+
+    original_amount = None
+    actual_consultation_fee_val = None
+    actual_drug_amount_val = None
+
+    try:
+        if employee_discount:
+            if not visit.patient or visit.patient.patient_type != 'staff':
+                return jsonify({"msg": "职工优惠仅适用于教职工档案", "field": "employee_discount"}), 400
+            has_consult = actual_consultation_fee is not None
+            has_items = actual_drug_amount is not None
+            if has_consult != has_items:
+                return jsonify({"msg": "优惠分项金额必须同时提供", "field": "employee_discount"}), 400
+
+            if has_consult and has_items:
+                if actual_amount is not None:
+                    return jsonify({"msg": "不能同时提交分项实收和旧版实收总额", "field": "actual_amount"}), 400
+                actual_consultation_fee_val = _parse_nonnegative_money(
+                    actual_consultation_fee, "actual_consultation_fee"
+                )
+                actual_drug_amount_val = _parse_nonnegative_money(
+                    actual_drug_amount, "actual_drug_amount"
+                )
+                items_due = round(max(final_amount - consultation_due, 0), 2)
+                if actual_consultation_fee_val > consultation_due:
+                    return jsonify({"msg": "实收诊查费不能高于应收", "field": "actual_consultation_fee"}), 400
+                if actual_drug_amount_val > items_due:
+                    return jsonify({"msg": "实收物资及项目金额不能高于应收", "field": "actual_drug_amount"}), 400
+                original_amount = final_amount
+                final_amount = round(actual_consultation_fee_val + actual_drug_amount_val, 2)
+            elif actual_amount is not None:
+                final_amount = _parse_nonnegative_money(actual_amount, "actual_amount")
+                if final_amount > round(float(visit.total_amount or 0), 2):
+                    return jsonify({"msg": "实收金额不能高于应收", "field": "actual_amount"}), 400
+                original_amount = round(float(visit.total_amount or 0), 2)
+            else:
+                return jsonify({"msg": "职工优惠必须提供实收金额", "field": "employee_discount"}), 400
+        elif any(value is not None for value in (actual_amount, actual_consultation_fee, actual_drug_amount)):
+            return jsonify({"msg": "非优惠结算不能提交优惠金额", "field": "employee_discount"}), 400
+    except ValueError as exc:
+        return jsonify({"msg": "金额格式不正确", "field": str(exc)}), 400
 
     group_cache = {}
     group_deduct = {}
 
-    for item in visit.items:
+    for item in items:
+        if item.drug is None:
+            return jsonify({"msg": "Prescription item has no drug"}), 400
         if item.drug.type in (1, 3) or item.drug.type is None:
             if item.drug.stock_group_code:
                 code = item.drug.stock_group_code
@@ -1505,6 +1800,22 @@ def execute_visit(visit_id):
                 return jsonify({"msg": f"Insufficient stock for {item.drug.name}"}), 400
 
     try:
+        movement_time = utcnow()
+        user_id = int(get_jwt_identity())
+        group_ledger_before = {}
+        for code in group_deduct:
+            primary_drug, _primary_amount = _stock_group_ledger_variant(group_cache[code])
+            group_ledger_before[code] = (primary_drug, int(primary_drug.stock or 0))
+        ordinary_ledger_before = {}
+        for item in items:
+            if item.drug is None or item.drug.stock_group_code:
+                continue
+            if item.drug.type in (1, 3) or item.drug.type is None:
+                ordinary_ledger_before.setdefault(
+                    item.drug.id,
+                    (item.drug, int(item.drug.stock or 0)),
+                )
+
         for code, units in group_deduct.items():
             group = group_cache[code]
             group.total_units -= int(units)
@@ -1514,7 +1825,7 @@ def execute_visit(visit_id):
             if group.retail_drug is not None and stocks.get("retail_stock") is not None:
                 group.retail_drug.stock = stocks["retail_stock"]
 
-        for item in visit.items:
+        for item in items:
             if item.drug.type in (1, 3) or item.drug.type is None:
                 if item.drug.stock_group_code:
                     continue
@@ -1522,33 +1833,39 @@ def execute_visit(visit_id):
                 stock_deduct = math.ceil(item.quantity / conv_rate) if item.is_scattered else item.quantity
                 item.drug.stock -= stock_deduct
 
-        user_id = get_jwt_identity()
         if visit.verified_by is None:
-            visit.verified_by = int(user_id)
+            visit.verified_by = user_id
         if visit.verified_at is None:
-            visit.verified_at = datetime.utcnow()
+            visit.verified_at = movement_time
 
-        # 计算实收金额（支持新版分项实收与旧版兼容）
-        final_amount = visit.total_amount
-        original_amount = None
-        actual_consultation_fee_val = None
-        actual_drug_amount_val = None
-        if employee_discount:
-            if actual_consultation_fee is not None and actual_drug_amount is not None:
-                # 新模式：护士分别填写实收诊查费和实收药价
-                actual_consultation_fee_val = float(actual_consultation_fee)
-                actual_drug_amount_val = float(actual_drug_amount)
-                final_amount = actual_consultation_fee_val + actual_drug_amount_val
-                original_amount = visit.total_amount
-            elif actual_amount is not None:
-                # 向后兼容旧模式：单一实收金额
-                original_amount = visit.total_amount
-                final_amount = float(actual_amount)
+        for code, (primary_drug, old_stock) in group_ledger_before.items():
+            db.session.add(InventoryRecord(
+                drug_id=primary_drug.id,
+                nurse_id=user_id,
+                visit_id=visit.id,
+                old_stock=old_stock,
+                new_stock=int(primary_drug.stock or 0),
+                operation_type=INVENTORY_OPERATION_DISPENSE,
+                remark=f"处方出库: visit={visit.id}",
+                timestamp=movement_time,
+            ))
+        for drug, old_stock in ordinary_ledger_before.values():
+            db.session.add(InventoryRecord(
+                drug_id=drug.id,
+                nurse_id=user_id,
+                visit_id=visit.id,
+                old_stock=old_stock,
+                new_stock=int(drug.stock or 0),
+                operation_type=INVENTORY_OPERATION_DISPENSE,
+                remark=f"处方出库: visit={visit.id}",
+                timestamp=movement_time,
+            ))
 
         payment = Payment(
             visit_id=visit.id,
-            nurse_id=int(user_id),
+            nurse_id=user_id,
             amount=final_amount,
+            payment_date=movement_time,
             payment_method=payment_method,
             is_employee_discount=employee_discount,
             original_amount=original_amount,
@@ -1615,21 +1932,23 @@ def execute_visit(visit_id):
             }
         }), 200
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"Transaction failed: {str(e)}"}), 500
+        current_app.logger.exception("Visit execution failed: visit_id=%s", visit_id)
+        return jsonify({"msg": "收费执行失败，请稍后重试"}), 500
 
 @bp.route('/nurse/payments/<int:payment_id>/print', methods=['PUT'])
 @role_required('nurse')
 def mark_printed(payment_id):
-    payment = Payment.query.get_or_404(payment_id)
+    payment = db.get_or_404(Payment, payment_id)
     try:
         payment.receipt_printed = True
         db.session.commit()
         return jsonify({"msg": "Receipt marked as printed"}), 200
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"标记打印失败: {str(e)}"}), 500
+        current_app.logger.exception("Receipt print status update failed: payment_id=%s", payment_id)
+        return jsonify({"msg": "标记打印失败，请稍后重试"}), 500
 
 @bp.route('/nurse/drugs', methods=['GET'])
 @role_required(['nurse', 'admin'])
@@ -1670,10 +1989,19 @@ def list_drugs():
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('size', 20, type=int)
-    query = query.order_by(Drug.storage_location.asc().nullslast(), Drug.id.desc())
+    query = query.order_by(*nulls_last_asc(Drug.storage_location), Drug.id.desc())
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
+    page_group_codes = {
+        drug.stock_group_code for drug in pagination.items if drug.stock_group_code
+    }
+    page_groups = (
+        DrugStockGroup.query.filter(DrugStockGroup.group_code.in_(page_group_codes)).all()
+        if page_group_codes else []
+    )
+    page_group_map = {group.group_code: group for group in page_groups}
     data = []
     for drug in pagination.items:
+        group = page_group_map.get(drug.stock_group_code)
         data.append({
             "id": drug.id,
             "name": drug.name,
@@ -1687,6 +2015,10 @@ def list_drugs():
             "variant_type": drug.variant_type,
             "stock_group_code": drug.stock_group_code,
             "unit_amount": drug.unit_amount,
+            "group_total_units": group.total_units if group else None,
+            "group_pack_amount": group.pack_amount if group else None,
+            "group_retail_amount": group.retail_amount if group else None,
+            "group_unit_name": group.unit_name if group else None,
             "has_scattered": drug.has_scattered,
             "scattered_price": drug.scattered_price,
             "conversion_rate": drug.conversion_rate,
@@ -1823,6 +2155,7 @@ def get_nurse_staff_list():
 
 @bp.route('/nurse/visits/<int:visit_id>/revoke', methods=['POST'])
 @role_required('nurse')
+@serialized_stock_mutation
 def revoke_visit(visit_id):
     """
     撤销已完成的交易：
@@ -1833,7 +2166,7 @@ def revoke_visit(visit_id):
     """
     visit = Visit.query.options(
         db.joinedload(Visit.payment),
-    ).get_or_404(visit_id)
+    ).filter_by(id=visit_id).with_for_update().populate_existing().first_or_404()
 
     # 校验状态
     if visit.status != VISIT_STATUS_COMPLETED:
@@ -1856,8 +2189,10 @@ def revoke_visit(visit_id):
     try:
         # 1. 还原库存
         items = list(visit.items or [])
+        lock_stock_rows(items)
         group_cache = {}
         group_restore = {}
+        ordinary_restore = {}
 
         for item in items:
             if item.drug is None:
@@ -1876,20 +2211,78 @@ def revoke_visit(visit_id):
                 group = group_cache.get(code)
                 if group is None:
                     group = DrugStockGroup.query.filter_by(group_code=code).first()
-                    if group:
-                        group_cache[code] = group
+                    if group is None:
+                        raise ValueError(f"库存组不存在: {code}")
+                    group_cache[code] = group
 
-                if group:
-                    unit_amount = int(item.drug.unit_amount or 0)
-                    if unit_amount > 0:
-                        restore_units = compute_deduct_units(qty, unit_amount)
-                        group_restore[code] = group_restore.get(code, 0) + restore_units
+                unit_amount = int(item.drug.unit_amount or 0)
+                if unit_amount <= 0:
+                    raise ValueError(f"库存组单位换算无效: {item.drug.name}")
+                restore_units = compute_deduct_units(qty, unit_amount)
+                group_restore[code] = group_restore.get(code, 0) + restore_units
                 continue
 
             # 普通药品库存还原
             conv_rate = item.drug.conversion_rate or 1
             stock_restore = math.ceil(qty / conv_rate) if item.is_scattered else qty
-            item.drug.stock += int(stock_restore)
+            existing_restore = ordinary_restore.get(item.drug.id)
+            if existing_restore is None:
+                ordinary_restore[item.drug.id] = [item.drug, int(stock_restore)]
+            else:
+                existing_restore[1] += int(stock_restore)
+
+        revoke_time = utcnow()
+        existing_dispense = InventoryRecord.query.filter_by(
+            visit_id=visit.id,
+            operation_type=INVENTORY_OPERATION_DISPENSE,
+        ).first()
+        if existing_dispense is None:
+            original_time = (
+                payment.payment_date if payment and payment.payment_date
+                else visit.verified_at or visit.timestamp or revoke_time
+            )
+            original_nurse_id = (
+                payment.nurse_id if payment and payment.nurse_id
+                else visit.verified_by or user_id
+            )
+            for drug, restore_units in ordinary_restore.values():
+                db.session.add(InventoryRecord(
+                    drug_id=drug.id,
+                    nurse_id=int(original_nurse_id),
+                    visit_id=visit.id,
+                    old_stock=int(restore_units),
+                    new_stock=0,
+                    operation_type=INVENTORY_OPERATION_DISPENSE,
+                    remark=f"历史处方出库补记: visit={visit.id}",
+                    timestamp=original_time,
+                ))
+            for code, restore_units in group_restore.items():
+                primary_drug, primary_amount = _stock_group_ledger_variant(group_cache[code])
+                if int(restore_units) % primary_amount != 0:
+                    raise ValueError(f"库存组历史出库无法按记账单位折算: {code}")
+                variant_quantity = int(restore_units) // primary_amount
+                db.session.add(InventoryRecord(
+                    drug_id=primary_drug.id,
+                    nurse_id=int(original_nurse_id),
+                    visit_id=visit.id,
+                    old_stock=variant_quantity,
+                    new_stock=0,
+                    operation_type=INVENTORY_OPERATION_DISPENSE,
+                    remark=f"历史处方出库补记: visit={visit.id}",
+                    timestamp=original_time,
+                ))
+
+        ordinary_before = {
+            drug_id: (drug, int(drug.stock or 0))
+            for drug_id, (drug, _restore_units) in ordinary_restore.items()
+        }
+        group_before = {}
+        for code in group_restore:
+            primary_drug, _primary_amount = _stock_group_ledger_variant(group_cache[code])
+            group_before[code] = (primary_drug, int(primary_drug.stock or 0))
+
+        for drug, restore_units in ordinary_restore.values():
+            drug.stock += int(restore_units)
 
         # 还原库存组
         for code, units in group_restore.items():
@@ -1901,6 +2294,29 @@ def revoke_visit(visit_id):
             if group.retail_drug is not None and stocks.get("retail_stock") is not None:
                 group.retail_drug.stock = stocks["retail_stock"]
 
+        for drug, old_stock in ordinary_before.values():
+            db.session.add(InventoryRecord(
+                drug_id=drug.id,
+                nurse_id=user_id,
+                visit_id=visit.id,
+                old_stock=old_stock,
+                new_stock=int(drug.stock or 0),
+                operation_type=INVENTORY_OPERATION_REVERSAL,
+                remark=_inventory_remark(f"撤销处方返库: visit={visit.id}; {reason}"),
+                timestamp=revoke_time,
+            ))
+        for code, (primary_drug, old_stock) in group_before.items():
+            db.session.add(InventoryRecord(
+                drug_id=primary_drug.id,
+                nurse_id=user_id,
+                visit_id=visit.id,
+                old_stock=old_stock,
+                new_stock=int(primary_drug.stock or 0),
+                operation_type=INVENTORY_OPERATION_REVERSAL,
+                remark=_inventory_remark(f"撤销处方返库: visit={visit.id}; {reason}"),
+                timestamp=revoke_time,
+            ))
+
         # 2. 删除 Payment 记录
         if payment:
             db.session.delete(payment)
@@ -1910,7 +2326,7 @@ def revoke_visit(visit_id):
 
         # 4. 记录审计信息
         visit.revoked_by = user_id
-        visit.revoked_at = datetime.utcnow()
+        visit.revoked_at = revoke_time
         visit.revoke_reason = reason
 
         log = OperationLog(
@@ -1927,6 +2343,7 @@ def revoke_visit(visit_id):
 
         return jsonify({"msg": "交易已成功撤销"}), 200
 
-    except Exception as e:
+    except Exception:
         db.session.rollback()
-        return jsonify({"msg": f"撤销失败: {str(e)}"}), 500
+        current_app.logger.exception("Visit revoke failed: visit_id=%s", visit_id)
+        return jsonify({"msg": "撤销失败，请稍后重试"}), 500

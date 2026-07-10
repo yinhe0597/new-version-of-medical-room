@@ -1,7 +1,7 @@
 import pandas as pd
 import sqlite3
 import numpy as np
-from datetime import datetime
+from datetime import datetime, timezone
 
 file_path = r'C:\Users\Administrator\Desktop\studentINF.xlsx'
 db_path = r'e:\yws\backend\app.db'
@@ -19,7 +19,7 @@ try:
     c.execute("DELETE FROM sqlite_sequence WHERE name='patient'")
 
     success_count = 0
-    now_str = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+    now_str = datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')
     
     records_to_insert = []
 

@@ -25,6 +25,10 @@
           <el-icon><FirstAidKit /></el-icon>
           <span>药品价格查看</span>
         </el-menu-item>
+        <el-menu-item index="/finance/account-settings">
+          <el-icon><Setting /></el-icon>
+          <span>账号设置</span>
+        </el-menu-item>
       </el-menu>
     </el-aside>
 
@@ -47,7 +51,7 @@
 import { computed } from 'vue'
 import { useUserStore } from '@/store/user'
 import { useRouter, useRoute } from 'vue-router'
-import { FirstAidKit, DataLine, Setting, User, Avatar, Coin, List } from '@element-plus/icons-vue'
+import { FirstAidKit, DataLine, Setting, Coin, List } from '@element-plus/icons-vue'
 
 const userStore = useUserStore()
 const router = useRouter()

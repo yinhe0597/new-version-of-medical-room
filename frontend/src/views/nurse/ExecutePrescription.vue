@@ -133,7 +133,7 @@
           </div>
 
           <div class="discount-section" style="margin-top: 10px;">
-            <el-checkbox v-model="employeeDiscount">职工优惠</el-checkbox>
+            <el-checkbox v-if="visitDetail.patient?.patient_type === 'staff'" v-model="employeeDiscount">职工优惠</el-checkbox>
             <div v-if="employeeDiscount" style="margin-top: 12px;">
               <div style="margin-bottom: 8px; display: flex; align-items: center; gap: 8px;">
                 <span style="min-width: 90px;">实收诊查费：</span>
@@ -148,7 +148,7 @@
                 <span style="color: #909399; font-size: 12px;">（应收 ¥{{ visitDetail.consultation_fee.toFixed(2) }}）</span>
               </div>
               <div style="display: flex; align-items: center; gap: 8px;">
-                <span style="min-width: 90px;">实收药价：</span>
+                <span style="min-width: 120px;">实收物资及项目：</span>
                 <el-input-number 
                   v-model="actualDrugAmount" 
                   :min="0" 
@@ -157,7 +157,7 @@
                   size="small"
                 />
                 <span>元</span>
-                <span style="color: #909399; font-size: 12px;">（应收 ¥{{ drugTotalFromItems.toFixed(2) }}，成本参考 ¥{{ drugCostTotal.toFixed(2) }}）</span>
+                <span style="color: #909399; font-size: 12px;">（应收 ¥{{ itemTotalFromItems.toFixed(2) }}，药品成本参考 ¥{{ drugCostTotal.toFixed(2) }}）</span>
               </div>
               <div style="margin-top: 4px; color: #409eff; font-size: 13px;">
                 合计实收：¥ {{ (actualConsultationFee + actualDrugAmount).toFixed(2) }}
@@ -300,10 +300,10 @@
 </template>
 
 <script setup>
-import { ref, onMounted, computed, reactive, watch } from 'vue'
+import { ref, onMounted, computed, reactive } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import request from '@/api/request'
-import { ElMessage } from 'element-plus'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const route = useRoute()
 const router = useRouter()
@@ -340,13 +340,6 @@ const serviceOptions = ref([])
 const addServiceForm = reactive({
   drug_id: null,
   quantity: 1
-})
-
-watch(employeeDiscount, (val) => {
-  if (val && visitDetail.value) {
-    actualConsultationFee.value = visitDetail.value.consultation_fee || 0
-    actualDrugAmount.value = drugTotalFromItems.value
-  }
 })
 
 const getStatusText = (status) => {
@@ -420,10 +413,10 @@ const drugItems = computed(() => {
   return visitDetail.value.items.filter(item => item.type !== 2 && item.type !== 3)
 })
 
-// 药品应收合计（用于职工优惠实收药价默认值）
-const drugTotalFromItems = computed(() => {
+// 所有处方物资和诊疗项目应收合计
+const itemTotalFromItems = computed(() => {
   if (!visitDetail.value) return 0
-  return drugItems.value.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
+  return visitDetail.value.items.reduce((sum, item) => sum + (Number(item.amount) || 0), 0)
 })
 
 // 药品成本合计（供护士参考）
@@ -457,11 +450,19 @@ const executeDisabledReason = computed(() => {
   return ''
 })
 
-const fetchDetail = async () => {
+const fetchDetail = async ({ resetDiscountAmounts = false } = {}) => {
   loading.value = true
   try {
     const res = await request.get(`/nurse/visits/${visitId}`)
     visitDetail.value = res.data
+    employeeDiscount.value = visitDetail.value?.patient?.patient_type === 'staff'
+    if (employeeDiscount.value && resetDiscountAmounts) {
+      actualConsultationFee.value = Number(visitDetail.value.consultation_fee) || 0
+      actualDrugAmount.value = itemTotalFromItems.value
+    } else if (!employeeDiscount.value) {
+      actualConsultationFee.value = 0
+      actualDrugAmount.value = 0
+    }
   } catch (error) {
     ElMessage.error(error.msg || '获取处方详情失败')
   } finally {
@@ -474,7 +475,7 @@ const handleVerify = async () => {
   try {
     await request.post(`/nurse/visits/${visitId}/verify`)
     ElMessage.success('已确认处方')
-    await fetchDetail()
+    await fetchDetail({ resetDiscountAmounts: true })
   } catch (error) {
     ElMessage.error(error.msg || '确认失败')
   } finally {
@@ -498,7 +499,7 @@ const submitReject = async () => {
     await request.post(`/nurse/visits/${visitId}/reject`, { reason })
     ElMessage.success('已驳回处方')
     showReject.value = false
-    await fetchDetail()
+    await fetchDetail({ resetDiscountAmounts: true })
   } catch (error) {
     ElMessage.error(error.msg || '驳回失败')
   } finally {
@@ -537,7 +538,7 @@ const submitModify = async () => {
     })
     ElMessage.success('改价已保存')
     showModify.value = false
-    await fetchDetail()
+    await fetchDetail({ resetDiscountAmounts: true })
   } catch (error) {
     ElMessage.error(error.msg || '改价失败')
   } finally {
@@ -636,7 +637,7 @@ const submitAddService = async () => {
     })
     ElMessage.success('添加成功')
     showAddService.value = false
-    await fetchDetail()
+    await fetchDetail({ resetDiscountAmounts: true })
   } catch (error) {
     ElMessage.error(error.msg || '添加失败')
   } finally {
@@ -650,31 +651,41 @@ const handleServiceQuantityChange = async (item) => {
     await request.put(`/nurse/visits/${visitId}/service-items/${item.item_id}`, {
       quantity: item.quantity
     })
-    await fetchDetail()
+    await fetchDetail({ resetDiscountAmounts: true })
   } catch (error) {
     ElMessage.error(error.msg || '修改失败')
-    await fetchDetail()
+    await fetchDetail({ resetDiscountAmounts: true })
   }
 }
 
 const handleDeleteService = async (item) => {
   if (!item.item_id) return
-  await ElMessage.confirm('确定要删除这个诊疗项目吗？', '提示', {
-    confirmButtonText: '确定',
-    cancelButtonText: '取消',
-    type: 'warning'
-  })
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除追加项目“${item.drug_name || '未命名项目'}”吗？`,
+      '删除追加项目',
+      {
+        confirmButtonText: '确定删除',
+        cancelButtonText: '取消',
+        type: 'warning'
+      }
+    )
+  } catch (action) {
+    if (action === 'cancel' || action === 'close') return
+    throw action
+  }
+
   try {
     await request.delete(`/nurse/visits/${visitId}/service-items/${item.item_id}`)
     ElMessage.success('删除成功')
-    await fetchDetail()
+    await fetchDetail({ resetDiscountAmounts: true })
   } catch (error) {
     ElMessage.error(error.msg || '删除失败')
   }
 }
 
 onMounted(() => {
-  fetchDetail()
+  fetchDetail({ resetDiscountAmounts: true })
 })
 </script>
 
