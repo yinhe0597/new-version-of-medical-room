@@ -9,6 +9,15 @@ Create Date: 2026-07-11 00:00:00.000000
 from alembic import op
 import sqlalchemy as sa
 
+from backend.migrations.migration_helpers import (
+    add_missing_columns as _add_missing_columns,
+    ensure_foreign_key as _ensure_foreign_key,
+    ensure_index as _ensure_index,
+    ensure_unique as _ensure_unique,
+    refuse_unsafe_downgrade as _refuse_unsafe_downgrade,
+    require_table_shape as _require_table_shape,
+)
+
 
 revision = "b6e1d8f3a2c4"
 down_revision = "e7f8a9b0c1d2"
@@ -28,73 +37,101 @@ def _column_names(table_name):
     return {column["name"] for column in _inspector().get_columns(table_name)}
 
 
-def _add_missing_columns(table_name, columns):
-    existing = _column_names(table_name)
-    missing = [column for column in columns if column.name not in existing]
-    if not missing:
-        return
-    with op.batch_alter_table(table_name, schema=None) as batch_op:
-        for column in missing:
-            batch_op.add_column(column)
-
-
-def _ensure_index(index_name, table_name, columns, unique=False):
-    existing = {
-        index["name"]
-        for index in _inspector().get_indexes(table_name)
-        if index.get("name")
-    }
-    if index_name not in existing:
-        op.create_index(index_name, table_name, columns, unique=unique)
-
-
-def _ensure_unique(constraint_name, table_name, columns):
-    expected = set(columns)
-    for constraint in _inspector().get_unique_constraints(table_name):
-        if set(constraint.get("column_names") or ()) == expected:
-            return
-    with op.batch_alter_table(table_name, schema=None) as batch_op:
-        batch_op.create_unique_constraint(constraint_name, columns)
-
-
-def _ensure_foreign_key(
-    constraint_name,
+def _normalize_string_length(
     table_name,
-    local_columns,
-    referred_table,
-    remote_columns,
+    column_name,
+    target_length,
+    *,
+    allow_text=False,
 ):
-    for foreign_key in _inspector().get_foreign_keys(table_name):
-        if (
-            list(foreign_key.get("constrained_columns") or ()) == list(local_columns)
-            and foreign_key.get("referred_table") == referred_table
-            and list(foreign_key.get("referred_columns") or ()) == list(remote_columns)
-        ):
+    column = next(
+        (
+            item
+            for item in _inspector().get_columns(table_name)
+            if item["name"] == column_name
+        ),
+        None,
+    )
+    if column is None:
+        raise RuntimeError(f"Required column {table_name}.{column_name} is missing")
+
+    current_type = column["type"]
+    current_length = getattr(current_type, "length", None)
+    is_text = isinstance(current_type, sa.Text)
+    if is_text and not allow_text:
+        raise RuntimeError(
+            f"Cannot safely convert {table_name}.{column_name} from "
+            f"{current_type!r} to VARCHAR({target_length})"
+        )
+    if not isinstance(current_type, sa.String):
+        raise RuntimeError(
+            f"Cannot safely convert {table_name}.{column_name} from {current_type!r} "
+            f"to VARCHAR({target_length})"
+        )
+    if not is_text and isinstance(current_length, int):
+        if current_length >= target_length:
             return
-    with op.batch_alter_table(table_name, schema=None) as batch_op:
-        batch_op.create_foreign_key(
-            constraint_name,
-            referred_table,
-            local_columns,
-            remote_columns,
+    elif not is_text:
+        raise RuntimeError(
+            f"Cannot safely determine the length of "
+            f"{table_name}.{column_name}: {current_type!r}"
+        )
+    if isinstance(current_type, sa.CHAR):
+        raise RuntimeError(
+            f"Cannot safely convert fixed-width {table_name}.{column_name} "
+            f"from {current_type!r}"
+        )
+    if current_length == target_length:
+        return
+
+    bind = op.get_bind()
+    preparer = bind.dialect.identifier_preparer
+    quoted_table = preparer.quote(table_name)
+    quoted_column = preparer.quote(column_name)
+    length_function = (
+        "CHAR_LENGTH" if bind.dialect.name in {"mysql", "mariadb"} else "LENGTH"
+    )
+    max_length = bind.execute(
+        sa.text(
+            f"SELECT MAX({length_function}({quoted_column})) FROM {quoted_table}"
+        )
+    ).scalar()
+    if max_length is not None and max_length > target_length:
+        raise RuntimeError(
+            f"Cannot safely convert {table_name}.{column_name} to "
+            f"VARCHAR({target_length}): existing data is {max_length} characters long"
         )
 
+    if is_text:
+        if bind.dialect.name in {"mysql", "mariadb"}:
+            from sqlalchemy.dialects.mysql import VARCHAR
 
-def _widen_password_hash():
-    password_hash = next(
-        column
-        for column in _inspector().get_columns("user")
-        if column["name"] == "password_hash"
-    )
-    current_length = getattr(password_hash["type"], "length", None)
-    if not isinstance(current_length, int) or current_length >= 256:
-        return
-    with op.batch_alter_table("user", schema=None) as batch_op:
+            target_type = VARCHAR(
+                length=target_length,
+                charset=getattr(current_type, "charset", None),
+                collation=getattr(current_type, "collation", None),
+                ascii=getattr(current_type, "ascii", False),
+                unicode=getattr(current_type, "unicode", False),
+                binary=getattr(current_type, "binary", False),
+                national=getattr(current_type, "national", False),
+            )
+        else:
+            target_type = sa.String(
+                length=target_length,
+                collation=getattr(current_type, "collation", None),
+            )
+    else:
+        target_type = current_type.copy()
+        target_type.length = target_length
+
+    with op.batch_alter_table(table_name, schema=None) as batch_op:
         batch_op.alter_column(
-            "password_hash",
-            existing_type=password_hash["type"],
-            type_=sa.String(length=256),
-            existing_nullable=password_hash.get("nullable", True),
+            column_name,
+            existing_type=current_type,
+            type_=target_type,
+            existing_nullable=column.get("nullable", True),
+            existing_server_default=column.get("default"),
+            existing_comment=column.get("comment"),
         )
 
 
@@ -163,6 +200,79 @@ def _create_missing_tables():
             sa.PrimaryKeyConstraint("id"),
         )
 
+    _add_missing_columns(
+        "inventory_record",
+        [
+            sa.Column("visit_id", sa.Integer(), nullable=True),
+            sa.Column("operation_type", sa.String(length=20), nullable=True),
+        ],
+    )
+
+    _require_table_shape(
+        "daily_stock_snapshot",
+        {"id", "drug_id", "date", "stock", "created_at"},
+    )
+    _require_table_shape(
+        "operation_log",
+        {
+            "id", "user_id", "action_type", "target_type", "target_id",
+            "summary", "details", "timestamp",
+        },
+    )
+    _require_table_shape(
+        "text_template",
+        {
+            "id", "doctor_id", "category", "title", "content",
+            "created_at", "updated_at",
+        },
+    )
+    _require_table_shape(
+        "inventory_record",
+        {
+            "id", "drug_id", "nurse_id", "visit_id", "old_stock",
+            "new_stock", "operation_type", "remark", "timestamp",
+        },
+    )
+
+    _ensure_unique(
+        "uq_daily_stock_snapshot_drug_date",
+        "daily_stock_snapshot",
+        ["drug_id", "date"],
+    )
+    _ensure_foreign_key(
+        "fk_daily_stock_snapshot_drug_id_drug",
+        "daily_stock_snapshot",
+        ["drug_id"],
+        "drug",
+        ["id"],
+    )
+    _ensure_foreign_key(
+        "fk_operation_log_user_id_user",
+        "operation_log",
+        ["user_id"],
+        "user",
+        ["id"],
+    )
+    _ensure_foreign_key(
+        "fk_text_template_doctor_id_user",
+        "text_template",
+        ["doctor_id"],
+        "user",
+        ["id"],
+    )
+    for column_name, referred_table in (
+        ("drug_id", "drug"),
+        ("nurse_id", "user"),
+        ("visit_id", "visit"),
+    ):
+        _ensure_foreign_key(
+            f"fk_inventory_record_{column_name}_{referred_table}",
+            "inventory_record",
+            [column_name],
+            referred_table,
+            ["id"],
+        )
+
 
 def upgrade():
     _create_missing_tables()
@@ -228,7 +338,9 @@ def upgrade():
         ],
     )
 
-    _widen_password_hash()
+    _normalize_string_length("user", "password_hash", 256)
+    _normalize_string_length("patient", "name_pinyin", 255, allow_text=True)
+    _normalize_string_length("patient", "name_initials", 255, allow_text=True)
     _ensure_foreign_key(
         "fk_visit_revoked_by_user",
         "visit",
@@ -273,84 +385,5 @@ def upgrade():
     _ensure_index("ix_user_is_active", "user", ["is_active"])
 
 
-def _drop_index_if_present(index_name, table_name):
-    existing = {
-        index["name"]
-        for index in _inspector().get_indexes(table_name)
-        if index.get("name")
-    }
-    if index_name in existing:
-        op.drop_index(index_name, table_name=table_name)
-
-
-def _drop_columns_if_present(table_name, column_names):
-    existing = _column_names(table_name)
-    present = [name for name in column_names if name in existing]
-    if not present:
-        return
-    with op.batch_alter_table(table_name, schema=None) as batch_op:
-        for column_name in present:
-            batch_op.drop_column(column_name)
-
-
 def downgrade():
-    _drop_index_if_present("ix_user_is_active", "user")
-    _drop_index_if_present("ix_patient_patient_type", "patient")
-    _drop_index_if_present("ix_patient_name_pinyin", "patient")
-    _drop_index_if_present("ix_patient_name_initials", "patient")
-    _drop_index_if_present("ix_patient_id_card", "patient")
-
-    foreign_keys = _inspector().get_foreign_keys("visit")
-    revoked_key = next(
-        (
-            foreign_key
-            for foreign_key in foreign_keys
-            if foreign_key.get("name") == "fk_visit_revoked_by_user"
-        ),
-        None,
-    )
-    if revoked_key is not None:
-        with op.batch_alter_table("visit", schema=None) as batch_op:
-            batch_op.drop_constraint("fk_visit_revoked_by_user", type_="foreignkey")
-
-    _drop_columns_if_present(
-        "visit",
-        ["revoke_reason", "revoked_at", "revoked_by", "special_note"],
-    )
-    _drop_columns_if_present("user", ["is_active", "token_version"])
-    _drop_columns_if_present(
-        "prescription_item",
-        [
-            "infusion_method",
-            "infusion_dosage_unit",
-            "infusion_dosage_value",
-            "infusion_group",
-            "is_intravenous",
-            "purchase_cost",
-            "is_scattered",
-        ],
-    )
-    _drop_columns_if_present(
-        "payment",
-        [
-            "actual_drug_amount",
-            "actual_consultation_fee",
-            "receipt_snapshot",
-            "original_amount",
-            "is_employee_discount",
-        ],
-    )
-    _drop_columns_if_present(
-        "patient",
-        ["shop_name", "department", "patient_type", "name_initials", "name_pinyin"],
-    )
-    _drop_columns_if_present("drug", ["expiry_date", "storage_location"])
-
-    for table_name in (
-        "inventory_record",
-        "text_template",
-        "operation_log",
-        "daily_stock_snapshot",
-    ):
-        if _table_exists(table_name):
-            op.drop_table(table_name)
+    _refuse_unsafe_downgrade(revision)

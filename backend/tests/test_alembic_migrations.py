@@ -3,7 +3,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from flask_migrate import upgrade
+from flask_migrate import downgrade, upgrade
 from sqlalchemy import inspect, text
 from sqlalchemy.schema import UniqueConstraint
 
@@ -62,6 +62,10 @@ class AlembicMigrationTestCase(unittest.TestCase):
                 db.session.execute(text("SELECT version_num FROM alembic_version")).scalar_one(),
                 CURRENT_HEAD,
             )
+            self.assertEqual(
+                db.session.execute(text("PRAGMA foreign_keys")).scalar_one(),
+                1,
+            )
 
             allowed_legacy_columns = {"drug": {"monthly_sort_order"}}
             for table_name, model_table in db.metadata.tables.items():
@@ -94,6 +98,52 @@ class AlembicMigrationTestCase(unittest.TestCase):
                     }
                 )
                 self.assertEqual(actual_index_semantics, model_index_semantics, table_name)
+
+                actual_columns_by_name = {
+                    column["name"]: column
+                    for column in inspector.get_columns(table_name)
+                }
+                for model_column in model_table.columns:
+                    actual_column = actual_columns_by_name[model_column.name]
+                    self.assertIs(
+                        actual_column["type"]._type_affinity,
+                        model_column.type._type_affinity,
+                        f"{table_name}.{model_column.name}",
+                    )
+                    expected_length = getattr(model_column.type, "length", None)
+                    if expected_length is not None:
+                        self.assertEqual(
+                            getattr(actual_column["type"], "length", None),
+                            expected_length,
+                            f"{table_name}.{model_column.name}",
+                        )
+                    self.assertEqual(
+                        actual_column["nullable"],
+                        model_column.nullable,
+                        f"{table_name}.{model_column.name}",
+                    )
+
+                model_foreign_keys = {
+                    (
+                        tuple(column.name for column in constraint.columns),
+                        constraint.referred_table.name,
+                        tuple(element.column.name for element in constraint.elements),
+                    )
+                    for constraint in model_table.foreign_key_constraints
+                }
+                actual_foreign_keys = {
+                    (
+                        tuple(foreign_key.get("constrained_columns") or ()),
+                        foreign_key.get("referred_table"),
+                        tuple(foreign_key.get("referred_columns") or ()),
+                    )
+                    for foreign_key in inspector.get_foreign_keys(table_name)
+                }
+                self.assertEqual(
+                    actual_foreign_keys,
+                    model_foreign_keys,
+                    table_name,
+                )
 
             expected_columns = {
                 "drug": {
@@ -181,6 +231,25 @@ class AlembicMigrationTestCase(unittest.TestCase):
                     "VALUES (1, 'Legacy Drug', '10mg', 'box', 12.5, 7, 1, 1)"
                 )
             )
+            db.session.execute(
+                text(
+                    "INSERT INTO visit (id, patient_id, doctor_id, status) "
+                    "VALUES (1, 1, 1, 'pending')"
+                )
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO payment (id, visit_id, nurse_id, amount) "
+                    "VALUES (1, 1, 1, 12.5)"
+                )
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO prescription_item "
+                    "(id, visit_id, drug_id, quantity, price_at_visit, amount) "
+                    "VALUES (1, 1, 1, 1, 12.5, 12.5)"
+                )
+            )
             db.session.commit()
 
             upgrade(directory=MIGRATIONS_DIR, revision=PRE_BASELINE_HEAD)
@@ -236,6 +305,231 @@ class AlembicMigrationTestCase(unittest.TestCase):
                 with app.app_context():
                     db.session.remove()
                     db.engine.dispose()
+
+    def test_upgrade_repairs_legacy_inventory_table_and_preserves_orphans(self):
+        def assertions():
+            upgrade(directory=MIGRATIONS_DIR, revision=HISTORICAL_SPLIT_REVISION)
+            db.session.execute(
+                text(
+                    "INSERT INTO user (id, username, password_hash, real_name, role) "
+                    "VALUES (1, 'legacy-nurse', 'legacy-hash', 'Legacy Nurse', 'nurse')"
+                )
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO drug "
+                    "(id, name, specification, unit, price, stock, status, type) "
+                    "VALUES (1, 'Deleted Drug', '10mg', 'box', 12.5, 0, 1, 1)"
+                )
+            )
+            db.session.execute(
+                text(
+                    "CREATE TABLE inventory_record ("
+                    "id INTEGER NOT NULL PRIMARY KEY, "
+                    "drug_id INTEGER, nurse_id INTEGER, old_stock INTEGER, "
+                    "new_stock INTEGER, remark VARCHAR(200), timestamp DATETIME, "
+                    "FOREIGN KEY(drug_id) REFERENCES drug(id), "
+                    "FOREIGN KEY(nurse_id) REFERENCES user(id))"
+                )
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO inventory_record "
+                    "(id, drug_id, nurse_id, old_stock, new_stock, remark) "
+                    "VALUES (1, 1, 1, 2, 0, 'legacy outbound')"
+                )
+            )
+            db.session.commit()
+
+            db.session.remove()
+            with db.engine.connect() as connection:
+                connection.exec_driver_sql("PRAGMA foreign_keys=OFF")
+                connection.commit()
+                connection.execute(text("DELETE FROM drug WHERE id = 1"))
+                connection.commit()
+                connection.exec_driver_sql("PRAGMA foreign_keys=ON")
+                connection.commit()
+
+            upgrade(directory=MIGRATIONS_DIR)
+
+            columns = {
+                column["name"]
+                for column in inspect(db.engine).get_columns("inventory_record")
+            }
+            self.assertTrue({"visit_id", "operation_type"}.issubset(columns))
+            self.assertEqual(
+                db.session.execute(
+                    text(
+                        "SELECT old_stock, new_stock, remark "
+                        "FROM inventory_record WHERE id = 1"
+                    )
+                ).one(),
+                (2, 0, "legacy outbound"),
+            )
+            violations = db.session.execute(text("PRAGMA foreign_key_check")).all()
+            self.assertEqual(
+                [
+                    (row[0], row[1], row[2])
+                    for row in violations
+                ],
+                [("inventory_record", 1, "drug")],
+            )
+            self.assertEqual(
+                db.session.execute(text("PRAGMA foreign_keys")).scalar_one(),
+                1,
+            )
+
+        self._run_with_database(assertions)
+
+    def test_late_upgrade_failure_rolls_back_and_restores_foreign_keys(self):
+        def assertions():
+            upgrade(directory=MIGRATIONS_DIR, revision=HISTORICAL_SPLIT_REVISION)
+            db.session.execute(
+                text(
+                    "CREATE TABLE drug_stock_group ("
+                    "id INTEGER NOT NULL PRIMARY KEY)"
+                )
+            )
+            db.session.commit()
+
+            with self.assertRaises(SystemExit) as raised:
+                upgrade(directory=MIGRATIONS_DIR)
+            self.assertEqual(raised.exception.code, 1)
+
+            db.session.remove()
+            with db.engine.connect() as connection:
+                self.assertEqual(
+                    connection.execute(
+                        text("SELECT version_num FROM alembic_version")
+                    ).scalar_one(),
+                    HISTORICAL_SPLIT_REVISION,
+                )
+                patient_columns = {
+                    column["name"]
+                    for column in inspect(connection).get_columns("patient")
+                }
+                drug_columns = {
+                    column["name"]
+                    for column in inspect(connection).get_columns("drug")
+                }
+                visit_columns = {
+                    column["name"]
+                    for column in inspect(connection).get_columns("visit")
+                }
+                self.assertNotIn("is_temporary", patient_columns)
+                self.assertNotIn("counselor_name", patient_columns)
+                self.assertNotIn("batch_no", drug_columns)
+                self.assertNotIn("verified_by", visit_columns)
+                self.assertEqual(
+                    {
+                        column["name"]
+                        for column in inspect(connection).get_columns(
+                            "drug_stock_group"
+                        )
+                    },
+                    {"id"},
+                )
+                self.assertEqual(
+                    connection.exec_driver_sql("PRAGMA foreign_keys").scalar(),
+                    1,
+                )
+
+        self._run_with_database(assertions)
+
+    def test_empty_partial_unversioned_schema_can_resume(self):
+        def assertions():
+            db.session.execute(
+                text(
+                    "CREATE TABLE drug ("
+                    "id INTEGER NOT NULL PRIMARY KEY, name VARCHAR(128), "
+                    "specification VARCHAR(50), unit VARCHAR(10), price FLOAT, "
+                    "stock INTEGER, status INTEGER)"
+                )
+            )
+            db.session.commit()
+
+            upgrade(directory=MIGRATIONS_DIR)
+
+            self.assertEqual(
+                db.session.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one(),
+                CURRENT_HEAD,
+            )
+            self.assertEqual(
+                set(inspect(db.engine).get_table_names()) - {"alembic_version"},
+                set(db.metadata.tables),
+            )
+
+        self._run_with_database(assertions)
+
+    def test_nonempty_partial_unversioned_schema_is_rejected(self):
+        def assertions():
+            db.session.execute(
+                text(
+                    "CREATE TABLE drug ("
+                    "id INTEGER NOT NULL PRIMARY KEY, name VARCHAR(128), "
+                    "specification VARCHAR(50), unit VARCHAR(10), price FLOAT, "
+                    "stock INTEGER, status INTEGER)"
+                )
+            )
+            db.session.execute(
+                text(
+                    "INSERT INTO drug "
+                    "(id, name, specification, unit, price, stock, status) "
+                    "VALUES (1, 'Existing Drug', '10mg', 'box', 1.0, 1, 1)"
+                )
+            )
+            db.session.commit()
+
+            with self.assertRaises(SystemExit) as raised:
+                upgrade(directory=MIGRATIONS_DIR)
+            self.assertEqual(raised.exception.code, 1)
+            self.assertEqual(
+                db.session.execute(text("SELECT name FROM drug WHERE id = 1")).scalar_one(),
+                "Existing Drug",
+            )
+
+        self._run_with_database(assertions)
+
+    def test_downgrade_is_refused_without_mutating_data(self):
+        def assertions():
+            upgrade(directory=MIGRATIONS_DIR)
+            db.session.execute(
+                text(
+                    "INSERT INTO user "
+                    "(id, username, password_hash, real_name, role) "
+                    "VALUES (1, 'keep-me', 'hash', 'Keep Me', 'admin')"
+                )
+            )
+            db.session.commit()
+
+            with self.assertRaises(SystemExit) as raised:
+                downgrade(directory=MIGRATIONS_DIR, revision="-1")
+            self.assertEqual(raised.exception.code, 1)
+            self.assertEqual(
+                db.session.execute(
+                    text("SELECT version_num FROM alembic_version")
+                ).scalar_one(),
+                CURRENT_HEAD,
+            )
+            self.assertEqual(
+                db.session.execute(
+                    text("SELECT username FROM user WHERE id = 1")
+                ).scalar_one(),
+                "keep-me",
+            )
+
+        self._run_with_database(assertions)
+
+    def test_offline_sql_generation_is_explicitly_rejected(self):
+        def assertions():
+            with self.assertRaises(SystemExit) as raised:
+                upgrade(directory=MIGRATIONS_DIR, sql=True)
+            self.assertEqual(raised.exception.code, 1)
+            self.assertEqual(inspect(db.engine).get_table_names(), [])
+
+        self._run_with_database(assertions)
 
 
 if __name__ == "__main__":

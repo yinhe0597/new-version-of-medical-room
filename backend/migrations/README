@@ -1,1 +1,35 @@
 Single-database configuration for Flask.
+
+The historical migration chain through revision b6e1d8f3a2c4 is forward-only.
+Those revisions can adopt tables, columns, indexes, and constraints created by
+older runtime schema synchronization, so they cannot determine object ownership
+well enough to downgrade without risking pre-existing data. Restore a verified
+pre-migration database backup instead of running `flask db downgrade` across
+this boundary.
+
+These adoption revisions require live schema and data inspection, so Alembic
+offline/`--sql` generation is intentionally unsupported. Stop all application
+instances, take and verify a backup, and run one online migrator at a time. Test
+the same command against an isolated database copy before touching production.
+
+For MySQL 8.0.21+, use the repository validator only against an isolated,
+explicitly authorized instance exposed on `127.0.0.1`. Store the administrator
+credential in a local `mysql_config_editor` login path; do not put the password
+in a command, environment variable, or repository file.
+
+```powershell
+& 'C:\Program Files\MySQL\MySQL Server 8.0\bin\mysql_config_editor.exe' set `
+  --login-path=codex-medroom --host=127.0.0.1 --port=3306 --user=root --password
+
+& backend\.venv\Scripts\python.exe scripts\validate_mysql_alembic.py `
+  --login-path=codex-medroom --probe
+
+& backend\.venv\Scripts\python.exe scripts\validate_mysql_alembic.py `
+  --login-path=codex-medroom --expected-server-uuid=<uuid-from-probe>
+```
+
+The second command creates only random, scenario-specific databases and a
+random local account. Account attributes bind the exact database names, run ID,
+and server UUID; cleanup refuses to delete resources if those attributes no
+longer match. Binary logging is rejected by default. Add `--allow-binlog` only
+after accepting that the temporary DDL and account metadata will be logged.
