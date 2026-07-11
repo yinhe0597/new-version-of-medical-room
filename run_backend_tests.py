@@ -10,7 +10,7 @@ def main() -> int:
 
     suite = unittest.defaultTestLoader.discover(
         start_dir=os.path.join(root, "backend", "tests"),
-        pattern="test_admin_patient_import_required_fields.py",
+        pattern="test_*.py",
     )
     result = unittest.TextTestRunner(verbosity=2).run(suite)
     return 0 if result.wasSuccessful() else 1

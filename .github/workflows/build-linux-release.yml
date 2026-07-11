@@ -58,10 +58,10 @@ jobs:
           cache-dependency-path: backend/requirements.txt
 
       # ── 4. 设置 Node.js ──────────────────────────────────
-      - name: Set up Node.js 18
+      - name: Set up Node.js 22.12
         uses: actions/setup-node@v4
         with:
-          node-version: '18'
+          node-version: '22.12.0'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
 
@@ -82,7 +82,14 @@ jobs:
           pip install -r backend/requirements.txt
           pip install pyinstaller
 
-      # ── 7. 构建前端 ──────────────────────────────────────
+      # ── 7. 后端测试与编译检查 ────────────────────────────
+      - name: Run backend tests
+        run: python run_backend_tests.py
+
+      - name: Compile Python sources
+        run: python -m compileall -q -x '\.venv' backend run_prod.py run_backend_tests.py
+
+      # ── 8. 构建前端 ──────────────────────────────────────
       - name: Build frontend
         run: |
           cd frontend
@@ -91,7 +98,7 @@ jobs:
           echo "Frontend build output:"
           ls -la dist/
 
-      # ── 8. PyInstaller 打包 ────────────────────────────
+      # ── 9. PyInstaller 打包 ──────────────────────────────
       - name: PyInstaller build
         run: |
           pyinstaller --clean --noconfirm medical_room_linux.spec
@@ -99,7 +106,7 @@ jobs:
           ls -lh dist/medical_room
           file dist/medical_room
 
-      # ── 9. 打包 tar.gz ───────────────────────────────────
+      # ── 10. 打包 tar.gz ──────────────────────────────────
       - name: Package tar.gz
         id: tarball
         env:
@@ -163,7 +170,7 @@ jobs:
           echo "filename=${TARBALL}" >> "$GITHUB_OUTPUT"
           echo "Size: $(du -h "${TARBALL}" | cut -f1)"
 
-      # ── 10. 打包 AppImage ────────────────────────────────
+      # ── 11. 打包 AppImage ────────────────────────────────
       - name: Package AppImage
         id: appimage
         env:
@@ -249,7 +256,7 @@ jobs:
             echo "built=false" >> "$GITHUB_OUTPUT"
           fi
 
-      # ── 11. 创建 Release 并上传 ─────────────────────────
+      # ── 12. 创建 Release 并上传 ──────────────────────────
       - name: Create Release and Upload
         uses: softprops/action-gh-release@v2
         with:
@@ -292,7 +299,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # ── 12. 输出构建摘要 ─────────────────────────────────
+      # ── 13. 输出构建摘要 ─────────────────────────────────
       - name: Build summary
         run: |
           echo "## 🎉 Build Complete!" >> "$GITHUB_STEP_SUMMARY"

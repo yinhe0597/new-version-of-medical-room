@@ -6,8 +6,8 @@ from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, Presc
 import json
 from backend.app.utils.decorators import role_required
 from backend.app.utils.query import nulls_last_asc
-from backend.app.services.time_utils import local_now, utc_naive_to_local
-from datetime import datetime, timezone, timedelta
+from backend.app.services.time_utils import format_local_datetime, local_now, parse_local_datetime
+from datetime import datetime, timedelta
 import math
 import time
 import re
@@ -72,11 +72,7 @@ def _age_from_id_card(id_card: str):
         return None
 
 def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
-    if dt is None:
-        return None
-    if getattr(dt, "tzinfo", None) is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return utc_naive_to_local(dt).strftime(fmt)
+    return format_local_datetime(dt, fmt)
 
 def _is_valid_cn_id_card(id_card: str) -> bool:
     if not isinstance(id_card, str):
@@ -457,7 +453,7 @@ def get_patient_history(patient_id):
     for visit in visits:
         data.append({
             "visit_id": visit.id,
-            "date": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "date": _format_local_dt(visit.timestamp, "%Y-%m-%d %H:%M"),
             "diagnosis": visit.diagnosis,
             "chief_complaint": visit.chief_complaint,
             "total_amount": visit.total_amount,
@@ -831,7 +827,10 @@ def get_visit_history():
     # Optional filters
     start_date = request.args.get('start_date')
     if start_date:
-        query = query.filter(Visit.timestamp >= datetime.strptime(start_date, '%Y-%m-%d'))
+        try:
+            query = query.filter(Visit.timestamp >= parse_local_datetime(start_date))
+        except ValueError:
+            return jsonify({"msg": "Invalid date format"}), 400
 
     # Preload patient information to avoid N+1 queries
     query = query.options(db.joinedload(Visit.patient))
@@ -1068,14 +1067,12 @@ def get_visit_revisions(visit_id):
 
     data = []
     for log in logs:
-        from datetime import timedelta
-        local_time = log.timestamp + timedelta(hours=8) if log.timestamp else None
         data.append({
             "id": log.id,
             "user_name": log.user.real_name if log.user else "未知",
             "summary": log.summary,
             "details": json.loads(log.details) if log.details else {},
-            "timestamp": local_time.strftime("%Y-%m-%d %H:%M:%S") if local_time else ""
+            "timestamp": _format_local_dt(log.timestamp, "%Y-%m-%d %H:%M:%S") or ""
         })
 
     return jsonify({"data": data}), 200

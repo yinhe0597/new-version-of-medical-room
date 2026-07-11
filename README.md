@@ -164,7 +164,7 @@ chmod +x 医务室管理系统-v0.0.16-linux.AppImage
 
 **从源码构建 Linux 包：**
 ```bash
-# 需要 Python 3.8+ 和 Node.js 16+
+# 需要 Python 3.8+ 和 Node.js 22.12+
 bash build_linux.sh
 # 输出到 dist_linux/ 目录，包含 tar.gz 和 AppImage 两种格式
 ```
@@ -188,11 +188,16 @@ python import_icd10.py
 python run.py
 ```
 
-**前端 (Node.js 18+)**
+**前端 (Node.js 22.12+)**
 ```bash
 cd frontend
 npm install
 npm run dev
+```
+
+**后端测试（项目根目录）**
+```bash
+python run_backend_tests.py
 ```
 
 ### 🔑 首次账号

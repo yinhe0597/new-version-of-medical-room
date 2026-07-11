@@ -193,7 +193,7 @@ def _configure_database(app):
             conn.execute(sqlalchemy.text("PRAGMA foreign_keys=ON"))
             conn.execute(sqlalchemy.text("PRAGMA busy_timeout=15000"))
 
-def create_app(config_class=None):
+def create_app(config_class=None, *, initialize_database=True):
     if config_class is None:
         from backend.config import Config
         config_class = Config
@@ -245,12 +245,13 @@ def create_app(config_class=None):
 
     from backend.app import models
 
-    _sync_model_schema(app)
+    if initialize_database:
+        _sync_model_schema(app)
 
     from backend.app.api import bp as api_bp
     app.register_blueprint(api_bp, url_prefix='/api')
 
-    if app.config.get("STARTUP_DATA_REPAIRS_ENABLED", True):
+    if initialize_database and app.config.get("STARTUP_DATA_REPAIRS_ENABLED", True):
         # 历史数据兼容迁移：is_temporary -> patient_type
         with app.app_context():
             with db.engine.begin() as conn:
@@ -277,7 +278,8 @@ def create_app(config_class=None):
 
     # 启动挂单过期清理调度（仅初始化一次）
     if (
-        scheduler is not None
+        initialize_database
+        and scheduler is not None
         and app.config.get("SCHEDULER_ENABLED", True)
         and not getattr(scheduler, '_yws_started', False)
     ):
@@ -340,3 +342,8 @@ def create_app(config_class=None):
         return send_from_directory(dist_dir, path)
 
     return app
+
+
+def create_migration_app(config_class=None):
+    """Create an app without mutating schema before Alembic runs."""
+    return create_app(config_class, initialize_database=False)

@@ -10,7 +10,13 @@ from backend.app.models import (
 from backend.app.utils.decorators import role_required
 from backend.app.services.stock_lock import serialized_stock_mutation
 from backend.app.services.revenue import allocate_payment_revenue
-from backend.app.services.time_utils import local_naive_to_utc, local_now, parse_local_datetime, utc_naive_to_local
+from backend.app.services.time_utils import (
+    format_local_datetime,
+    local_naive_to_utc,
+    local_now,
+    parse_local_datetime,
+    utc_naive_to_local,
+)
 from backend.app.services.bootstrap import validate_password
 from backend.app.utils.query import nulls_last_asc
 from datetime import datetime, date, timedelta
@@ -189,7 +195,7 @@ def _mysql_backup_response(uri):
         os.remove(backup_path)
         return jsonify({"msg": "MySQL 备份失败，请检查服务和日志"}), 500
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = local_now().strftime("%Y%m%d_%H%M%S")
     try:
         response = send_file(
             backup_path,
@@ -216,7 +222,7 @@ def _create_sqlite_backup(uri):
 
     backup_dir = os.path.join(os.path.dirname(db_path), "backups")
     os.makedirs(backup_dir, exist_ok=True)
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    timestamp = local_now().strftime("%Y%m%d_%H%M%S_%f")
     backup_path = os.path.join(backup_dir, f"backup_{timestamp}.db")
     source = sqlite3.connect(db_path, timeout=15)
     destination = sqlite3.connect(backup_path, timeout=15)
@@ -723,7 +729,7 @@ def get_patient_visits(id):
         doctor_name = v.doctor.real_name if v.doctor else '-'
         data.append({
             "visit_id": v.id,
-            "date": v.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "date": format_local_datetime(v.timestamp),
             "diagnosis": v.diagnosis,
             "chief_complaint": v.chief_complaint,
             "total_amount": v.total_amount,
@@ -756,7 +762,7 @@ def admin_get_visit_detail(visit_id):
     return jsonify({
         "data": {
             "id": visit.id,
-            "created_at": visit.timestamp.strftime('%Y-%m-%d %H:%M'),
+            "created_at": format_local_datetime(visit.timestamp),
             "status": visit.status,
             "chief_complaint": visit.chief_complaint,
             "present_illness": visit.present_illness,
@@ -807,7 +813,7 @@ def get_drugs():
             "stock": drug.stock,
             "status": drug.status,
             "batch_no": drug.batch_no,
-            "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None,
+            "inbound_at": format_local_datetime(drug.inbound_at),
             "variant_type": drug.variant_type,
             "stock_group_code": drug.stock_group_code,
             "unit_amount": drug.unit_amount,
@@ -874,6 +880,11 @@ def create_drug():
         except ValueError:
             return jsonify({"msg": "有效期格式错误，请使用 YYYY-MM-DD 格式"}), 400
 
+    try:
+        inbound_at = parse_local_datetime(data.get('inbound_at')) if data.get('inbound_at') else None
+    except ValueError:
+        return jsonify({"msg": "入库时间格式错误"}), 400
+
     drug = Drug(
         name=data['name'],
         base_name=data['name'],
@@ -888,7 +899,7 @@ def create_drug():
         stock=stock,
         status=data.get('status', 1),
         batch_no=data.get('batch_no'),
-        inbound_at=datetime.fromisoformat(data['inbound_at']) if data.get('inbound_at') else None,
+        inbound_at=inbound_at,
         variant_type="consumable" if drug_type == 3 else None,
         storage_location=data.get('storage_location'),
         expiry_date=expiry_val,
@@ -993,7 +1004,11 @@ def update_drug(id):
     if 'stock' in data: drug.stock = data['stock']
     if 'status' in data: drug.status = int(data['status'])
     if 'batch_no' in data: drug.batch_no = data['batch_no'] or None
-    if 'inbound_at' in data: drug.inbound_at = datetime.fromisoformat(data['inbound_at']) if data['inbound_at'] else None
+    if 'inbound_at' in data:
+        try:
+            drug.inbound_at = parse_local_datetime(data['inbound_at']) if data['inbound_at'] else None
+        except ValueError:
+            return jsonify({"msg": "入库时间格式错误"}), 400
     if 'storage_location' in data: drug.storage_location = data['storage_location'] or None
     if 'expiry_date' in data:
         if data['expiry_date']:
@@ -1181,7 +1196,7 @@ def import_drugs():
                     existing.scattered_price = scattered_price
                     existing.conversion_rate = conversion_rate
                     if inbound_at:
-                        existing.inbound_at = datetime.fromisoformat(inbound_at)
+                        existing.inbound_at = parse_local_datetime(inbound_at)
                     existing.status = 1
                     # 记录入库盘点记录
                     if stock > 0:
@@ -1206,7 +1221,7 @@ def import_drugs():
                         stock=stock,
                         status=1,
                         batch_no=batch_no,
-                        inbound_at=datetime.fromisoformat(inbound_at) if inbound_at else None,
+                        inbound_at=parse_local_datetime(inbound_at) if inbound_at else None,
                         expiry_date=expiry_date,
                     )
                     db.session.add(new_drug)
@@ -1332,7 +1347,7 @@ def import_drugs_xls():
                 inbound_at = None
                 if '入库时间' in group.columns:
                     val = group.iloc[0].get('入库时间')
-                    inbound_at = val if pd.notnull(val) else None
+                    inbound_at = parse_local_datetime(val) if pd.notnull(val) else None
 
                 new_drug = Drug(
                     name=base_name,
@@ -1755,7 +1770,7 @@ def get_revenue_stats():
             total_profit += profit
 
             details.append({
-                "date": (p.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else "",
+                "date": format_local_datetime(p.payment_date, "%Y-%m-%d %H:%M:%S") or "",
                 "visit_id": p.visit_id,
                 "patient_name": _mask_patient_name(v.patient.name if v.patient else "", finance_view),
                 "student_id": "" if finance_view else (v.patient.student_id if v.patient else ""),
@@ -1953,7 +1968,7 @@ def export_revenue_stats():
 
         ws.append(
             [
-                safe_text((p.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if p.payment_date else ""),
+                safe_text(format_local_datetime(p.payment_date, "%Y-%m-%d %H:%M:%S") or ""),
                 v.id,
                 safe_text(_mask_patient_name(v.patient.name if v.patient else "", finance_view)),
                 safe_text("" if finance_view else (v.patient.student_id if v.patient else "")),
@@ -2093,7 +2108,7 @@ def get_drug_outbound_records():
     finance_view = _current_user_is_finance()
     for r in rows:
         details.append({
-            "date": (r.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else "",
+            "date": format_local_datetime(r.payment_date, "%Y-%m-%d %H:%M:%S") or "",
             "visit_id": r.visit_id,
             "patient_name": _mask_patient_name(r.patient_name, finance_view),
             "student_id": "" if finance_view else r.student_id,
@@ -2238,7 +2253,7 @@ def export_drug_outbound_records():
         total_quantity += qty
         total_amount += amt
         ws.append([
-            safe_text((r.payment_date + timedelta(hours=8)).strftime("%Y-%m-%d %H:%M:%S") if r.payment_date else ""),
+            safe_text(format_local_datetime(r.payment_date, "%Y-%m-%d %H:%M:%S") or ""),
             r.visit_id,
             safe_text(_mask_patient_name(r.patient_name, finance_view)),
             safe_text("" if finance_view else r.student_id),
@@ -2255,8 +2270,10 @@ def export_drug_outbound_records():
         ])
 
     ws2 = wb.create_sheet("summary")
-    ws2.append(["开始时间", safe_text(start.strftime("%Y-%m-%d %H:%M:%S"))])
-    ws2.append(["结束时间", safe_text((end - timedelta(seconds=1)).strftime("%Y-%m-%d %H:%M:%S"))])
+    local_start = utc_naive_to_local(start)
+    local_end = utc_naive_to_local(end - timedelta(seconds=1))
+    ws2.append(["开始时间", safe_text(local_start.strftime("%Y-%m-%d %H:%M:%S"))])
+    ws2.append(["结束时间", safe_text(local_end.strftime("%Y-%m-%d %H:%M:%S"))])
     ws2.append(["doctor_id", safe_text(doctor_id if doctor_id else "")])
     ws2.append(["nurse_id", safe_text(nurse_id if nurse_id else "")])
     ws2.append(["keyword", safe_text(keyword)])
@@ -2268,7 +2285,10 @@ def export_drug_outbound_records():
     wb.save(stream)
     payload = stream.getvalue()
 
-    filename = f"drug_outbound_{start.strftime('%Y%m%d_%H%M')}_{(end - timedelta(seconds=1)).strftime('%Y%m%d_%H%M')}.xlsx"
+    filename = (
+        f"drug_outbound_{local_start.strftime('%Y%m%d_%H%M')}_"
+        f"{local_end.strftime('%Y%m%d_%H%M')}.xlsx"
+    )
     resp = make_response(payload)
     resp.headers["Content-Type"] = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     resp.headers["Content-Disposition"] = f"attachment; filename={filename}"
@@ -2387,23 +2407,22 @@ def get_operation_logs():
     
     if start_date:
         try:
-            start_dt = datetime.strptime(start_date, '%Y-%m-%d') - timedelta(hours=8)
+            start_dt = parse_local_datetime(start_date)
             query = query.filter(OperationLog.timestamp >= start_dt)
         except ValueError:
-            pass
+            return jsonify({"msg": "Invalid start_date"}), 400
     
     if end_date:
         try:
-            end_dt = datetime.strptime(end_date, '%Y-%m-%d').replace(hour=23, minute=59, second=59) - timedelta(hours=8)
-            query = query.filter(OperationLog.timestamp <= end_dt)
+            end_dt = parse_local_datetime(end_date, is_end=True)
+            query = query.filter(OperationLog.timestamp < end_dt)
         except ValueError:
-            pass
+            return jsonify({"msg": "Invalid end_date"}), 400
     
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     
     data = []
     for log in pagination.items:
-        local_time = log.timestamp + timedelta(hours=8) if log.timestamp else None
         user = log.user
         data.append({
             "id": log.id,
@@ -2414,7 +2433,7 @@ def get_operation_logs():
             "target_id": log.target_id,
             "summary": log.summary,
             "details": log.details,
-            "timestamp": local_time.strftime("%Y-%m-%d %H:%M:%S") if local_time else ""
+            "timestamp": format_local_datetime(log.timestamp, "%Y-%m-%d %H:%M:%S") or ""
         })
     
     return jsonify({

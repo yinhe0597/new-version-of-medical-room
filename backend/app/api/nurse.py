@@ -39,7 +39,12 @@ from backend.app.services.drug_stock import (
     validate_prices,
 )
 from backend.app.services.stock_lock import lock_stock_rows, serialized_stock_mutation
-from backend.app.services.time_utils import local_now, utc_naive_to_local
+from backend.app.services.time_utils import (
+    format_local_datetime,
+    local_naive_to_utc,
+    local_now,
+    parse_local_datetime,
+)
 from datetime import datetime, date, timezone, timedelta
 from sqlalchemy import and_, or_, func
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
@@ -68,11 +73,7 @@ def _parse_nonnegative_money(value, field):
     return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
 def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
-    if dt is None:
-        return None
-    if getattr(dt, "tzinfo", None) is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return utc_naive_to_local(dt).strftime(fmt)
+    return format_local_datetime(dt, fmt)
 
 
 def _stock_group_ledger_variant(group):
@@ -756,7 +757,7 @@ def get_inventory_records():
             "new_stock": record.new_stock,
             "operation_type": record.operation_type,
             "remark": record.remark,
-            "timestamp": (record.timestamp + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M:%S')
+            "timestamp": _format_local_dt(record.timestamp, "%Y-%m-%d %H:%M:%S")
         })
 
     return jsonify({
@@ -784,8 +785,8 @@ def _compute_monthly_report(start_date_str, end_date_str):
 
     # Snapshots are taken at local midnight, so the end-of-day snapshot belongs
     # to the following calendar date.
-    start_datetime_utc = start_dt - timedelta(hours=8)
-    end_exclusive_utc = end_dt + timedelta(days=1) - timedelta(hours=8)
+    start_datetime_utc = local_naive_to_utc(start_dt)
+    end_exclusive_utc = local_naive_to_utc(end_dt + timedelta(days=1))
     closing_snapshot_date = end_date + timedelta(days=1)
     report_today = local_now().date()
 
@@ -945,7 +946,9 @@ def _compute_monthly_report(start_date_str, end_date_str):
         if not captured_times:
             return values
 
-        boundary_utc = datetime.combine(snapshot_date, datetime.min.time()) - timedelta(hours=8)
+        boundary_utc = local_naive_to_utc(
+            datetime.combine(snapshot_date, datetime.min.time())
+        )
         captured_at = max(captured_times)
         if getattr(captured_at, "tzinfo", None) is not None:
             captured_at = captured_at.astimezone(timezone.utc).replace(tzinfo=None)
@@ -1238,7 +1241,7 @@ def get_visit_detail(visit_id):
             "new_amount": item.new_amount,
             "modified_by": item.modified_by,
             "modified_by_name": item.modifier.real_name if item.modifier else None,
-            "modified_at": item.modified_at.strftime('%Y-%m-%d %H:%M:%S') if item.modified_at else None,
+            "modified_at": _format_local_dt(item.modified_at, "%Y-%m-%d %H:%M:%S"),
             "modify_reason": item.modify_reason,
             "purchase_price": drug.purchase_price if drug else 0,  # 进货价（成本参考）
             "purchase_cost": item.purchase_cost if item.purchase_cost else ((drug.purchase_price or 0) * item.quantity) if drug else 0,  # 该条目成本合计
@@ -1928,7 +1931,7 @@ def execute_visit(visit_id):
                 "payment_id": payment.id,
                 "amount": payment.amount,
                 "original_amount": payment.original_amount,
-                "paid_at": (payment.payment_date + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M')
+                "paid_at": _format_local_dt(payment.payment_date)
             }
         }), 200
 
@@ -1978,14 +1981,14 @@ def list_drugs():
         query = query.filter(Drug.batch_no.contains(batch_no))
     if inbound_start:
         try:
-            query = query.filter(Drug.inbound_at >= datetime.fromisoformat(inbound_start))
-        except Exception:
-            pass
+            query = query.filter(Drug.inbound_at >= parse_local_datetime(inbound_start))
+        except ValueError:
+            return jsonify({"msg": "Invalid inbound_start"}), 400
     if inbound_end:
         try:
-            query = query.filter(Drug.inbound_at <= datetime.fromisoformat(inbound_end))
-        except Exception:
-            pass
+            query = query.filter(Drug.inbound_at < parse_local_datetime(inbound_end, is_end=True))
+        except ValueError:
+            return jsonify({"msg": "Invalid inbound_end"}), 400
 
     page = request.args.get('page', 1, type=int)
     per_page = request.args.get('size', 20, type=int)
@@ -2022,7 +2025,7 @@ def list_drugs():
             "has_scattered": drug.has_scattered,
             "scattered_price": drug.scattered_price,
             "conversion_rate": drug.conversion_rate,
-            "inbound_at": drug.inbound_at.strftime('%Y-%m-%d %H:%M') if drug.inbound_at else None,
+            "inbound_at": _format_local_dt(drug.inbound_at),
             "storage_location": drug.storage_location,
             "expiry_date": drug.expiry_date.isoformat() if drug.expiry_date else None
         })
@@ -2078,17 +2081,16 @@ def get_my_history():
     # 日期范围筛选
     if date_from:
         try:
-            dt_from = datetime.strptime(date_from, '%Y-%m-%d')
+            dt_from = parse_local_datetime(date_from)
             query = query.filter(Visit.timestamp >= dt_from)
         except ValueError:
-            pass
+            return jsonify({"msg": "Invalid date_from"}), 400
     if date_to:
         try:
-            # 包含 date_to 当天全天
-            dt_to = datetime.strptime(date_to, '%Y-%m-%d') + timedelta(days=1)
+            dt_to = parse_local_datetime(date_to, is_end=True)
             query = query.filter(Visit.timestamp < dt_to)
         except ValueError:
-            pass
+            return jsonify({"msg": "Invalid date_to"}), 400
 
     # 患者姓名搜索（服务器端）
     if search_name:
@@ -2119,7 +2121,7 @@ def get_my_history():
             "payment_id": payment.id if payment else None,
             "payment_amount": float(payment.amount) if payment and payment.amount else None,
             "payment_original_amount": float(payment.original_amount) if payment and payment.original_amount else None,
-            "paid_at": (payment.payment_date + timedelta(hours=8)).strftime('%Y-%m-%d %H:%M') if payment else None,
+            "paid_at": _format_local_dt(payment.payment_date) if payment else None,
             "verified_at": _format_local_dt(visit.verified_at, "%Y-%m-%d %H:%M:%S") if visit.verified_at else None,
             "rejected_at": _format_local_dt(visit.rejected_at, "%Y-%m-%d %H:%M:%S") if visit.rejected_at else None,
             "reject_reason": visit.reject_reason,

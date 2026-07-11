@@ -142,7 +142,7 @@ chmod +x medical-room-v0.0.16-linux.AppImage
 
 **Build Linux packages from source:**
 ```bash
-# Requires Python 3.8+ and Node.js 16+
+# Requires Python 3.8+ and Node.js 22.12+
 bash build_linux.sh
 # Output in dist_linux/ (both tar.gz and AppImage)
 ```
@@ -159,11 +159,16 @@ python init_db.py
 python run.py
 ```
 
-**Frontend (Node.js 18+)**
+**Frontend (Node.js 22.12+)**
 ```bash
 cd frontend
 npm install
 npm run dev
+```
+
+**Backend tests (from the project root)**
+```bash
+python run_backend_tests.py
 ```
 
 ### 🔑 Bootstrap Accounts

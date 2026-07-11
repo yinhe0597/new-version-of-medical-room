@@ -18,6 +18,12 @@ python init_db.py
 python run.py
 ```
 
+## 测试
+从项目根目录运行完整后端测试：
+```bash
+python run_backend_tests.py
+```
+
 ## 数据库
 - 默认：未设置 `DATABASE_URL` 时使用 SQLite（统一落盘在项目 `data/app.db`）
 - 可选：使用 MySQL（参考仓库根目录 `init_database.sql` 与 `docs/部署与维护说明.md`）
