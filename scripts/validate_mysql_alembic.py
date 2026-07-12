@@ -1087,7 +1087,7 @@ def insert_unicode_fixture(resources: TemporaryResources, database: str) -> None
         connection.execute(
             text(
                 "INSERT INTO prescription_item "
-                "(id, visit_id, drug_id, usage, quantity, price_at_visit, amount) "
+                "(id, visit_id, drug_id, `usage`, quantity, price_at_visit, amount) "
                 "VALUES (1, 1, 1, :usage, 1, 1.5, 1.5)"
             ),
             {"usage": mark},
@@ -1399,9 +1399,12 @@ def setup_history(resources: TemporaryResources, database: str) -> None:
             text(
                 "INSERT INTO parked_visit "
                 "(id, patient_id, doctor_id, diagnosis, items_json, expires_at) "
-                "VALUES (1, 1, 1, 'Legacy parked', '[{\"drug_id\":1}]', :expires_at)"
+                "VALUES (1, 1, 1, 'Legacy parked', :items_json, :expires_at)"
             ),
-            {"expires_at": now + timedelta(days=1)},
+            {
+                "items_json": '[{"drug_id":1}]',
+                "expires_at": now + timedelta(days=1),
+            },
         )
         connection.execute(
             text(

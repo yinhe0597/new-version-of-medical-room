@@ -232,6 +232,78 @@ class TemporaryResourcesTestCase(unittest.TestCase):
 
 
 class SchemaParityHelperTestCase(unittest.TestCase):
+    @staticmethod
+    def _record_sql(callback, stop_after=None):
+        calls = []
+
+        class RecordingComplete(Exception):
+            pass
+
+        class RecordingConnection:
+            def execute(self, statement, parameters=None):
+                calls.append((statement, parameters))
+                if stop_after and str(statement).startswith(stop_after):
+                    raise RecordingComplete
+
+        try:
+            callback(RecordingConnection())
+        except RecordingComplete:
+            pass
+        return calls
+
+    def test_unicode_fixture_quotes_mysql_reserved_usage_column(self):
+        calls = []
+
+        class FixtureCaptured(Exception):
+            pass
+
+        def capture_fixture(_resources, _database, callback):
+            calls.extend(
+                self._record_sql(callback, "INSERT INTO prescription_item")
+            )
+            raise FixtureCaptured
+
+        with mock.patch.object(
+            validator,
+            "run_sql",
+            side_effect=capture_fixture,
+        ):
+            with self.assertRaises(FixtureCaptured):
+                validator.insert_unicode_fixture(object(), "fixture")
+
+        statements = [str(statement) for statement, _parameters in calls]
+        prescription_insert = next(
+            statement
+            for statement in statements
+            if statement.startswith("INSERT INTO prescription_item")
+        )
+        self.assertIn("drug_id, `usage`, quantity", prescription_insert)
+
+    def test_history_fixture_binds_json_without_creating_numeric_parameter(self):
+        calls = []
+        with (
+            mock.patch.object(validator, "run_upgrade"),
+            mock.patch.object(validator, "migration_app") as migration_app,
+            mock.patch.object(validator, "_sync_model_schema"),
+            mock.patch.object(
+                validator,
+                "run_sql",
+                side_effect=lambda _resources, _database, callback: calls.extend(
+                    self._record_sql(callback)
+                ),
+            ),
+        ):
+            migration_app.return_value.__enter__.return_value = object()
+            validator.setup_history(object(), "fixture")
+
+        parked_statement, parameters = next(
+            (statement, parameters)
+            for statement, parameters in calls
+            if str(statement).startswith("INSERT INTO parked_visit")
+        )
+        self.assertEqual(set(parked_statement._bindparams), {"items_json", "expires_at"})
+        self.assertEqual(parameters["items_json"], '[{"drug_id":1}]')
+
     def test_history_extra_column_contract_matches_ture_database(self):
         self.assertEqual(
             sum(len(columns) for columns in validator.HISTORY_EXTRA_COLUMNS.values()),
