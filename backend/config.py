@@ -427,8 +427,9 @@ class Config:
     JSON_AS_ASCII = False
     CORS_ORIGINS = _cors_origins()
     MAX_CONTENT_LENGTH = 12 * 1024 * 1024
-    SCHEDULER_ENABLED = True
-    STARTUP_DATA_REPAIRS_ENABLED = True
+    SCHEDULER_ENABLED = _env_bool("SCHEDULER_ENABLED", True)
+    STARTUP_DATA_REPAIRS_ENABLED = _env_bool("STARTUP_DATA_REPAIRS_ENABLED", True)
+    BOOTSTRAP_USERS_ENABLED = _env_bool("BOOTSTRAP_USERS_ENABLED", True)
     MYSQL_UNIX_SOCKET = _ENGINE_CONFIGURATION[1]["connect_args"].get(
         "unix_socket", ""
     )

@@ -7,6 +7,7 @@ from unittest import mock
 
 from sqlalchemy import (
     Column,
+    Double,
     ForeignKey,
     Index,
     Integer,
@@ -92,6 +93,10 @@ class FakeInspector:
 
 
 class ProductionDatabasePreflightTestCase(unittest.TestCase):
+    def test_mysql_identity_query_avoids_reserved_alias(self):
+        self.assertIn("AS authenticated_account", preflight.MYSQL_IDENTITY_SQL)
+        self.assertNotIn("as current_user", preflight.MYSQL_IDENTITY_SQL.lower())
+
     def test_sqlite_text_affinity_accepts_legacy_text_for_varchar(self):
         self.assertTrue(
             preflight._type_compatible(
@@ -101,6 +106,23 @@ class ProductionDatabasePreflightTestCase(unittest.TestCase):
         self.assertFalse(
             preflight._type_compatible(
                 mysql.TEXT(), String(50), dialect_name="mysql"
+            )
+        )
+
+    def test_double_precision_is_required_on_mysql_and_affinity_safe_on_sqlite(self):
+        self.assertTrue(
+            preflight._type_compatible(
+                mysql.DOUBLE(), Double(), dialect_name="mysql"
+            )
+        )
+        self.assertFalse(
+            preflight._type_compatible(
+                mysql.FLOAT(), Double(), dialect_name="mysql"
+            )
+        )
+        self.assertTrue(
+            preflight._type_compatible(
+                sqlite.FLOAT(), Double(), dialect_name="sqlite"
             )
         )
 

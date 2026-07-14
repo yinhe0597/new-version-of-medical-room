@@ -98,22 +98,22 @@ class Drug(db.Model):
     type = db.Column(db.Integer, default=1)
     specification = db.Column(db.String(50))
     unit = db.Column(db.String(10))
-    price = db.Column(db.Float)
+    price = db.Column(db.Double)
     stock = db.Column(db.Integer, default=0)
     status = db.Column(db.Integer, default=1)
     batch_no = db.Column(db.String(50), nullable=True)
     inbound_at = db.Column(db.DateTime, nullable=True)
     
     # 新增字段以支持整散装和进货价
-    purchase_price = db.Column(db.Float, default=0.0)
+    purchase_price = db.Column(db.Double, default=0.0)
     has_scattered = db.Column(db.Boolean, default=False)
-    scattered_price = db.Column(db.Float, nullable=True)
+    scattered_price = db.Column(db.Double, nullable=True)
     conversion_rate = db.Column(db.Integer, nullable=True)
     variant_type = db.Column(db.String(20), nullable=True)
     stock_group_code = db.Column(db.String(36), index=True, nullable=True)
     unit_amount = db.Column(db.Integer, nullable=True)
     base_name = db.Column(db.String(128), nullable=True)
-    storage_location = db.Column(db.String(10), nullable=True)
+    storage_location = db.Column(db.String(50), nullable=True)
     expiry_date = db.Column(db.Date, nullable=True)  # 有效期
 
     def __repr__(self):
@@ -151,8 +151,8 @@ class Visit(db.Model):
     doctor_advice = db.Column(db.Text)
     special_note = db.Column(db.Text)
 
-    consultation_fee = db.Column(db.Float, default=0.0)
-    total_amount = db.Column(db.Float, default=0.0)
+    consultation_fee = db.Column(db.Double, default=0.0)
+    total_amount = db.Column(db.Double, default=0.0)
     status = db.Column(db.String(20), default='pending')
     verified_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     verified_at = db.Column(db.DateTime, nullable=True)
@@ -184,24 +184,24 @@ class PrescriptionItem(db.Model):
     days = db.Column(db.Integer, default=1)
 
     quantity = db.Column(db.Integer)
-    price_at_visit = db.Column(db.Float)
-    amount = db.Column(db.Float)
-    original_price = db.Column(db.Float, nullable=True)
-    original_amount = db.Column(db.Float, nullable=True)
-    new_price = db.Column(db.Float, nullable=True)
-    new_amount = db.Column(db.Float, nullable=True)
+    price_at_visit = db.Column(db.Double)
+    amount = db.Column(db.Double)
+    original_price = db.Column(db.Double, nullable=True)
+    original_amount = db.Column(db.Double, nullable=True)
+    new_price = db.Column(db.Double, nullable=True)
+    new_amount = db.Column(db.Double, nullable=True)
     modified_by = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True)
     modified_at = db.Column(db.DateTime, nullable=True)
     modify_reason = db.Column(db.Text, nullable=True)
     
     # 新增字段以支持整散装和成本计算
     is_scattered = db.Column(db.Boolean, default=False)
-    purchase_cost = db.Column(db.Float, default=0.0)
+    purchase_cost = db.Column(db.Double, default=0.0)
 
     # 静脉给药配伍支持
     is_intravenous = db.Column(db.Boolean, default=False)
     infusion_group = db.Column(db.Integer, nullable=True)
-    infusion_dosage_value = db.Column(db.Float, nullable=True)
+    infusion_dosage_value = db.Column(db.Double, nullable=True)
     infusion_dosage_unit = db.Column(db.String(10), nullable=True)
     infusion_method = db.Column(db.String(50), nullable=True)
 
@@ -212,7 +212,7 @@ class DiagnosisDict(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     code = db.Column(db.String(50), index=True)
     name = db.Column(db.String(200), index=True)
-    pinyin = db.Column(db.String(200), index=True)
+    pinyin = db.Column(db.String(255), index=True)
 
     def __repr__(self):
         return f'<DiagnosisDict {self.code} - {self.name}>'
@@ -234,15 +234,15 @@ class Payment(db.Model):
     visit_id = db.Column(db.Integer, db.ForeignKey('visit.id'), unique=True)
     nurse_id = db.Column(db.Integer, db.ForeignKey('user.id'))
 
-    amount = db.Column(db.Float)
+    amount = db.Column(db.Double)
     payment_date = db.Column(db.DateTime, default=utcnow)
     payment_method = db.Column(db.String(50))
     receipt_printed = db.Column(db.Boolean, default=False)
     is_employee_discount = db.Column(db.Boolean, default=False)  # 是否职工优惠
-    original_amount = db.Column(db.Float, nullable=True)  # 原始应收金额（优惠前）
+    original_amount = db.Column(db.Double, nullable=True)  # 原始应收金额（优惠前）
     receipt_snapshot = db.Column(db.Text, nullable=True)  # 小票数据快照（JSON）
-    actual_consultation_fee = db.Column(db.Float, nullable=True)  # 实收诊查费（职工优惠拆分）
-    actual_drug_amount = db.Column(db.Float, nullable=True)  # 实收物资及诊疗项目金额（兼容旧字段名）
+    actual_consultation_fee = db.Column(db.Double, nullable=True)  # 实收诊查费（职工优惠拆分）
+    actual_drug_amount = db.Column(db.Double, nullable=True)  # 实收物资及诊疗项目金额（兼容旧字段名）
 
     def __repr__(self):
         return f'<Payment {self.id}>'
@@ -294,7 +294,7 @@ class ParkedVisit(db.Model):
     diagnosis = db.Column(db.Text)
     doctor_advice = db.Column(db.Text)
     special_note = db.Column(db.Text)
-    consultation_fee = db.Column(db.Float, default=0.0)
+    consultation_fee = db.Column(db.Double, default=0.0)
 
     # 处方明细草稿，前端 prescriptionItems 数组的 JSON 序列化
     items_json = db.Column(db.Text)

@@ -9,6 +9,14 @@ from backend.production_cli import (
 
 
 class ProductionEntryPointTestCase(unittest.TestCase):
+    def test_daily_snapshot_scheduler_can_be_disabled(self):
+        app = type("App", (), {"config": {"SCHEDULER_ENABLED": False}})()
+        with patch.object(run_prod.threading, "Thread") as thread:
+            result = run_prod._start_daily_snapshot_scheduler(app)
+
+        self.assertIsNone(result)
+        thread.assert_not_called()
+
     def test_database_log_target_is_useful_and_hides_passwords(self):
         sqlite_uri = "sqlite:///F:/deployment/data/app.db"
         mysql_uri = "mysql+pymysql://medical:top-secret@db.example/medical_db"

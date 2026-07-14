@@ -3,7 +3,7 @@ import tempfile
 from contextlib import closing
 from pathlib import Path
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from sqlalchemy import Column, ForeignKey, Integer, MetaData, String, Table, create_engine
 from sqlalchemy.engine import make_url
@@ -13,6 +13,8 @@ from backend.migrate_to_mysql import (
     TableStats,
     _actual_foreign_key_orphans,
     _assert_expected_source_sha256,
+    _assert_mysql_copy_preconditions,
+    _assert_source_string_lengths_fit,
     _assert_reconciled,
     _assert_target_alembic_head,
     _cross_boundary_foreign_keys,
@@ -119,6 +121,30 @@ class MysqlMigrationSafetyTestCase(unittest.TestCase):
             required_table_names=("user", "patient"),
             isolation_level="READ COMMITTED",
         )
+
+    def test_mysql_copy_preconditions_alias_information_schema_columns(self):
+        connection = MagicMock()
+        connection.dialect.name = "mysql"
+        settings_result = MagicMock()
+        settings_result.mappings.return_value.one.return_value = {
+            "sql_mode": "STRICT_TRANS_TABLES",
+            "autocommit": 0,
+            "transaction_read_only": 0,
+            "global_read_only": 0,
+            "global_super_read_only": 0,
+        }
+        engines_result = MagicMock()
+        engines_result.mappings.return_value = [
+            {"table_name": "user", "engine": "InnoDB"}
+        ]
+        connection.execute.side_effect = [settings_result, engines_result]
+        connection.get_execution_options.return_value = {}
+
+        _assert_mysql_copy_preconditions(connection, ("user",))
+
+        engine_query = str(connection.execute.call_args_list[1].args[0])
+        self.assertIn("TABLE_NAME AS table_name", engine_query)
+        self.assertIn("ENGINE AS engine", engine_query)
 
     def test_mysql_copy_preconditions_reject_non_strict_mode(self):
         with self.assertRaisesRegex(RuntimeError, "STRICT_TRANS_TABLES"):
@@ -594,6 +620,42 @@ class MysqlMigrationSafetyTestCase(unittest.TestCase):
             _validate_copy_columns(
                 model_metadata, source_metadata, target_metadata
             )
+
+    def test_source_string_lengths_are_checked_before_clearing(self):
+        source_metadata = MetaData()
+        source_table = Table(
+            "sample",
+            source_metadata,
+            Column("id", Integer, primary_key=True),
+            Column("value", String(20)),
+        )
+        target_metadata = MetaData()
+        Table(
+            "sample",
+            target_metadata,
+            Column("id", Integer, primary_key=True),
+            Column("value", String(5)),
+        )
+        engine = create_engine("sqlite:///:memory:")
+        try:
+            source_metadata.create_all(engine)
+            with engine.begin() as connection:
+                connection.execute(
+                    source_table.insert(), {"id": 1, "value": "too-long"}
+                )
+            with engine.connect() as connection:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"sample\.value: max 8, target 5",
+                ):
+                    _assert_source_string_lengths_fit(
+                        connection,
+                        source_metadata,
+                        target_metadata,
+                        ("sample",),
+                    )
+        finally:
+            engine.dispose()
 
     def test_records_are_read_in_bounded_batches(self):
         metadata = MetaData()

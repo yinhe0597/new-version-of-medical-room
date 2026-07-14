@@ -169,6 +169,42 @@ class ExternalDatabaseConfigurationTestCase(unittest.TestCase):
             {"head": True, "sync": False, "preflight": True},
         )
 
+    def test_maintenance_write_switches_are_loaded_from_environment(self):
+        script = (
+            "import json; from backend.config import Config; "
+            "print(json.dumps({"
+            "'scheduler': Config.SCHEDULER_ENABLED, "
+            "'repairs': Config.STARTUP_DATA_REPAIRS_ENABLED, "
+            "'bootstrap': Config.BOOTSTRAP_USERS_ENABLED}))"
+        )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            child_env = os.environ.copy()
+            child_env.update(
+                {
+                    "APP_ROOT": temp_dir,
+                    "PYTHON_DOTENV_DISABLED": "1",
+                    "DATABASE_URL": "sqlite:///maintenance-test.db",
+                    "SCHEDULER_ENABLED": "0",
+                    "STARTUP_DATA_REPAIRS_ENABLED": "0",
+                    "BOOTSTRAP_USERS_ENABLED": "0",
+                }
+            )
+            child_env.pop("SQLALCHEMY_DATABASE_URI", None)
+            completed = subprocess.run(
+                [sys.executable, "-c", script],
+                cwd=PROJECT_ROOT,
+                env=child_env,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=True,
+            )
+
+        self.assertEqual(
+            json.loads(completed.stdout),
+            {"scheduler": False, "repairs": False, "bootstrap": False},
+        )
+
     def test_conflicting_database_environment_variables_are_rejected(self):
         with patch.dict(
             os.environ,

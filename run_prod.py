@@ -295,6 +295,20 @@ def snapshot_scheduler(flask_app):
             time_module.sleep(30)
 
 
+def _start_daily_snapshot_scheduler(app):
+    if not app.config.get("SCHEDULER_ENABLED", True):
+        logging.info("Daily snapshot scheduler disabled.")
+        return None
+    snapshot_thread = threading.Thread(
+        target=snapshot_scheduler,
+        args=(app,),
+        daemon=True,
+    )
+    snapshot_thread.start()
+    logging.info("Daily snapshot scheduler started.")
+    return snapshot_thread
+
+
 def start_server():
     """启动服务器（可被外层重启循环调用）"""
     from backend.app import create_app, db
@@ -322,23 +336,23 @@ def start_server():
     # 注册全局异常处理器，防止未捕获异常导致 500 空响应
     app.register_error_handler(Exception, handle_all_exceptions)
 
-    # 初始化默认用户
-    from backend.app.services.bootstrap import add_missing_bootstrap_users
+    if app.config.get("BOOTSTRAP_USERS_ENABLED", True):
+        from backend.app.services.bootstrap import add_missing_bootstrap_users
 
-    with app.app_context():
-        logging.info('Ensuring default users exist...')
-        created_users, bootstrap_password = add_missing_bootstrap_users()
-        db.session.commit()
-        if created_users:
-            logging.warning('Created bootstrap users: %s. Change their passwords immediately.', ', '.join(created_users))
-            print(f'  首次启动临时密码: {bootstrap_password}')
-        logging.info('Default user initialization completed.')
+        with app.app_context():
+            logging.info('Ensuring default users exist...')
+            created_users, bootstrap_password = add_missing_bootstrap_users()
+            db.session.commit()
+            if created_users:
+                logging.warning('Created bootstrap users: %s. Change their passwords immediately.', ', '.join(created_users))
+                print(f'  首次启动临时密码: {bootstrap_password}')
+            logging.info('Default user initialization completed.')
+    else:
+        logging.info('Bootstrap user initialization disabled.')
 
     # Only the midnight scheduler may create a daily opening snapshot. Creating
     # one during a daytime restart would record a partial day as its opening.
-    snapshot_thread = threading.Thread(target=snapshot_scheduler, args=(app,), daemon=True)
-    snapshot_thread.start()
-    logging.info('Daily snapshot scheduler started.')
+    _start_daily_snapshot_scheduler(app)
 
     local_ip = get_local_ip()
 

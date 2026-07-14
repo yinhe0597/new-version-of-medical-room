@@ -17,7 +17,7 @@ from backend.app import (
 
 
 MIGRATIONS_DIR = str(Path(__file__).resolve().parents[1] / "migrations")
-CURRENT_HEAD = "b6e1d8f3a2c4"
+CURRENT_HEAD = "d8b5f0a3c2e7"
 HISTORICAL_SPLIT_REVISION = "bbf28ffdb4c0"
 PRE_BASELINE_HEAD = "e7f8a9b0c1d2"
 

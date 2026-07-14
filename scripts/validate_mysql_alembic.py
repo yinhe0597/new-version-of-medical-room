@@ -31,7 +31,7 @@ import sys
 from pathlib import Path
 
 from flask_migrate import upgrade
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, Double, Float, Integer, String, Text
 from sqlalchemy import event, inspect, text
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import IntegrityError
@@ -39,7 +39,7 @@ from sqlalchemy.schema import UniqueConstraint
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = ROOT / "backend" / "migrations"
-CURRENT_HEAD = "b6e1d8f3a2c4"
+CURRENT_HEAD = "d8b5f0a3c2e7"
 HISTORICAL_SPLIT_REVISION = "bbf28ffdb4c0"
 IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 LOGIN_PATH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -83,7 +83,7 @@ EXTRA_COLUMN_SPECS = {
     ("drug", "processing_type"): (String(20), True, None),
     ("drug", "safety_stock"): (Integer(), True, "0"),
     ("drug", "max_stock"): (Integer(), True, "0"),
-    ("drug", "daily_loss_rate"): (Float(), True, "0.0"),
+    ("drug", "daily_loss_rate"): (Double(), True, "0.0"),
     ("drug", "shelf_life_days"): (Integer(), True, None),
     ("drug", "storage_condition"): (String(50), True, None),
     ("visit", "tcm_enabled"): (Boolean(), True, "0"),
@@ -94,7 +94,7 @@ EXTRA_COLUMN_SPECS = {
         True,
         "western",
     ),
-    ("prescription_item", "herb_dosage"): (Float(), True, None),
+    ("prescription_item", "herb_dosage"): (Double(), True, None),
     ("prescription_item", "special_preparation"): (
         String(50),
         True,
@@ -748,6 +748,8 @@ def type_matches(actual, expected, *, allow_wider_string=False):
         return actual_length == expected.length
     if isinstance(expected, Integer):
         return actual_name in {"integer", "int"} and not getattr(actual, "unsigned", False)
+    if isinstance(expected, Double):
+        return actual_name == "double"
     if isinstance(expected, Float):
         return actual_name == "float"
     if isinstance(expected, DateTime):

@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 from alembic.script import ScriptDirectory
-from sqlalchemy import MetaData, and_, create_engine, func, inspect, select, text
+from sqlalchemy import MetaData, String, and_, create_engine, func, inspect, select, text
 from sqlalchemy.engine import URL, make_url
 
 
@@ -327,7 +327,9 @@ def _assert_mysql_copy_preconditions(connection, table_names):
     engine_rows = connection.execute(
         text(
             """
-            SELECT table_name, engine
+            SELECT
+                TABLE_NAME AS table_name,
+                ENGINE AS engine
             FROM information_schema.tables
             WHERE table_schema = DATABASE()
               AND table_type = 'BASE TABLE'
@@ -514,6 +516,33 @@ def _validate_copy_columns(model_metadata, source_metadata, target_metadata):
                 f"Source table {name!r} cannot populate target columns without data loss: "
                 + ", ".join(target_only)
             )
+
+
+def _assert_source_string_lengths_fit(
+    connection, source_metadata, target_metadata, table_names
+):
+    exceeded = []
+    for table_name in table_names:
+        source_table = source_metadata.tables[table_name]
+        target_table = target_metadata.tables[table_name]
+        for target_column in target_table.columns:
+            limit = getattr(target_column.type, "length", None)
+            if not isinstance(target_column.type, String) or not limit:
+                continue
+            source_column = source_table.c[target_column.name]
+            max_length = connection.execute(
+                select(func.max(func.length(source_column)))
+            ).scalar_one()
+            if max_length is not None and int(max_length) > int(limit):
+                exceeded.append(
+                    f"{table_name}.{target_column.name}: "
+                    f"max {int(max_length)}, target {int(limit)}"
+                )
+    if exceeded:
+        raise RuntimeError(
+            "SQLite source string values exceed MySQL target column lengths: "
+            + "; ".join(sorted(exceeded))
+        )
 
 
 def _primary_key_digest(connection, table):
@@ -708,6 +737,12 @@ def build_plan(
                 (table.name for table in model_metadata.sorted_tables),
             )
             _validate_copy_columns(model_metadata, source_metadata, target_metadata)
+            _assert_source_string_lengths_fit(
+                source_conn,
+                source_metadata,
+                target_metadata,
+                (table.name for table in model_metadata.sorted_tables),
+            )
             _assert_no_actual_foreign_key_orphans(
                 target_conn, target_metadata, "MySQL target"
             )

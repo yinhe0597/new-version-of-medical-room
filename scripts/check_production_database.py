@@ -27,6 +27,7 @@ from sqlalchemy import (
     Boolean,
     Date,
     DateTime,
+    Double,
     Float,
     Integer,
     String,
@@ -520,6 +521,10 @@ def _type_compatible(
         return actual_name in {"integer", "int"} and not getattr(
             actual, "unsigned", False
         )
+    if isinstance(expected, Double):
+        if dialect_name == "sqlite":
+            return actual_name in {"double", "float", "real"}
+        return actual_name == "double"
     if isinstance(expected, Float):
         return actual_name in {"float", "real"}
     if isinstance(expected, DateTime):
@@ -1610,6 +1615,11 @@ SELECT
     @@GLOBAL.super_read_only AS super_read_only
 """.strip()
 
+MYSQL_IDENTITY_SQL = (
+    "SELECT 1 AS ok, DATABASE() AS database_name, "
+    "CURRENT_USER() AS authenticated_account"
+)
+
 
 def _check_mysql_table_storage(report: dict[str, Any], connection) -> None:
     rows = _execute_read_only(
@@ -1742,7 +1752,7 @@ def _inspect_mysql(
         with engine.connect() as connection:
             identity = _execute_read_only(
                 connection,
-                "SELECT 1 AS ok, DATABASE() AS database_name, CURRENT_USER() AS current_user",
+                MYSQL_IDENTITY_SQL,
             ).mappings().one()
             if identity["database_name"] != target.database:
                 _block(
@@ -1761,7 +1771,7 @@ def _inspect_mysql(
                 "MySQL connection succeeded",
                 {
                     "database": identity["database_name"],
-                    "current_user": identity["current_user"],
+                    "current_user": identity["authenticated_account"],
                 },
             )
 
