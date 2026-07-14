@@ -33,3 +33,27 @@ random local account. Account attributes bind the exact database names, run ID,
 and server UUID; cleanup refuses to delete resources if those attributes no
 longer match. Binary logging is rejected by default. Add `--allow-binlog` only
 after accepting that the temporary DDL and account metadata will be logged.
+
+Before a production cutover, run the read-only provider/application-account
+check as well:
+
+    python scripts/check_production_database.py
+
+Packaged releases expose the same guard and a protected migration command:
+
+    medical_room --check-database
+    medical_room --migrate-database --backup-file /path/to/backup.zip --yes
+
+The application download is one ZIP containing the SQL and its manifest. The
+command also accepts an externally generated SQL file with an adjacent
+`<backup.sql>.manifest.json`. The packaged migration streams the SQL, recomputes
+its size and SHA-256, verifies that the manifest is bound to the configured
+MySQL host/port/database, and performs
+the read-only production preflight again after upgrade. SQLite data
+copy is separate and defaults to dry-run:
+
+    medical_room --import-sqlite /path/to/app.db
+
+Only rerun it with `--execute --yes --expected-source-sha256=<dry-run hash>`
+after stopping every writer. Never use a stale SQLite file as a rollback target
+after MySQL has accepted production writes.

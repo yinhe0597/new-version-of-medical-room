@@ -693,7 +693,7 @@ export DATABASE_URL="mysql+pymysql://user:password@host:port/dbname?charset=utf8
 
 ### 11.4 数据库备份
 
-- **统一下载入口**：`GET /api/admin/backup`，SQLite 下载 `.db`，MySQL 通过 `mysqldump` 下载 `.sql`
+- **统一下载入口**：`GET /api/admin/backup`，SQLite 下载 `.db`，MySQL 通过 `mysqldump` 生成 SQL 后与校验 manifest 原子封装为 `.zip`
 - **兼容入口**：`POST /api/admin/backup` 仅保留旧版 SQLite 服务端备份行为；`GET /api/admin/backup/mysql` 为 MySQL 下载兼容入口
 
 ---

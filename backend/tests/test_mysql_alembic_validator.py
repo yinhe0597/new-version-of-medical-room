@@ -67,10 +67,55 @@ def deterministic_resources(admin, scenarios=("fresh",)):
             expected_server_uuid="12345678-1234-1234-1234-123456789abc",
             allow_binlog=False,
             scenarios=scenarios,
+            account_host="172.18.0.1",
         )
 
 
 class MysqlAdminTestCase(unittest.TestCase):
+    def test_preflight_reads_and_validates_server_observed_client_host(self):
+        values = (
+            "12345678-1234-1234-1234-123456789abc",
+            "mysql-container",
+            "3306",
+            "8.0.36",
+            "MySQL Community Server - GPL",
+            "InnoDB",
+            "utf8mb4",
+            "utf8mb4_0900_ai_ci",
+            "STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION",
+            "0",
+            "0",
+            "1",
+            "0",
+            "172.18.0.1",
+        )
+        admin = validator.MysqlAdmin(
+            "codex-medroom", "127.0.0.1", 3306, "mysql.exe"
+        )
+        with mock.patch.object(admin, "run", return_value="\t".join(values)) as run:
+            details = admin.preflight()
+
+        self.assertEqual(details["client_host"], "172.18.0.1")
+        self.assertIn("SUBSTRING_INDEX(USER(), '@', -1)", run.call_args.args[0])
+
+    def test_account_host_validation_rejects_wildcards_and_sql_metacharacters(self):
+        for host in ("172.18.0.1", "::1", "runner-1.internal", "localhost"):
+            with self.subTest(valid=host):
+                self.assertEqual(validator.validated_account_host(host), host)
+
+        for host in (
+            "",
+            "%",
+            "172.18.%",
+            "runner_host",
+            "host' OR '1'='1",
+            "host\\name",
+            "-invalid.example",
+        ):
+            with self.subTest(invalid=host):
+                with self.assertRaises(ValueError):
+                    validator.validated_account_host(host)
+
     def test_run_uses_login_path_only_and_sends_sql_through_stdin(self):
         completed = SimpleNamespace(returncode=0, stdout="ok\n", stderr="")
         sql = "CREATE USER 'temporary' IDENTIFIED BY 'stdin-secret';"
@@ -150,6 +195,7 @@ class TemporaryResourcesTestCase(unittest.TestCase):
 
         self.assertLessEqual(len(resources.user), 32)
         self.assertEqual(set(resources.scenario_databases), {"history"})
+        self.assertEqual(resources.account_hosts, ("172.18.0.1",))
         resources.create()
 
         statements = "\n".join(sql for sql, _label, _kwargs in admin.mutations)
@@ -172,6 +218,8 @@ class TemporaryResourcesTestCase(unittest.TestCase):
         self.assertIn('"medmig_databases"', create_user_sql)
         self.assertIn(resources.databases[0], create_user_sql)
         self.assertIn(resources.owner_token, create_user_sql)
+        self.assertIn(f"'{resources.user}'@'172.18.0.1'", create_user_sql)
+        self.assertNotIn("@'%'", statements)
 
     def test_cleanup_continues_databases_and_retains_markers_after_interrupt(self):
         admin = RecordingAdmin()
@@ -190,10 +238,8 @@ class TemporaryResourcesTestCase(unittest.TestCase):
         mutation_labels = [label for _sql, label, _kwargs in admin.mutations]
         self.assertIn(f"drop database {database}", mutation_labels)
         self.assertIn(f"drop database {resources.databases[0]}", mutation_labels)
-        self.assertIn("lock temporary account localhost", mutation_labels)
-        self.assertIn("lock temporary account 127.0.0.1", mutation_labels)
-        self.assertNotIn("drop temporary account localhost", mutation_labels)
-        self.assertNotIn("drop temporary account 127.0.0.1", mutation_labels)
+        self.assertIn("lock temporary account 172.18.0.1", mutation_labels)
+        self.assertNotIn("drop temporary account 172.18.0.1", mutation_labels)
         cleanup_flags = [
             kwargs["cleanup"]
             for _sql, label, kwargs in admin.mutations
@@ -204,7 +250,7 @@ class TemporaryResourcesTestCase(unittest.TestCase):
     def test_unowned_preexisting_account_is_not_dropped(self):
         admin = RecordingAdmin()
         resources = deterministic_resources(admin)
-        resources.attempted_accounts.append("localhost")
+        resources.attempted_accounts.append(resources.account_hosts[0])
 
         def unowned_account(_sql, label):
             admin.reads.append((_sql, label))

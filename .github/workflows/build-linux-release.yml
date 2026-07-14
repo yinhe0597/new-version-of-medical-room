@@ -26,9 +26,168 @@ permissions:
   contents: write
 
 jobs:
+  mysql-integration:
+    name: MySQL 8 Runtime Gate
+    runs-on: ubuntu-22.04
+    services:
+      mysql:
+        image: mysql:8.0.36
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: medical_db
+          MYSQL_USER: medical_app
+          MYSQL_PASSWORD: ci-app-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+
+    env:
+      DATABASE_URL: mysql+pymysql://medical_app:ci-app-password@127.0.0.1:3306/medical_db?charset=utf8mb4
+      DATABASE_REQUIRE_TLS: "0"
+      REQUIRE_ALEMBIC_HEAD: "1"
+      RUNTIME_SCHEMA_SYNC_ENABLED: "0"
+      PRODUCTION_DATABASE_PREFLIGHT_ENABLED: "1"
+      SECRET_KEY: ci-secret-key-value-with-at-least-32-characters
+      JWT_SECRET_KEY: ci-jwt-secret-value-with-at-least-32-characters
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: Validate MySQL fresh, history, and interrupted-DDL retry scenarios
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            expect \
+            mysql-client-core-8.0
+          command -v mysql
+          command -v mysql_config_editor
+          expect <<'EXPECT'
+          set timeout 15
+          spawn mysql_config_editor set --login-path=medical-room-ci --host=127.0.0.1 --port=3306 --user=root --password
+          expect {
+            -re {(?i)enter password} { send -- "ci-root-password\r" }
+            timeout { exit 1 }
+          }
+          expect eof
+          catch wait result
+          exit [lindex $result 3]
+          EXPECT
+          server_uuid="$(
+            mysql --no-defaults --login-path=medical-room-ci \
+              --batch --skip-column-names --execute='SELECT @@server_uuid'
+          )"
+          test -n "$server_uuid"
+          python scripts/validate_mysql_alembic.py \
+            --login-path=medical-room-ci \
+            --expected-server-uuid="$server_uuid" \
+            --allow-binlog \
+            --scenario=all \
+            --mysql-bin="$(command -v mysql)"
+
+      - name: Remove temporary MySQL administrator login path
+        if: always()
+        run: |
+          if command -v mysql_config_editor >/dev/null 2>&1; then
+            mysql_config_editor remove --login-path=medical-room-ci || true
+          fi
+          rm -f "$HOME/.mylogin.cnf"
+
+      - name: Upgrade empty MySQL schema with migration account
+        env:
+          DATABASE_URL: mysql+pymysql://root:ci-root-password@127.0.0.1:3306/medical_db?charset=utf8mb4
+          DATABASE_REQUIRE_TLS: "0"
+        run: >-
+          python -m flask --app backend.migration_app:create_app
+          db -d backend/migrations upgrade
+
+      - name: Reduce runtime account to least DML privileges
+        run: |
+          python - <<'PY'
+          import pymysql
+
+          connection = pymysql.connect(
+              host="127.0.0.1",
+              port=3306,
+              user="root",
+              password="ci-root-password",
+              autocommit=True,
+          )
+          try:
+              with connection.cursor() as cursor:
+                  cursor.execute(
+                      "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'medical_app'@'%'"
+                  )
+                  cursor.execute(
+                      "GRANT SELECT, INSERT, UPDATE, DELETE "
+                      "ON `medical_db`.* TO 'medical_app'@'%'"
+                  )
+          finally:
+              connection.close()
+          PY
+
+      - name: Run production preflight and readiness smoke
+        run: |
+          python - <<'PY'
+          import os
+
+          from backend.app import create_app, db
+          from backend.config import Config
+          from scripts.check_production_database import inspect_database
+
+          report = inspect_database(os.environ["DATABASE_URL"], require_tls=False)
+          if report["summary"]["blocking"]:
+              raise SystemExit(report)
+
+          class SmokeConfig(Config):
+              SCHEDULER_ENABLED = False
+              STARTUP_DATA_REPAIRS_ENABLED = False
+
+          app = create_app(SmokeConfig)
+          response = app.test_client().get("/api/health/ready")
+          if response.status_code != 200 or response.get_json() != {"status": "ready"}:
+              raise SystemExit(f"readiness failed: {response.status_code} {response.data!r}")
+          with app.app_context():
+              db.session.remove()
+              db.engine.dispose()
+          print("MySQL runtime preflight and readiness gate passed")
+          PY
+
   build-linux:
     name: Build Linux Packages
     runs-on: ubuntu-22.04
+    needs: mysql-integration
+    services:
+      mysql:
+        image: mysql:8.0.36
+        env:
+          MYSQL_ROOT_PASSWORD: ci-root-password
+          MYSQL_DATABASE: medical_db
+          MYSQL_USER: medical_app
+          MYSQL_PASSWORD: ci-app-password
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -pci-root-password"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
 
     steps:
       # ── 1. 检出代码 ──────────────────────────────────────
@@ -73,7 +232,8 @@ jobs:
             libsqlite3-dev \
             patchelf \
             fuse \
-            libfuse2
+            libfuse2 \
+            default-mysql-client
 
       # ── 6. 安装 Python 依赖 ──────────────────────────────
       - name: Install Python dependencies
@@ -86,8 +246,35 @@ jobs:
       - name: Run backend tests
         run: python run_backend_tests.py
 
+      - name: Run MySQL migration gates
+        run: |
+          python -m unittest \
+            backend.tests.test_alembic_migrations \
+            backend.tests.test_migration_helpers \
+            backend.tests.test_mysql_alembic_validator \
+            backend.tests.test_mysql_backup \
+            backend.tests.test_mysql_migration_safety \
+            backend.tests.test_production_cli \
+            backend.tests.test_production_database_preflight \
+            backend.tests.test_schema_compatibility
+          python - <<'PY'
+          from alembic.config import Config
+          from alembic.script import ScriptDirectory
+          import pymysql
+          from sqlalchemy.dialects.mysql import pymysql as mysql_pymysql
+
+          config = Config("backend/migrations/alembic.ini")
+          config.set_main_option("script_location", "backend/migrations")
+          heads = ScriptDirectory.from_config(config).get_heads()
+          if heads != ["b6e1d8f3a2c4"]:
+              raise SystemExit(f"Expected one Alembic head b6e1d8f3a2c4, got {heads}")
+          print(f"MySQL static gate passed: PyMySQL {pymysql.__version__}, head {heads[0]}")
+          PY
+
       - name: Compile Python sources
-        run: python -m compileall -q -x '\.venv' backend run_prod.py run_backend_tests.py
+        run: |
+          python -m compileall -q -x '\.venv' backend scripts run_prod.py run_backend_tests.py
+          bash -n run.sh
 
       # ── 8. 构建前端 ──────────────────────────────────────
       - name: Build frontend
@@ -106,6 +293,197 @@ jobs:
           ls -lh dist/medical_room
           file dist/medical_room
 
+      - name: Verify packaged MySQL and migration resources
+        run: |
+          pyi-archive_viewer --list --recursive --brief dist/medical_room > build/medical_room-archive.txt
+          python - <<'PY'
+          from pathlib import Path
+
+          contents = Path("build/medical_room-archive.txt").read_text(
+              encoding="utf-8", errors="replace"
+          ).replace("\\", "/")
+          required = (
+              "pymysql",
+              "sqlalchemy.dialects.mysql.pymysql",
+              "backend.migrate_to_mysql",
+              "backend.migration_app",
+              "backend.production_cli",
+              "backend.migrations.migration_helpers",
+              "scripts.check_production_database",
+              "backend/migrations/alembic.ini",
+              "backend/migrations/env.py",
+              "backend/migrations/script.py.mako",
+              "backend/migrations/versions/b6e1d8f3a2c4_current_model_schema_baseline.py",
+          )
+          missing = [entry for entry in required if entry not in contents]
+          if missing:
+              raise SystemExit(f"Packaged archive is missing: {', '.join(missing)}")
+          print("Packaged MySQL driver and migration resource gate passed")
+          PY
+
+      - name: Smoke packaged executable against MySQL
+        env:
+          SECRET_KEY: ci-secret-key-value-with-at-least-32-characters
+          JWT_SECRET_KEY: ci-jwt-secret-value-with-at-least-32-characters
+        run: |
+          python - <<'PY'
+          import pymysql
+
+          connection = pymysql.connect(
+              host="127.0.0.1",
+              port=3306,
+              user="root",
+              password="ci-root-password",
+              database="medical_db",
+          )
+          try:
+              with connection.cursor() as cursor:
+                  cursor.execute(
+                      "SELECT COUNT(*) FROM information_schema.tables "
+                      "WHERE table_schema = 'medical_db'"
+                  )
+                  table_count = cursor.fetchone()[0]
+          finally:
+              connection.close()
+          if table_count:
+              raise SystemExit(
+                  f"Packaged migration DDL gate requires an empty schema; found {table_count} tables"
+              )
+          print("Confirmed empty schema before packaged migration DDL gate")
+          PY
+          MYSQL_PWD=ci-root-password mysqldump \
+            --host=127.0.0.1 \
+            --port=3306 \
+            --user=root \
+            --protocol=TCP \
+            --single-transaction \
+            --quick \
+            --hex-blob \
+            --routines \
+            --triggers \
+            --events \
+            --no-tablespaces \
+            --default-character-set=utf8mb4 \
+            medical_db > build/ci-pre-migration.sql
+          python - <<'PY'
+          import hashlib
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          import pymysql
+
+          backup = Path("build/ci-pre-migration.sql")
+          connection = pymysql.connect(
+              host="127.0.0.1",
+              port=3306,
+              user="root",
+              password="ci-root-password",
+              database="medical_db",
+          )
+          try:
+              with connection.cursor() as cursor:
+                  cursor.execute("SELECT @@server_uuid, @@GLOBAL.gtid_executed")
+                  server_uuid, gtid_executed = cursor.fetchone()
+                  try:
+                      cursor.execute("SELECT version_num FROM alembic_version")
+                      alembic_heads = sorted({row[0] for row in cursor.fetchall()})
+                  except pymysql.err.ProgrammingError as error:
+                      if error.args[0] != 1146:
+                          raise
+                      alembic_heads = []
+          finally:
+              connection.close()
+          normalized_gtid = "".join(str(gtid_executed or "").split())
+          gtid_digest = (
+              hashlib.sha256(normalized_gtid.encode("utf-8")).hexdigest()
+              if normalized_gtid
+              else None
+          )
+          manifest = {
+              "schema_version": 2,
+              "sha256": hashlib.sha256(backup.read_bytes()).hexdigest(),
+              "size_bytes": backup.stat().st_size,
+              "database_target": "mysql://127.0.0.1:3306/medical_db",
+              "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+              "server_uuid": server_uuid,
+              "alembic_heads": alembic_heads,
+              "gtid_executed_sha256": gtid_digest,
+              "gtid_check": "unchanged" if gtid_digest else "unavailable",
+              "requires_write_quiescence": True,
+          }
+          Path(f"{backup}.manifest.json").write_text(
+              json.dumps(manifest, sort_keys=True) + "\n",
+              encoding="utf-8",
+          )
+          PY
+          DATABASE_URL="mysql+pymysql://root:ci-root-password@127.0.0.1:3306/medical_db?charset=utf8mb4" \
+          DATABASE_REQUIRE_TLS=0 \
+          timeout 60s dist/medical_room \
+            --migrate-database \
+            --backup-file build/ci-pre-migration.sql \
+            --yes > build/packaged-mysql-migration.txt 2>&1
+          cat build/packaged-mysql-migration.txt
+          grep -q "Database migration and post-migration preflight passed" \
+            build/packaged-mysql-migration.txt
+          python - <<'PY'
+          import pymysql
+
+          connection = pymysql.connect(
+              host="127.0.0.1",
+              port=3306,
+              user="root",
+              password="ci-root-password",
+              autocommit=True,
+          )
+          try:
+              with connection.cursor() as cursor:
+                  cursor.execute(
+                      "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'medical_app'@'%'"
+                  )
+                  cursor.execute(
+                      "GRANT SELECT, INSERT, UPDATE, DELETE "
+                      "ON `medical_db`.* TO 'medical_app'@'%'"
+                  )
+          finally:
+              connection.close()
+          PY
+          cat > dist/.env <<'EOF'
+          DATABASE_URL=mysql+pymysql://medical_app:ci-app-password@127.0.0.1:3306/medical_db?charset=utf8mb4
+          DATABASE_REQUIRE_TLS=0
+          REQUIRE_ALEMBIC_HEAD=1
+          RUNTIME_SCHEMA_SYNC_ENABLED=0
+          PRODUCTION_DATABASE_PREFLIGHT_ENABLED=1
+          SECRET_KEY=ci-secret-key-value-with-at-least-32-characters
+          JWT_SECRET_KEY=ci-jwt-secret-value-with-at-least-32-characters
+          EOF
+          set +e
+          timeout 30s dist/medical_room --check-database \
+            > build/packaged-mysql-preflight.txt 2>&1
+          status=$?
+          set -e
+          cat build/packaged-mysql-preflight.txt
+          rm -f dist/.env
+          if [ "$status" -gt 1 ]; then
+            echo "Packaged MySQL preflight failed with exit $status"
+            exit "$status"
+          fi
+          grep -q "MySQL connection succeeded" build/packaged-mysql-preflight.txt
+          if grep -q "\[BLOCK\]" build/packaged-mysql-preflight.txt; then
+            echo "Packaged MySQL preflight contained blocking findings"
+            exit 1
+          fi
+          echo "Packaged executable MySQL connection gate passed"
+          help_output="$(timeout 15s dist/medical_room --help 2>&1)"
+          printf '%s\n' "$help_output"
+          grep -F -- "--check-database" <<< "$help_output"
+          grep -F -- "--migrate-database" <<< "$help_output"
+          grep -F -- "--import-sqlite" <<< "$help_output"
+          if grep -F -- "Starting waitress" <<< "$help_output"; then
+            echo "Packaged --help unexpectedly started the server" >&2
+            exit 1
+          fi
+
       # ── 10. 打包 tar.gz ──────────────────────────────────
       - name: Package tar.gz
         id: tarball
@@ -123,6 +501,7 @@ jobs:
           # 复制启动脚本
           cp run.sh "${STAGING}/"
           chmod +x "${STAGING}/run.sh"
+          cp docs/部署与维护说明.md "${STAGING}/MYSQL-DEPLOYMENT.md"
 
           # 创建 README
           cat > "${STAGING}/README.txt" << 'EOF'
@@ -158,7 +537,15 @@ jobs:
 
           【系统要求】
             Linux x86_64 (glibc 2.17+)
-            无需安装 Python 或其他依赖
+            run.sh 进程管理命令需要 flock（通常由 util-linux 提供）
+            SQLite 模式无需安装 Python 或数据库依赖
+
+          【外部 MySQL】
+            在 .env 配置 DATABASE_URL 和 verified TLS 后，先运行：
+              ./medical_room --check-database
+            schema 升级和 SQLite 数据导入使用 --help 中的受保护命令。
+            后台 MySQL 备份下载需要兼容的 mysqldump 客户端；生产恢复必须
+            先在隔离库演练。完整步骤见项目 docs/部署与维护说明.md。
           ============================================================
           EOF
 
@@ -188,8 +575,19 @@ jobs:
           cat > "${APP_DIR}/AppRun" << 'APPRUN'
           #!/bin/bash
           SELF_DIR="$(cd "$(dirname "$0")" && pwd)"
-          export APP_ROOT="$SELF_DIR"
-          mkdir -p "$SELF_DIR/data/backups" "$SELF_DIR/logs"
+          IMAGE_DIR="$(cd "$(dirname "${APPIMAGE:-$0}")" && pwd)"
+          if [ -z "${MEDICAL_ROOM_ENV_FILE:-}" ] && [ -f "$IMAGE_DIR/.env" ]; then
+            export MEDICAL_ROOM_ENV_FILE="$IMAGE_DIR/.env"
+          fi
+          if [ -z "${APP_ROOT:-}" ]; then
+            if [ -w "$IMAGE_DIR" ]; then
+              APP_ROOT="$IMAGE_DIR"
+            else
+              XDG_BASE="${XDG_DATA_HOME:-${XDG_STATE_HOME:-${HOME:-/tmp}/.local/share}}"
+              APP_ROOT="$XDG_BASE/medical-room"
+            fi
+            export APP_ROOT
+          fi
           exec "$SELF_DIR/usr/bin/medical_room" "$@"
           APPRUN
           chmod +x "${APP_DIR}/AppRun"
@@ -244,7 +642,8 @@ jobs:
 
           # 生成 AppImage
           APPIMAGE_FILE="medical-room-v${VERSION}-linux-x86_64.AppImage"
-          ARCH=x86_64 /tmp/squashfs-root/AppRun --no-appindicator "${APP_DIR}" "${APPIMAGE_FILE}" 2>/dev/null || true
+          ARCH=x86_64 /tmp/squashfs-root/AppRun \
+            --no-appindicator "${APP_DIR}" "${APPIMAGE_FILE}"
 
           if [ -f "${APPIMAGE_FILE}" ]; then
             chmod +x "${APPIMAGE_FILE}"
@@ -252,9 +651,70 @@ jobs:
             echo "Size: $(du -h "${APPIMAGE_FILE}" | cut -f1)"
             echo "built=true" >> "$GITHUB_OUTPUT"
           else
-            echo "AppImage build skipped (appimagetool unavailable)"
-            echo "built=false" >> "$GITHUB_OUTPUT"
+            echo "AppImage build failed: expected ${APPIMAGE_FILE}" >&2
+            exit 1
           fi
+
+      - name: Smoke generated AppImage against MySQL
+        if: steps.appimage.outputs.built == 'true'
+        env:
+          APPIMAGE_FILE: ${{ steps.appimage.outputs.filename }}
+        run: |
+          set -euo pipefail
+          SMOKE_DIR="${RUNNER_TEMP}/medical-room-appimage-smoke"
+          STATE_HOME="${RUNNER_TEMP}/medical-room-appimage-state"
+          rm -rf "$SMOKE_DIR" "$STATE_HOME"
+          mkdir -p "$SMOKE_DIR" "$STATE_HOME"
+          cp "$APPIMAGE_FILE" "$SMOKE_DIR/medical-room.AppImage"
+          chmod +x "$SMOKE_DIR/medical-room.AppImage"
+          cat > "$SMOKE_DIR/.env" <<'EOF'
+          DATABASE_URL=mysql+pymysql://medical_app:ci-app-password@127.0.0.1:3306/medical_db?charset=utf8mb4
+          DATABASE_REQUIRE_TLS=0
+          REQUIRE_ALEMBIC_HEAD=1
+          RUNTIME_SCHEMA_SYNC_ENABLED=0
+          PRODUCTION_DATABASE_PREFLIGHT_ENABLED=1
+          SECRET_KEY=ci-secret-key-value-with-at-least-32-characters
+          JWT_SECRET_KEY=ci-jwt-secret-value-with-at-least-32-characters
+          EOF
+          chmod 0555 "$SMOKE_DIR"
+          trap 'chmod 0755 "$SMOKE_DIR" 2>/dev/null || true' EXIT
+
+          help_output="$(
+            APPIMAGE_EXTRACT_AND_RUN=1 \
+            XDG_DATA_HOME="$STATE_HOME" \
+            timeout 30s "$SMOKE_DIR/medical-room.AppImage" --help 2>&1
+          )"
+          printf '%s\n' "$help_output"
+          grep -F -- "--check-database" <<< "$help_output"
+          grep -F -- "--migrate-database" <<< "$help_output"
+          grep -F -- "--backup-file" <<< "$help_output"
+          if grep -F -- "Starting waitress" <<< "$help_output"; then
+            echo "AppImage --help unexpectedly started the server" >&2
+            exit 1
+          fi
+
+          set +e
+          APPIMAGE_EXTRACT_AND_RUN=1 \
+            XDG_DATA_HOME="$STATE_HOME" \
+            timeout 45s "$SMOKE_DIR/medical-room.AppImage" --check-database \
+            > build/appimage-mysql-preflight.txt 2>&1
+          status=$?
+          set -e
+          cat build/appimage-mysql-preflight.txt
+          if [ "$status" -gt 1 ]; then
+            echo "AppImage MySQL preflight failed with exit $status" >&2
+            exit "$status"
+          fi
+          grep -q "MySQL connection succeeded" build/appimage-mysql-preflight.txt
+          if grep -q "\[BLOCK\]" build/appimage-mysql-preflight.txt; then
+            echo "AppImage MySQL preflight contained blocking findings" >&2
+            exit 1
+          fi
+          test -d "$STATE_HOME/medical-room/data"
+          test -d "$STATE_HOME/medical-room/logs"
+          test ! -e "$SMOKE_DIR/data"
+          test ! -e "$SMOKE_DIR/logs"
+          echo "Generated AppImage CLI and writable-state smoke passed"
 
       # ── 12. 创建 Release 并上传 ──────────────────────────
       - name: Create Release and Upload
@@ -284,9 +744,11 @@ jobs:
             系统会生成随机临时密码并写入启动日志。登录后请立即修改密码。
 
             ### 💡 说明
-            - 启动后自动在程序同级目录创建 `data/` 和 `logs/`
-            - 数据库自动建表并安全增量补齐；复杂结构升级需正式 migration
-            - 系统要求：Linux x86_64 (glibc 2.17+)
+            - 可写安装目录使用同级 `data/` 和 `logs/`；只读目录自动回退到 XDG 用户目录
+            - SQLite 可使用兼容同步；外部 MySQL 必须先通过只读预检和正式 migration
+            - 打包程序支持 `--check-database`、`--migrate-database`、`--import-sqlite`
+            - MySQL 备份下载需要兼容的 `mysqldump`，恢复必须先在隔离库演练
+            - 系统要求：Linux x86_64 (glibc 2.17+)；tar 包的 `run.sh` 需要 `flock`（通常由 `util-linux` 提供）
 
             ### 🔗 访问地址
             - 本机：http://127.0.0.1:5000
@@ -295,7 +757,7 @@ jobs:
           prerelease: ${{ github.event.inputs.prerelease || false }}
           files: |
             ${{ steps.tarball.outputs.filename }}
-            ${{ steps.appimage.outputs.built == 'true' && steps.appimage.outputs.filename || '' }}
+            ${{ steps.appimage.outputs.filename }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

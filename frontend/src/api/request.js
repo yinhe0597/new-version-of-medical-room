@@ -103,12 +103,11 @@ function _startHealthCheck() {
   if (_healthCheckTimer) return
   _healthCheckTimer = setInterval(async () => {
     try {
-      await axios.get('/api/auth/login', { timeout: 3000 })
-      // 返回 405 也说明服务在线
+      await axios.get('/api/health/ready', { timeout: 3000 })
       _clearOffline()
     } catch (err) {
-      if (err.response) {
-        // 有 HTTP 响应，说明后端已恢复
+      if (err.response && err.response.status < 500) {
+        // 4xx 说明服务可达；5xx readiness 仍表示数据库不可用。
         _clearOffline()
       }
     }
@@ -159,7 +158,7 @@ service.interceptors.response.use(
     const res = response.data
     // Handle binary data (blob)
     if (response.config.responseType === 'blob') {
-      return res
+      return response.config.returnFullResponse ? response : res
     }
     // Assuming backend returns { code: 200, data: ... } or just data
     return res

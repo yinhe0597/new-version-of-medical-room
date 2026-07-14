@@ -11,7 +11,7 @@
 
 ---
 
-[![Python](https://img.shields.io/badge/Python-3.8%2B-blue?logo=python&logoColor=white)](https://python.org)
+[![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://python.org)
 [![Flask](https://img.shields.io/badge/Backend-Flask-000000?logo=flask&logoColor=white)](https://flask.palletsprojects.com)
 [![Vue.js](https://img.shields.io/badge/Frontend-Vue%203-4FC08D?logo=vue.js&logoColor=white)](https://vuejs.org)
 [![Element Plus](https://img.shields.io/badge/UI-Element%20Plus-409EFF?logo=element&logoColor=white)](https://element-plus.org)
@@ -60,6 +60,17 @@
 >
 > 两日整体改动、验证结果和后续事项汇总见
 > [7 月 10 日至 11 日两日修复总结](docs/开发日志-2026-07-10至11-两日修复总结.md)。
+>
+> **2026-07-13 主线整合说明**：`fix/time-and-test-gates` 的 4 个连续提交已无冲突
+> 整合到 `main`，整合终点为 `04699f0`；`dev`、`new_data`、本地专用文档和未经
+> 校验的 Go 重构草稿均未混入。提交映射、验证结果、发布约束和后续优先级见
+> [近期修改整合说明](docs/近期修改整合说明-2026-07-13.md)。
+>
+> **2026-07-13 MySQL 生产发布加固**：已补齐只读生产预检、受保护的 schema 升级和
+> SQLite 数据导入、备份完整性门禁、健康探针、成品 CLI 与 Linux 进程管理防护。
+> 2026-07-14 提交前复验后端 `231` 项通过（1 项按平台跳过）、前端 `1691` 个模块
+> 构建通过；目标 MySQL/云数据库的 TLS、恢复、迁移和回退演练仍须在发布前执行。
+> 详见 [MySQL 生产发布加固日志](docs/开发日志-2026-07-13-MySQL生产发布加固.md)。
 
 ---
 
@@ -155,6 +166,7 @@ tar xzf 医务室管理系统-v0.0.16-linux.tar.gz
 cd 医务室管理系统-v0.0.16-linux
 
 # 后台启动（自带进程管理）
+# 需要系统提供 flock（通常来自 util-linux）
 ./run.sh start
 
 # 其他命令
@@ -174,14 +186,14 @@ chmod +x 医务室管理系统-v0.0.16-linux.AppImage
 
 **从源码构建 Linux 包：**
 ```bash
-# 需要 Python 3.8+ 和 Node.js 22.12+
+# 需要 Python 3.10+（推荐 3.11）和 Node.js 22.12+
 bash build_linux.sh
 # 输出到 dist_linux/ 目录，包含 tar.gz 和 AppImage 两种格式
 ```
 
 ### 方式三：源码开发
 
-**后端 (Python 3.8+)**
+**后端 (Python 3.10+，推荐 3.11)**
 ```bash
 cd backend
 python -m venv .venv
@@ -269,11 +281,28 @@ Git；删除它会使现有登录令牌失效。管理员删除账号采用软�
 | 📝 [2026-07-10 开发日志](docs/开发日志-2026-07-10-main全方位修复.md) | 今日改动、验证结果和明确未完成事项 |
 | 🗄️ [2026-07-11 Alembic 迁移续接记录](docs/开发日志-2026-07-11-Alembic迁移续接记录.md) | 历史链修复、`ture.db` 副本验收、MySQL 隔离验证流程 |
 | 📚 [7 月 10 日至 11 日两日修复总结](docs/开发日志-2026-07-10至11-两日修复总结.md) | 两日系统安全、库存收费、时间统一与数据库迁移汇总 |
+| ✅ [2026-07-13 近期修改整合说明](docs/近期修改整合说明-2026-07-13.md) | 主线提交链、未合入边界、验证状态与后续优先级 |
+| 🛡️ [2026-07-13 MySQL 生产发布加固](docs/开发日志-2026-07-13-MySQL生产发布加固.md) | 预检、迁移、打包、健康探针、验证结果与外部待验项 |
 | 🔎 [二次开发项目分析](docs/二次开发项目分析.md) | Git 演进、功能线索、风险与后续路线 |
 
 ---
 
 ## 📋 更新日志
+
+### MySQL 生产发布防护（2026-07-13，目标环境验收待执行）
+
+- Windows/Linux 打包配置加入 PyMySQL、MySQL 方言、生产数据库 CLI 和完整 Alembic 资源。
+- 新增只读生产预检，覆盖版本、TLS、字符集、严格模式、InnoDB、权限、Alembic head、模型结构和外键悬空数据；运行账号的全局授权、角色授权或无法解析的授权均按失败关闭处理。
+- 所有 MySQL 启动强制禁止隐式 schema 同步并要求预检和唯一 head，显式危险覆盖也会在连接前失败。
+- MySQL URL query 采用严格 allowlist，目标、凭据、超时、连接时 SQL 和未知项均在连接前阻断；允许项转入直接 PyMySQL 参数并在 engine 初始化前清除全部用户 query（框架仅可能补回固定 `charset=utf8mb4`），运行时和迁移工厂也拒绝 `connect_args` 覆盖目标或 socket 不一致。
+- SQLite 到 MySQL 改为 dry-run 优先、源快照 SHA 绑定、strict/InnoDB 事务前提、目标 head 复检、分批复制和提交前行数/主键/全部实际外键对账；模型表与扩展表存在交叉外键时直接阻断。
+- 新增打包命令 `--check-database`、`--migrate-database`、`--import-sqlite`，以及 `/api/health/live`、`/api/health/ready` 探针；MySQL readiness 会持续检查目标库、读写状态、strict mode、Alembic head 和运行账号授权漂移。
+- MySQL 备份以单个 ZIP 原子下载 SQL 与 manifest；迁移门禁校验摘要、默认 60 分钟时效、`server_uuid`、Alembic 版本及查询成功后得到的 GTID 状态。GTID 查询错误直接阻断，恢复仍必须在隔离库演练后人工切换。
+- Linux `run.sh` 会拒绝已有 200/503 响应的端口、校验 PID 启动时刻和进程令牌并通过 `flock` 串行化启停；缺少 `flock`、Waitress 或重试耗尽时均返回失败退出码。
+
+以上自动化和打包门禁不替代目标生产环境验收。发布前仍需在实际 MySQL/云数据库上完成 TLS、备份恢复、数据迁移、业务冒烟和故障回退演练，详见[部署与维护说明](docs/部署与维护说明.md)。
+
+---
 
 ### Alembic 历史迁移链修复（2026-07-11，MySQL 实机验收已完成）
 
@@ -290,7 +319,7 @@ Git；删除它会使现有登录令牌失效。管理员删除账号采用软�
 
 ---
 
-### main 主线全方位修复（2026-07-10，待发布）
+### main 主线全方位修复（2026-07-10 阶段快照，待发布）
 
 - 配置和初始化入口统一使用 `data/app.db`，SQLite 默认、MySQL 可选，首次密码改为环境变量或随机临时密码。
 - 增加稳定运行时密钥、旧 JWT 失效和账号软停用，保留历史业务人员归属。
@@ -298,8 +327,9 @@ Git；删除它会使现有登录令牌失效。管理员删除账号采用软�
 - 收费校验、收入分摊、北京时间边界、财务隐私与数据库在线备份统一加固。
 - 智能盘库改为先扫描、人工核对后合并；补齐多角色账号设置和前端鉴权失效处理。
 
-> 详细改动、`64/64` 后端测试结果及尚未完成的 MySQL 实机验收等事项见
-> [开发日志](docs/开发日志-2026-07-10-main全方位修复.md)。
+> 本节保留 7 月 10 日当日的 `64/64` 后端测试结果及当时尚未完成的 MySQL 实机
+> 验收状态。后续最终结果为后端 `91/91`、迁移定向 `21/21` 和 MySQL 三场景通过，
+> 见上方 Alembic 维护记录与[近期修改整合说明](docs/近期修改整合说明-2026-07-13.md)。
 
 ---
 

@@ -19,14 +19,16 @@ from backend.app.services.time_utils import (
 )
 from backend.app.services.bootstrap import validate_password
 from backend.app.utils.query import nulls_last_asc
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import aliased
 from sqlalchemy.engine import make_url
 import os
 import csv
+import hashlib
 import io
 import json
+import logging
 import math
 import re
 import subprocess
@@ -34,6 +36,12 @@ import sqlite3
 import tempfile
 import zipfile
 from sqlalchemy.exc import IntegrityError
+from backend.production_cli import (
+    BACKUP_MANIFEST_SCHEMA_VERSION,
+    backup_state_manifest_fields,
+    database_target_identity,
+    read_mysql_target_state,
+)
 
 from pypinyin import pinyin, Style
 
@@ -143,23 +151,160 @@ def _nonnegative_int(value, field):
     return result
 
 
-def _mysql_backup_response(uri):
+def _mysql_dump_command(uri, config):
     url = make_url(uri)
     if not url.drivername.startswith("mysql") or not url.database:
-        return jsonify({"msg": "当前数据库不是 MySQL"}), 400
+        raise ValueError("current database is not MySQL")
 
-    command = [
-        "mysqldump",
-        "-h", url.host or "127.0.0.1",
-        "-P", str(url.port or 3306),
+    command = [config.get("MYSQLDUMP_PATH") or "mysqldump"]
+    connect_args = (config.get("SQLALCHEMY_ENGINE_OPTIONS") or {}).get(
+        "connect_args", {}
+    )
+    ssl_options = connect_args.get("ssl")
+    if not isinstance(ssl_options, dict):
+        ssl_options = {}
+    unix_socket = (
+        config.get("MYSQL_UNIX_SOCKET")
+        or connect_args.get("unix_socket")
+        or url.query.get("unix_socket")
+    )
+    if unix_socket:
+        command.extend(["--protocol=SOCKET", f"--socket={unix_socket}"])
+    else:
+        command.extend([
+            "--protocol=TCP",
+            "-h", url.host or "127.0.0.1",
+            "-P", str(url.port or 3306),
+        ])
+    command.extend([
         "-u", url.username or "root",
         "--single-transaction",
+        "--quick",
+        "--hex-blob",
+        "--no-tablespaces",
+        "--set-gtid-purged=OFF",
         "--default-character-set=utf8mb4",
-        url.database,
-    ]
+    ])
+    ssl_ca = (
+        config.get("MYSQL_SSL_CA")
+        or connect_args.get("ssl_ca")
+        or ssl_options.get("ca")
+        or url.query.get("ssl_ca")
+    )
+    ssl_cert = (
+        config.get("MYSQL_SSL_CERT")
+        or connect_args.get("ssl_cert")
+        or ssl_options.get("cert")
+        or url.query.get("ssl_cert")
+    )
+    ssl_key = (
+        config.get("MYSQL_SSL_KEY")
+        or connect_args.get("ssl_key")
+        or ssl_options.get("key")
+        or url.query.get("ssl_key")
+    )
+    if bool(ssl_cert) != bool(ssl_key):
+        raise RuntimeError("MySQL backup TLS certificate and key must be configured together")
+    if not unix_socket:
+        if ssl_ca:
+            command.extend(["--ssl-mode=VERIFY_IDENTITY", f"--ssl-ca={ssl_ca}"])
+        elif config.get("DATABASE_REQUIRE_TLS"):
+            command.append("--ssl-mode=REQUIRED")
+        if ssl_cert and ssl_key:
+            command.extend([f"--ssl-cert={ssl_cert}", f"--ssl-key={ssl_key}"])
+    command.append(url.database)
+    return command
+
+
+def _file_sha256(path):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _remove_temp_file(path):
+    if not path:
+        return
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
+    except OSError:
+        logging.getLogger(__name__).warning(
+            "Failed to remove temporary backup file: %s", path
+        )
+
+
+def _capture_mysql_backup_state():
+    with db.engine.connect() as connection:
+        return read_mysql_target_state(connection)
+
+
+def _mysql_backup_manifest(
+    uri,
+    backup_path,
+    backup_filename,
+    backup_sha256,
+    config,
+    backup_state,
+):
+    connect_args = (config.get("SQLALCHEMY_ENGINE_OPTIONS") or {}).get(
+        "connect_args", {}
+    )
+    unix_socket = config.get("MYSQL_UNIX_SOCKET") or connect_args.get("unix_socket")
+    return {
+        "schema_version": BACKUP_MANIFEST_SCHEMA_VERSION,
+        "sha256": backup_sha256,
+        "size_bytes": os.path.getsize(backup_path),
+        "database_target": database_target_identity(uri, unix_socket=unix_socket),
+        "backup_filename": backup_filename,
+        "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+        **backup_state,
+    }
+
+
+def _safe_backup_component(database_name):
+    component = re.sub(r"[^A-Za-z0-9._-]+", "_", str(database_name)).strip("._")
+    return (component or "mysql")[:80]
+
+
+def _write_mysql_backup_bundle(bundle_path, backup_path, backup_filename, manifest):
+    manifest_filename = f"{backup_filename}.manifest.json"
+    manifest_payload = (
+        json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    ).encode("utf-8")
+    with zipfile.ZipFile(
+        bundle_path,
+        "w",
+        compression=zipfile.ZIP_DEFLATED,
+        compresslevel=6,
+        allowZip64=True,
+    ) as archive:
+        archive.write(backup_path, arcname=backup_filename)
+        archive.writestr(manifest_filename, manifest_payload)
+
+
+def _mysql_backup_response(uri):
+    try:
+        command = _mysql_dump_command(uri, current_app.config)
+    except ValueError:
+        return jsonify({"msg": "当前数据库不是 MySQL"}), 400
+    except RuntimeError:
+        current_app.logger.exception("Invalid MySQL backup TLS configuration")
+        return jsonify({"msg": "MySQL 备份 TLS 配置无效"}), 500
+
+    url = make_url(uri)
     env = os.environ.copy()
     if url.password:
         env["MYSQL_PWD"] = url.password
+
+    try:
+        state_before_dump = _capture_mysql_backup_state()
+    except Exception:
+        current_app.logger.exception("Could not read MySQL state before backup")
+        return jsonify({"msg": "无法确认 MySQL 实例状态，备份已阻止"}), 503
 
     fd, backup_path = tempfile.mkstemp(prefix="medical_backup_", suffix=".sql")
     os.close(fd)
@@ -174,40 +319,118 @@ def _mysql_backup_response(uri):
                 timeout=300,
             )
     except FileNotFoundError:
-        os.remove(backup_path)
+        _remove_temp_file(backup_path)
         return jsonify({"msg": "未找到 mysqldump，请安装 MySQL 客户端工具"}), 500
     except subprocess.TimeoutExpired:
-        if os.path.exists(backup_path):
-            os.remove(backup_path)
+        _remove_temp_file(backup_path)
         current_app.logger.error("mysqldump timed out after 300 seconds")
         return jsonify({"msg": "MySQL 备份超时，请检查数据库负载"}), 504
     except OSError:
-        if os.path.exists(backup_path):
-            os.remove(backup_path)
+        _remove_temp_file(backup_path)
         current_app.logger.exception("Failed to start mysqldump")
         return jsonify({"msg": "MySQL 备份失败，请检查客户端工具和临时目录"}), 500
+    except Exception:
+        _remove_temp_file(backup_path)
+        current_app.logger.exception("Unexpected mysqldump subprocess failure")
+        return jsonify({"msg": "MySQL 备份失败，请检查服务日志"}), 500
 
     if process.returncode != 0:
         current_app.logger.error(
             "mysqldump failed: %s",
             process.stderr.decode("utf-8", errors="replace"),
         )
-        os.remove(backup_path)
+        _remove_temp_file(backup_path)
         return jsonify({"msg": "MySQL 备份失败，请检查服务和日志"}), 500
 
-    timestamp = local_now().strftime("%Y%m%d_%H%M%S")
     try:
-        response = send_file(
+        state_after_dump = _capture_mysql_backup_state()
+        backup_state = backup_state_manifest_fields(
+            state_before_dump,
+            state_after_dump,
+        )
+    except RuntimeError as error:
+        _remove_temp_file(backup_path)
+        current_app.logger.warning("MySQL backup state changed: %s", error)
+        return jsonify({"msg": str(error)}), 409
+    except Exception:
+        _remove_temp_file(backup_path)
+        current_app.logger.exception("Could not read MySQL state after backup")
+        return jsonify({"msg": "无法复核 MySQL 实例状态，备份已丢弃"}), 503
+
+    timestamp = local_now().strftime("%Y%m%d_%H%M%S")
+    backup_stem = f"{_safe_backup_component(url.database)}_backup_{timestamp}"
+    backup_filename = f"{backup_stem}.sql"
+    bundle_filename = f"{backup_stem}.zip"
+    try:
+        backup_sha256 = _file_sha256(backup_path)
+        manifest = _mysql_backup_manifest(
+            uri,
             backup_path,
-            as_attachment=True,
-            download_name=f"{url.database}_backup_{timestamp}.sql",
-            mimetype="application/sql",
+            backup_filename,
+            backup_sha256,
+            current_app.config,
+            backup_state,
         )
     except Exception:
-        os.remove(backup_path)
+        _remove_temp_file(backup_path)
+        current_app.logger.exception("Failed to finalize MySQL backup manifest")
+        return jsonify({"msg": "MySQL 备份校验失败，请检查服务日志"}), 500
+
+    bundle_path = None
+    try:
+        bundle_fd, bundle_path = tempfile.mkstemp(
+            prefix="medical_backup_bundle_", suffix=".zip"
+        )
+        os.close(bundle_fd)
+        _write_mysql_backup_bundle(
+            bundle_path,
+            backup_path,
+            backup_filename,
+            manifest,
+        )
+        bundle_sha256 = _file_sha256(bundle_path)
+    except Exception:
+        _remove_temp_file(backup_path)
+        _remove_temp_file(bundle_path)
+        current_app.logger.exception("Failed to create MySQL backup ZIP bundle")
+        return jsonify({"msg": "MySQL 备份打包失败，请检查服务日志"}), 500
+    _remove_temp_file(backup_path)
+
+    try:
+        response = send_file(
+            bundle_path,
+            as_attachment=True,
+            download_name=bundle_filename,
+            mimetype="application/zip",
+        )
+    except Exception:
+        _remove_temp_file(bundle_path)
+        _remove_temp_file(backup_path)
         raise
     response.direct_passthrough = False
-    response.call_on_close(lambda: os.path.exists(backup_path) and os.remove(backup_path))
+    response.headers["X-Backup-SHA256"] = backup_sha256
+    response.headers["X-Backup-Bundle-SHA256"] = bundle_sha256
+    response.headers["X-Backup-Manifest"] = json.dumps(
+        manifest,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    response.headers["Access-Control-Expose-Headers"] = (
+        "Content-Disposition, X-Backup-SHA256, X-Backup-Bundle-SHA256, "
+        "X-Backup-Manifest"
+    )
+    response.headers["Cache-Control"] = "no-store"
+    response_stream = response.response
+
+    def cleanup_backup_response():
+        close = getattr(response_stream, "close", None)
+        if close is not None:
+            close()
+        _remove_temp_file(bundle_path)
+        _remove_temp_file(backup_path)
+
+    response.call_on_close(cleanup_backup_response)
     return response
 
 

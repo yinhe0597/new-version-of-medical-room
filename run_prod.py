@@ -18,37 +18,128 @@ import traceback
 import time as time_module
 import ctypes
 from datetime import timedelta
+from pathlib import Path
 from dotenv import load_dotenv
 from werkzeug.exceptions import HTTPException
 
 # ---------------------------------------------------------------------------
-# 1. 计算 APP_ROOT（exe 所在目录 or 项目根目录）
+# 1. 计算可写 APP_ROOT，并加载外部配置
 # ---------------------------------------------------------------------------
-if getattr(sys, 'frozen', False):
-    APP_ROOT = os.path.dirname(sys.executable)
-else:
-    APP_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _stable_user_root():
+    if sys.platform == 'win32':
+        local_app_data = os.environ.get('LOCALAPPDATA', '').strip()
+        if local_app_data:
+            return Path(local_app_data).expanduser().resolve() / 'MedicalRoom'
+        return Path.home().resolve() / 'AppData' / 'Local' / 'MedicalRoom'
+
+    xdg_base = (
+        os.environ.get('XDG_DATA_HOME', '').strip()
+        or os.environ.get('XDG_STATE_HOME', '').strip()
+    )
+    if xdg_base:
+        return Path(xdg_base).expanduser().resolve() / 'medical-room'
+    return Path.home().resolve() / '.local' / 'share' / 'medical-room'
+
+
+def _resolve_app_root():
+    configured_root = os.environ.get('APP_ROOT', '').strip()
+    if configured_root:
+        return Path(configured_root).expanduser().resolve()
+
+    appimage = os.environ.get('APPIMAGE', '').strip()
+    if appimage:
+        image_dir = Path(appimage).expanduser().resolve().parent
+        if image_dir.is_dir() and os.access(image_dir, os.W_OK):
+            return image_dir
+        return _stable_user_root()
+
+    if getattr(sys, 'frozen', False):
+        executable_dir = Path(sys.executable).resolve().parent
+        if executable_dir.is_dir() and os.access(executable_dir, os.W_OK):
+            return executable_dir
+        return _stable_user_root()
+    return Path(__file__).resolve().parent
+
+
+def _load_external_environment(app_root):
+    candidates = []
+    configured_env = os.environ.get('MEDICAL_ROOM_ENV_FILE', '').strip()
+    if configured_env:
+        candidates.append(Path(configured_env).expanduser())
+
+    appimage = os.environ.get('APPIMAGE', '').strip()
+    if appimage:
+        candidates.append(Path(appimage).expanduser().resolve().parent / '.env')
+
+    candidates.append(Path(app_root) / '.env')
+    if getattr(sys, 'frozen', False):
+        candidates.append(Path(sys.executable).resolve().parent / '.env')
+    candidates.append(Path(__file__).resolve().parent / '.env')
+
+    seen = set()
+    for candidate in candidates:
+        normalized = str(candidate.resolve())
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        if candidate.is_file():
+            load_dotenv(candidate, override=False)
+            return normalized
+    return None
+
+
+APP_ROOT = str(_resolve_app_root())
 
 os.environ['APP_ROOT'] = APP_ROOT
-load_dotenv(os.path.join(APP_ROOT, '.env'))
+ENV_FILE = _load_external_environment(APP_ROOT)
 
 if APP_ROOT not in sys.path:
     sys.path.insert(0, APP_ROOT)
 
-from backend.runtime_secrets import ensure_runtime_secrets
-
 # ---------------------------------------------------------------------------
-# 2. 自动创建必要的目录
+# 2. 运行时目录（仅在真正启动服务时创建）
 # ---------------------------------------------------------------------------
 DATA_DIR = os.path.join(APP_ROOT, 'data')
 LOGS_DIR = os.path.join(APP_ROOT, 'logs')
 BACKUPS_DIR = os.path.join(DATA_DIR, 'backups')
+_RUNTIME_INITIALIZED = False
 
-os.makedirs(DATA_DIR, exist_ok=True)
-os.makedirs(LOGS_DIR, exist_ok=True)
-os.makedirs(BACKUPS_DIR, exist_ok=True)
 
-ensure_runtime_secrets(DATA_DIR)
+def initialize_runtime():
+    global _RUNTIME_INITIALIZED
+    if _RUNTIME_INITIALIZED:
+        return
+
+    try:
+        for directory in (DATA_DIR, LOGS_DIR, BACKUPS_DIR):
+            os.makedirs(directory, exist_ok=True)
+    except OSError as exc:
+        raise RuntimeError(
+            f'APP_ROOT is not writable ({APP_ROOT}): {exc}'
+        ) from exc
+
+    from backend.runtime_secrets import ensure_runtime_secrets
+
+    ensure_runtime_secrets(DATA_DIR)
+    log_file = os.path.join(LOGS_DIR, 'app.log')
+    file_handler = logging.handlers.RotatingFileHandler(
+        log_file, encoding='utf-8', maxBytes=5 * 1024 * 1024, backupCount=5
+    )
+    file_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    )
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(
+        logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    )
+    logging.basicConfig(
+        level=logging.INFO,
+        handlers=[file_handler, stream_handler],
+        force=True,
+    )
+    _RUNTIME_INITIALIZED = True
 
 
 def handle_all_exceptions(error):
@@ -97,26 +188,20 @@ disable_quickedit()
 # 3. 设置数据库路径（相对于 exe 所在目录）
 # ---------------------------------------------------------------------------
 DB_PATH = os.path.join(DATA_DIR, 'app.db')
-os.environ.setdefault('SQLALCHEMY_DATABASE_URI', 'sqlite:///' + os.path.abspath(DB_PATH))
+if not os.environ.get('DATABASE_URL'):
+    os.environ.setdefault('SQLALCHEMY_DATABASE_URI', 'sqlite:///' + os.path.abspath(DB_PATH))
 
-# ---------------------------------------------------------------------------
-# 4. 配置日志（带日志轮转，防止日志文件无限增长）
-# ---------------------------------------------------------------------------
-log_file = os.path.join(LOGS_DIR, 'app.log')
-
-# 日志轮转：单文件最大 5MB，保留最近 5 个备份
-file_handler = logging.handlers.RotatingFileHandler(
-    log_file, encoding='utf-8', maxBytes=5*1024*1024, backupCount=5
+_configured_database_uri = (
+    os.environ.get('DATABASE_URL')
+    or os.environ.get('SQLALCHEMY_DATABASE_URI', '')
 )
-file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
-stream_handler = logging.StreamHandler()
-stream_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-
-logging.basicConfig(
-    level=logging.INFO,
-    handlers=[file_handler, stream_handler]
-)
+USING_EXTERNAL_DATABASE = not _configured_database_uri.lower().startswith('sqlite')
+if USING_EXTERNAL_DATABASE:
+    # Production must never mutate an external schema implicitly. The database
+    # is checked before startup and must be upgraded by the dedicated migrator.
+    os.environ.setdefault('REQUIRE_ALEMBIC_HEAD', '1')
+    os.environ.setdefault('RUNTIME_SCHEMA_SYNC_ENABLED', '0')
+    os.environ.setdefault('PRODUCTION_DATABASE_PREFLIGHT_ENABLED', '1')
 
 # ---------------------------------------------------------------------------
 # 5. 获取本机局域网 IP
@@ -131,17 +216,12 @@ def get_local_ip():
     except Exception:
         return '127.0.0.1'
 
-# ---------------------------------------------------------------------------
-# 6. 导入 Flask 工厂（仅导入函数，不创建 app）
-# ---------------------------------------------------------------------------
-from backend.app import create_app, db
-from backend.app.models import utcnow as dt_utcnow
-from backend.app.services.time_utils import local_now
-from backend.app.services.stock_lock import StockMutationBusy, stock_mutation_guard
-
-
 def take_daily_snapshot(flask_app, snapshot_date=None):
     """Save the opening stock at local midnight for the current date."""
+    from backend.app import db
+    from backend.app.models import utcnow as dt_utcnow
+    from backend.app.services.time_utils import local_now
+
     with flask_app.app_context():
         from backend.app.models import DailyStockSnapshot, Drug
         today = snapshot_date or local_now().date()
@@ -174,6 +254,9 @@ def take_daily_snapshot(flask_app, snapshot_date=None):
 
 def snapshot_scheduler(flask_app):
     """后台线程：每天0点执行快照"""
+    from backend.app.services.time_utils import local_now
+    from backend.app.services.stock_lock import StockMutationBusy, stock_mutation_guard
+
     while True:
         now = local_now()
         tomorrow = now.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=1)
@@ -202,14 +285,22 @@ def snapshot_scheduler(flask_app):
 
 def start_server():
     """启动服务器（可被外层重启循环调用）"""
+    from backend.app import create_app, db
+
     PORT = 5000
     bind_host = os.environ.get('SERVER_HOST', '127.0.0.1')
 
     logging.info(f'APP_ROOT: {APP_ROOT}')
-    using_external_database = bool(os.environ.get('DATABASE_URL')) or not os.environ.get(
-        'SQLALCHEMY_DATABASE_URI', ''
-    ).startswith('sqlite')
+    using_external_database = USING_EXTERNAL_DATABASE
     logging.info('Database: %s', 'external database from environment' if using_external_database else DB_PATH)
+
+    if using_external_database:
+        from backend.config import Config
+        from backend.production_cli import ensure_configured_database_ready
+
+        if Config.PRODUCTION_DATABASE_PREFLIGHT_ENABLED:
+            logging.info('Running read-only production database preflight...')
+            ensure_configured_database_ready(log_report=True)
 
     # 创建 Flask 应用（此时会初始化数据库表、检查并兼容旧表结构）
     logging.info('Creating Flask application...')
@@ -262,18 +353,37 @@ def start_server():
     # waitress 特性：多线程、稳定、不会因单个请求异常而崩溃
     try:
         from waitress import serve
-        logging.info(f'Starting waitress server on {bind_host}:{PORT}')
-        serve(app, host=bind_host, port=PORT, threads=4,
-              channel_timeout=120, recv_bytes=65536,
-              url_scheme='http')
-    except ImportError:
-        # waitress 未安装时回退到 Flask 开发服务器
-        logging.warning('waitress not installed, falling back to Flask dev server (NOT recommended for production)')
-        logging.info(f'Starting Flask dev server on {bind_host}:{PORT}')
-        app.run(debug=False, host=bind_host, port=PORT, use_reloader=False)
+    except ImportError as error:
+        raise RuntimeError(
+            'waitress is required for production startup; reinstall backend dependencies'
+        ) from error
+    logging.info(f'Starting waitress server on {bind_host}:{PORT}')
+    serve(app, host=bind_host, port=PORT, threads=4,
+          channel_timeout=120, recv_bytes=65536,
+          url_scheme='http')
 
 
-if __name__ == '__main__':
+def main(argv=None):
+    from backend.production_cli import (
+        ProductionDatabaseBlocked,
+        ProductionDatabaseUnavailable,
+        execute_cli,
+    )
+
+    requested_args = list(sys.argv[1:] if argv is None else argv)
+    if '-h' in requested_args or '--help' in requested_args:
+        return execute_cli(requested_args)
+
+    try:
+        initialize_runtime()
+        command_status = execute_cli(requested_args)
+    except RuntimeError as error:
+        logging.error("Production command failed: %s", error)
+        print(f"ERROR: {error}", file=sys.stderr)
+        return 2
+    if command_status is not None:
+        return command_status
+
     MAX_RESTART_ATTEMPTS = 5
     RESTART_COOLDOWN = 3  # 重启间隔（秒）
     restart_count = 0
@@ -287,9 +397,39 @@ if __name__ == '__main__':
         except KeyboardInterrupt:
             logging.info('Server stopped by user (Ctrl+C).')
             break
-        except SystemExit:
-            logging.info('Server received SystemExit.')
-            break
+        except SystemExit as error:
+            exit_code = error.code
+            if exit_code is None or exit_code == 0:
+                logging.info('Server received a successful SystemExit.')
+                break
+            logging.error('Server received a failing SystemExit: %r', exit_code)
+            return exit_code if isinstance(exit_code, int) else 1
+        except ProductionDatabaseUnavailable as error:
+            restart_count += 1
+            logging.warning(
+                "Production database is temporarily unavailable "
+                "(attempt %s/%s): %s",
+                restart_count,
+                MAX_RESTART_ATTEMPTS,
+                error,
+            )
+            if restart_count < MAX_RESTART_ATTEMPTS:
+                logging.info(
+                    "Retrying database preflight in %s seconds...",
+                    RESTART_COOLDOWN,
+                )
+                time_module.sleep(RESTART_COOLDOWN)
+            else:
+                logging.error(
+                    "Production database remained unavailable after %s attempts.",
+                    MAX_RESTART_ATTEMPTS,
+                )
+                print(f"ERROR: {error}", file=sys.stderr)
+                return 2
+        except ProductionDatabaseBlocked as error:
+            logging.error('Production database preflight blocked startup: %s', error)
+            print(f"ERROR: {error}", file=sys.stderr)
+            return 2
         except Exception as e:
             restart_count += 1
             logging.error(f'Server crashed (attempt {restart_count}/{MAX_RESTART_ATTEMPTS}): {e}')
@@ -305,5 +445,11 @@ if __name__ == '__main__':
                         input("按 Enter 键退出...")
                     except EOFError:
                         pass
+                return 2
 
     logging.info('Application exited.')
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main(sys.argv[1:]))

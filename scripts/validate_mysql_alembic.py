@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -129,6 +130,42 @@ def mysql_identifier(value: str) -> str:
     return f"`{identifier(value)}`"
 
 
+def validated_account_host(value: str) -> str:
+    """Validate an exact MySQL account host without allowing wildcard matching."""
+
+    if not isinstance(value, str):
+        raise ValueError("MySQL client host must be a string")
+    host = value.strip()
+    if not host or len(host) > 255:
+        raise ValueError("MySQL client host is empty or too long")
+    if any(character in host for character in ("%", "_", "'", '"', "\\", "\0")):
+        raise ValueError("MySQL client host contains wildcard or unsafe characters")
+    try:
+        ipaddress.ip_address(host)
+        return host
+    except ValueError:
+        pass
+
+    hostname = host[:-1] if host.endswith(".") else host
+    labels = hostname.split(".")
+    if not labels or any(
+        not label
+        or len(label) > 63
+        or not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?", label)
+        for label in labels
+    ):
+        raise ValueError("MySQL client host is not a safe IP address or hostname")
+    return host
+
+
+def mysql_account_host_literal(value: str) -> str:
+    return f"'{validated_account_host(value)}'"
+
+
+def mysql_account_literal(user: str, host: str) -> str:
+    return f"'{identifier(user)}'@{mysql_account_host_literal(host)}"
+
+
 class MysqlAdmin:
     def __init__(self, login_path: str, host: str, port: int, mysql_bin: str):
         if not LOGIN_PATH_RE.fullmatch(login_path):
@@ -200,13 +237,14 @@ class MysqlAdmin:
             "SELECT @@server_uuid, @@hostname, @@port, VERSION(), @@version_comment, "
             "@@default_storage_engine, @@character_set_server, "
             "@@collation_server, @@sql_mode, @@read_only, "
-            "@@super_read_only, @@log_bin, @@general_log;",
+            "@@super_read_only, @@log_bin, @@general_log, "
+            "SUBSTRING_INDEX(USER(), '@', -1);",
             "preflight",
         ).strip()
         if not output:
             raise RuntimeError("MySQL preflight returned no server information")
         fields = output.split("\t")
-        if len(fields) != 13:
+        if len(fields) != 14:
             raise RuntimeError("MySQL preflight returned an unexpected result")
         names = (
             "server_uuid",
@@ -222,8 +260,10 @@ class MysqlAdmin:
             "super_read_only",
             "log_bin",
             "general_log",
+            "client_host",
         )
         details = dict(zip(names, fields))
+        details["client_host"] = validated_account_host(details["client_host"])
         engine = details["engine"].lower()
         charset = details["charset"].lower()
         collation = details["collation"].lower()
@@ -307,6 +347,7 @@ class TemporaryResources:
         expected_server_uuid: str,
         allow_binlog: bool,
         scenarios: tuple[str, ...],
+        account_host: str,
     ):
         suffix = secrets.token_hex(16)
         self.run_id = suffix
@@ -323,7 +364,7 @@ class TemporaryResources:
         self.databases = list(self.scenario_databases.values())
         self.attempted_databases: list[str] = []
         self.created_databases: list[str] = []
-        self.account_hosts = ("localhost", "127.0.0.1")
+        self.account_hosts = (validated_account_host(account_host),)
         self.attempted_accounts: list[str] = []
         self.created_accounts: list[str] = []
 
@@ -372,7 +413,8 @@ class TemporaryResources:
 
     def create(self) -> None:
         user_literals = {
-            host: f"'{self.user}'@'{host}'" for host in self.account_hosts
+            host: mysql_account_literal(self.user, host)
+            for host in self.account_hosts
         }
         account_attribute = json.dumps(
             {
@@ -430,7 +472,9 @@ class TemporaryResources:
     def _database_is_owned(self, database: str) -> bool:
         if database not in self.databases:
             return False
-        hosts = ", ".join(f"'{host}'" for host in self.account_hosts)
+        hosts = ", ".join(
+            mysql_account_host_literal(host) for host in self.account_hosts
+        )
         output = self._read(
             "SELECT COUNT(*) FROM information_schema.user_attributes "
             f"WHERE USER = '{self.user}' AND HOST IN ({hosts}) AND "
@@ -447,12 +491,13 @@ class TemporaryResources:
             ) from exc
 
     def _account_state(self, host: str) -> tuple[bool, bool]:
+        host_literal = mysql_account_host_literal(host)
         output = self._read(
             "SELECT COUNT(*), COALESCE(SUM("
             + self._account_ownership_predicate()
             + "), 0) "
             "FROM information_schema.user_attributes "
-            f"WHERE USER = '{self.user}' AND HOST = '{host}';",
+            f"WHERE USER = '{self.user}' AND HOST = {host_literal};",
             f"verify temporary account {host}",
             cleanup=True,
         ).strip()
@@ -498,7 +543,8 @@ class TemporaryResources:
                     exists, owned = self._account_state(host)
                     if exists and owned:
                         self._mutate(
-                            f"ALTER USER '{self.user}'@'{host}' ACCOUNT LOCK;",
+                            f"ALTER USER {mysql_account_literal(self.user, host)} "
+                            "ACCOUNT LOCK;",
                             f"lock temporary account {host}",
                             cleanup=True,
                         )
@@ -521,7 +567,7 @@ class TemporaryResources:
                         )
                     continue
                 self._mutate(
-                    f"DROP USER '{self.user}'@'{host}';",
+                    f"DROP USER {mysql_account_literal(self.user, host)};",
                     f"drop temporary account {host}",
                     cleanup=True,
                 )
@@ -538,7 +584,6 @@ class TemporaryResources:
             host=self.admin.host,
             port=self.admin.port,
             database=database,
-            query={"charset": "utf8mb4"},
         )
 
 
@@ -551,6 +596,15 @@ def migration_config(database_url: URL):
             "SECRET_KEY": "mysql-migration-validation",
             "JWT_SECRET_KEY": "mysql-migration-validation-jwt",
             "SQLALCHEMY_DATABASE_URI": database_url,
+            "SQLALCHEMY_ENGINE_OPTIONS": {
+                "pool_pre_ping": True,
+                "connect_args": {
+                    "charset": "utf8mb4",
+                    "connect_timeout": 10,
+                    "read_timeout": 30,
+                    "write_timeout": 30,
+                },
+            },
             "SQLALCHEMY_TRACK_MODIFICATIONS": False,
             "CORS_ORIGINS": [],
             "SCHEDULER_ENABLED": False,
@@ -1866,6 +1920,7 @@ def main(argv=None) -> int:
         print(
             "MySQL preflight: "
             f"uuid={details['server_uuid']} host={details['hostname']} "
+            f"client={details['client_host']} "
             f"port={details['port']} version={details['version']} "
             f"server-default={details['charset']}/{details['collation']} "
             f"binlog={details['log_bin']}"
@@ -1898,6 +1953,7 @@ def main(argv=None) -> int:
                 expected_server_uuid=details["server_uuid"],
                 allow_binlog=args.allow_binlog,
                 scenarios=selected,
+                account_host=details["client_host"],
             )
             print(
                 f"Temporary run_id={resources.run_id} user={resources.user} "

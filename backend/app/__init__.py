@@ -6,6 +6,8 @@ from flask_cors import CORS
 import sqlalchemy
 import os
 import sys
+import ipaddress
+from pathlib import Path
 
 db = SQLAlchemy()
 migrate = Migrate()
@@ -176,6 +178,45 @@ def _sync_model_schema(app):
                         index.create(bind=conn, checkfirst=True)
 
 
+def _assert_database_at_alembic_head(app):
+    """Fail before runtime writes when a production database is not at head."""
+    from alembic.script import ScriptDirectory
+
+    migrations_dir = Path(
+        app.config.get("ALEMBIC_MIGRATIONS_DIR")
+        or Path(__file__).resolve().parents[1] / "migrations"
+    ).resolve()
+    if not migrations_dir.is_dir():
+        raise RuntimeError(f"Alembic migrations directory is missing: {migrations_dir}")
+
+    expected_heads = set(ScriptDirectory(str(migrations_dir)).get_heads())
+    if not expected_heads:
+        raise RuntimeError(f"No Alembic head found in {migrations_dir}")
+
+    with app.app_context():
+        with db.engine.connect() as conn:
+            inspector = sqlalchemy.inspect(conn)
+            if not inspector.has_table("alembic_version"):
+                current_heads = set()
+            else:
+                current_heads = set(
+                    conn.execute(
+                        sqlalchemy.text("SELECT version_num FROM alembic_version")
+                    ).scalars()
+                )
+
+    if current_heads != expected_heads:
+        current_label = ", ".join(sorted(current_heads)) or "<unversioned>"
+        expected_label = ", ".join(sorted(expected_heads))
+        raise RuntimeError(
+            "Database schema is not at the required Alembic head "
+            f"(current={current_label}, expected={expected_label}). Stop all "
+            "application instances, take a verified backup, and run the "
+            "dedicated migration command before starting production."
+        )
+    return expected_heads
+
+
 def _configure_database(app):
     with app.app_context():
         engine = db.engine
@@ -193,6 +234,213 @@ def _configure_database(app):
             conn.execute(sqlalchemy.text("PRAGMA foreign_keys=ON"))
             conn.execute(sqlalchemy.text("PRAGMA busy_timeout=15000"))
 
+
+def _runtime_config_bool(app, name):
+    value = app.config.get(name)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in {0, 1}:
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    raise RuntimeError(f"{name} must be configured as a boolean")
+
+
+_MYSQL_RUNTIME_ALLOWED_QUERY_OPTIONS = {
+    "charset",
+    "unix_socket",
+    "ssl_ca",
+    "ssl_cert",
+    "ssl_check_hostname",
+    "ssl_disabled",
+    "ssl_key",
+    "ssl_key_password",
+    "ssl_verify_cert",
+    "ssl_verify_identity",
+}
+_MYSQL_RUNTIME_ALLOWED_CONNECT_ARGS = {
+    "charset",
+    "connect_timeout",
+    "read_timeout",
+    "ssl_ca",
+    "ssl_cert",
+    "ssl_key",
+    "ssl_key_password",
+    "ssl_verify_cert",
+    "ssl_verify_identity",
+    "unix_socket",
+    "write_timeout",
+}
+_MYSQL_RUNTIME_TIMEOUT_LIMITS = {
+    "connect_timeout": (1, 300),
+    "read_timeout": (1, 1800),
+    "write_timeout": (1, 1800),
+}
+
+
+def _assert_safe_mysql_runtime_configuration(app, *, enforce_runtime_policy=True):
+    """Reject unsafe MySQL connection settings before an engine is created."""
+
+    uri = app.config.get("SQLALCHEMY_DATABASE_URI")
+    if isinstance(uri, str) and not uri.lower().startswith("mysql"):
+        return
+    try:
+        url = sqlalchemy.engine.make_url(uri)
+    except Exception as error:
+        if isinstance(uri, str) and uri.lower().startswith("mysql"):
+            raise RuntimeError("MySQL connection URL could not be parsed") from error
+        return
+    if url.get_backend_name().lower() != "mysql":
+        return
+    if url.drivername.lower() != "mysql+pymysql":
+        raise RuntimeError("Only the mysql+pymysql driver is supported")
+    if not url.database:
+        raise RuntimeError("MySQL connection URL must include a database name")
+
+    query_names = {key.lower(): key for key in url.query}
+    unsupported_query_names = sorted(
+        set(query_names) - _MYSQL_RUNTIME_ALLOWED_QUERY_OPTIONS
+    )
+    if unsupported_query_names:
+        raise RuntimeError(
+            "MySQL runtime URL contains unsupported query options: "
+            + ", ".join(unsupported_query_names)
+        )
+    raw_query_marker = (
+        isinstance(uri, str) and "?" in uri.split("#", 1)[0]
+    )
+    if query_names or raw_query_marker:
+        raise RuntimeError(
+            "MySQL runtime URL must be normalized to direct connection arguments "
+            "before application startup"
+        )
+
+    unsafe = []
+    engine_options = app.config.get("SQLALCHEMY_ENGINE_OPTIONS") or {}
+    if not isinstance(engine_options, dict):
+        raise RuntimeError("MySQL SQLALCHEMY_ENGINE_OPTIONS must be a mapping")
+    connect_args = engine_options.get("connect_args", {})
+    if not isinstance(connect_args, dict):
+        raise RuntimeError("MySQL connect_args must be a mapping")
+    unsupported_connect_args = sorted(
+        str(name)
+        for name in connect_args
+        if name not in _MYSQL_RUNTIME_ALLOWED_CONNECT_ARGS
+    )
+    if unsupported_connect_args:
+        raise RuntimeError(
+            "MySQL runtime connect_args contain unsupported options: "
+            + ", ".join(unsupported_connect_args)
+        )
+
+    charset = connect_args.get("charset")
+    if not isinstance(charset, str) or charset.lower() != "utf8mb4":
+        unsafe.append("connect_args.charset=<invalid>")
+    for name, (minimum, maximum) in _MYSQL_RUNTIME_TIMEOUT_LIMITS.items():
+        value = connect_args.get(name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, int)
+            or not minimum <= value <= maximum
+        ):
+            unsafe.append(f"connect_args.{name}=<invalid>")
+
+    string_arguments = (
+        "unix_socket",
+        "ssl_ca",
+        "ssl_cert",
+        "ssl_key",
+        "ssl_key_password",
+    )
+    for name in string_arguments:
+        value = connect_args.get(name)
+        if value is None:
+            continue
+        if (
+            not isinstance(value, str)
+            or not value
+            or value != value.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in value)
+        ):
+            unsafe.append(f"connect_args.{name}=<invalid>")
+    for name in ("ssl_verify_cert", "ssl_verify_identity"):
+        if name in connect_args and not isinstance(connect_args[name], bool):
+            unsafe.append(f"connect_args.{name}=<invalid>")
+
+    ssl_cert = connect_args.get("ssl_cert")
+    ssl_key = connect_args.get("ssl_key")
+    if bool(ssl_cert) != bool(ssl_key):
+        unsafe.append("connect_args.ssl_cert/ssl_key=<incomplete>")
+    if connect_args.get("ssl_key_password") and not ssl_key:
+        unsafe.append("connect_args.ssl_key_password=<key-missing>")
+
+    unix_socket = connect_args.get("unix_socket")
+    declared_socket = app.config.get("MYSQL_UNIX_SOCKET")
+    if declared_socket:
+        if (
+            not isinstance(declared_socket, str)
+            or declared_socket != declared_socket.strip()
+            or any(ord(char) < 32 or ord(char) == 127 for char in declared_socket)
+        ):
+            unsafe.append("MYSQL_UNIX_SOCKET=<invalid>")
+        elif declared_socket != unix_socket:
+            raise RuntimeError(
+                "MYSQL_UNIX_SOCKET must match connect_args.unix_socket"
+            )
+    if unix_socket:
+        if url.host is not None or url.port is not None:
+            raise RuntimeError(
+                "MySQL unix_socket must not also configure an authority host or port"
+            )
+    elif not url.host:
+        unsafe.append("MySQL host or unix_socket=<missing>")
+
+    host = (url.host or "").strip().lower().rstrip(".")
+    local = bool(unix_socket) or host == "localhost"
+    if not local:
+        try:
+            local = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            local = False
+    if not local:
+        if not (
+            connect_args.get("ssl_ca")
+            and connect_args.get("ssl_verify_cert") is True
+            and connect_args.get("ssl_verify_identity") is True
+        ):
+            unsafe.append("verified TLS connection arguments=<missing>")
+        try:
+            tls_required = _runtime_config_bool(app, "DATABASE_REQUIRE_TLS")
+        except RuntimeError:
+            unsafe.append("DATABASE_REQUIRE_TLS=<invalid>")
+        else:
+            if not tls_required:
+                unsafe.append("DATABASE_REQUIRE_TLS=0")
+
+    if enforce_runtime_policy:
+        required_settings = {
+            "REQUIRE_ALEMBIC_HEAD": True,
+            "RUNTIME_SCHEMA_SYNC_ENABLED": False,
+            "PRODUCTION_DATABASE_PREFLIGHT_ENABLED": True,
+        }
+        for name, expected in required_settings.items():
+            try:
+                actual = _runtime_config_bool(app, name)
+            except RuntimeError:
+                unsafe.append(f"{name}=<invalid>")
+                continue
+            if actual is not expected:
+                unsafe.append(f"{name}={int(actual)}")
+    if unsafe:
+        raise RuntimeError(
+            "MySQL requires fail-closed runtime safety settings; unsafe: "
+            + ", ".join(unsafe)
+        )
+
 def create_app(config_class=None, *, initialize_database=True):
     if config_class is None:
         from backend.config import Config
@@ -202,6 +450,9 @@ def create_app(config_class=None, *, initialize_database=True):
     app.config.from_object(config_class)
     if app.config.get('MAX_CONTENT_LENGTH') is None:
         app.config['MAX_CONTENT_LENGTH'] = 12 * 1024 * 1024
+    _assert_safe_mysql_runtime_configuration(
+        app, enforce_runtime_policy=initialize_database
+    )
 
     # Only configured development origins need cross-origin API access. Packaged
     # deployments serve the SPA and API from the same origin.
@@ -245,7 +496,11 @@ def create_app(config_class=None, *, initialize_database=True):
 
     from backend.app import models
 
-    if initialize_database:
+    if initialize_database and app.config.get("REQUIRE_ALEMBIC_HEAD", False):
+        expected_heads = _assert_database_at_alembic_head(app)
+        app.config["EXPECTED_ALEMBIC_HEADS"] = tuple(sorted(expected_heads))
+
+    if initialize_database and app.config.get("RUNTIME_SCHEMA_SYNC_ENABLED", True):
         _sync_model_schema(app)
 
     from backend.app.api import bp as api_bp

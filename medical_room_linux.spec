@@ -8,18 +8,22 @@ import os
 block_cipher = None
 
 # 自动检测项目根目录（spec 文件所在目录）
-SPEC_DIR = os.path.dirname(os.path.abspath(SPECPATH))
+SPEC_DIR = os.path.abspath(SPECPATH)
 
 a = Analysis(
     ['run_prod.py'],
     pathex=[SPEC_DIR],
     binaries=[],
     datas=[
-        ('frontend/dist', 'frontend/dist'),
+        (os.path.join(SPEC_DIR, 'frontend', 'dist'), 'frontend/dist'),
+        (os.path.join(SPEC_DIR, 'backend', 'migrations'), 'backend/migrations'),
     ],
     hiddenimports=[
         # Backend modules
         'backend.config',
+        'backend.migrate_to_mysql',
+        'backend.migration_app',
+        'backend.production_cli',
         'backend.app',
         'backend.app.api',
         'backend.app.api.routes',
@@ -33,8 +37,15 @@ a = Analysis(
         'backend.app.utils.decorators',
         'backend.app.services',
         'backend.app.services.drug_stock',
+        'backend.migrations.migration_helpers',
+        'scripts.check_production_database',
         # SQLAlchemy dialects (dynamically loaded)
         'sqlalchemy.dialects.sqlite',
+        'sqlalchemy.dialects.mysql',
+        'sqlalchemy.dialects.mysql.pymysql',
+        'pymysql',
+        'pymysql.connections',
+        'pymysql.cursors',
         # Flask extensions
         'flask_cors',
         'flask_jwt_extended',
@@ -65,7 +76,7 @@ a = Analysis(
         'click',
         'itsdangerous',
         'dotenv',
-        'python_dateutil',
+        'dateutil',
         'sqlalchemy.sql.default_comparator',
         'waitress',
         'waitress.server',
@@ -85,7 +96,6 @@ a = Analysis(
         'tkinter',
         'unittest',
         'test',
-        'pymysql',
         'matplotlib',
         'scipy',
         'PIL',

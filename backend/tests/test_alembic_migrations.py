@@ -3,11 +3,17 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from flask import current_app
 from flask_migrate import downgrade, upgrade
 from sqlalchemy import inspect, text
 from sqlalchemy.schema import UniqueConstraint
 
-from backend.app import _sync_model_schema, create_migration_app, db
+from backend.app import (
+    _assert_database_at_alembic_head,
+    _sync_model_schema,
+    create_migration_app,
+    db,
+)
 
 
 MIGRATIONS_DIR = str(Path(__file__).resolve().parents[1] / "migrations")
@@ -205,6 +211,20 @@ class AlembicMigrationTestCase(unittest.TestCase):
             ]
             self.assertEqual(len(revoked_foreign_keys), 1)
             self.assertEqual(revoked_foreign_keys[0]["referred_table"], "user")
+
+        self._run_with_database(assertions)
+
+    def test_production_head_guard_rejects_unversioned_database(self):
+        def assertions():
+            with self.assertRaisesRegex(RuntimeError, "current=<unversioned>"):
+                _assert_database_at_alembic_head(current_app._get_current_object())
+
+        self._run_with_database(assertions)
+
+    def test_production_head_guard_accepts_current_head(self):
+        def assertions():
+            upgrade(directory=MIGRATIONS_DIR)
+            _assert_database_at_alembic_head(current_app._get_current_object())
 
         self._run_with_database(assertions)
 
