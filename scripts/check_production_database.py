@@ -493,7 +493,9 @@ def _type_label(column_type: Any) -> str:
     return str(column_type).upper()
 
 
-def _type_compatible(actual: Any, expected: Any) -> bool:
+def _type_compatible(
+    actual: Any, expected: Any, *, dialect_name: str | None = None
+) -> bool:
     actual_name = getattr(actual, "__visit_name__", "").lower()
     if isinstance(expected, Boolean):
         return actual_name in {"boolean", "tinyint"} and getattr(
@@ -502,6 +504,10 @@ def _type_compatible(actual: Any, expected: Any) -> bool:
     if isinstance(expected, Text):
         return actual_name in {"text", "mediumtext", "longtext"}
     if isinstance(expected, String):
+        if dialect_name == "sqlite":
+            # SQLite does not enforce VARCHAR lengths; TEXT, CHAR, and VARCHAR
+            # all have text affinity and are equivalent for the ORM contract.
+            return actual_name in {"text", "char", "varchar", "string"}
         actual_length = getattr(actual, "length", None)
         expected_length = getattr(expected, "length", None)
         return (
@@ -608,6 +614,8 @@ def collect_model_schema_diff(schema_inspector, metadata) -> dict[str, list[dict
 
     blocking: list[dict] = []
     warnings: list[dict] = []
+    bind = getattr(schema_inspector, "bind", None)
+    dialect_name = getattr(getattr(bind, "dialect", None), "name", None)
     expected_tables = set(metadata.tables)
     actual_tables = set(schema_inspector.get_table_names())
 
@@ -636,7 +644,11 @@ def collect_model_schema_diff(schema_inspector, metadata) -> dict[str, list[dict
         for column_name in sorted(model_columns & set(actual_columns)):
             model_column = model_table.columns[column_name]
             actual_column = actual_columns[column_name]
-            if not _type_compatible(actual_column["type"], model_column.type):
+            if not _type_compatible(
+                actual_column["type"],
+                model_column.type,
+                dialect_name=dialect_name,
+            ):
                 blocking.append(
                     {
                         "kind": "type_mismatch",

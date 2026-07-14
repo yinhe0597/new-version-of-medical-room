@@ -76,8 +76,7 @@ check_deps() {
 # 安装 Python 依赖
 install_python_deps() {
     log_step "安装 Python 依赖..."
-    python3 -m pip install --quiet -r backend/requirements.txt
-    python3 -m pip install --quiet pyinstaller
+    python3 -m pip install --quiet -r backend/requirements-build.txt
     log_info "Python 依赖安装完成"
 }
 
@@ -85,7 +84,8 @@ install_python_deps() {
 build_frontend() {
     log_step "构建前端..."
     cd frontend
-    npm install --silent 2>/dev/null || npm install
+    npm ci
+    npm run audit:production
     npm run build
     cd "$SCRIPT_DIR"
     log_info "前端构建完成"

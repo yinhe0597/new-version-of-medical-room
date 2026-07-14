@@ -196,6 +196,18 @@ _configured_database_uri = (
     or os.environ.get('SQLALCHEMY_DATABASE_URI', '')
 )
 USING_EXTERNAL_DATABASE = not _configured_database_uri.lower().startswith('sqlite')
+
+
+def _safe_database_log_target(uri):
+    """Render a useful database target without exposing credentials."""
+    try:
+        from sqlalchemy.engine import make_url
+
+        return make_url(uri).render_as_string(hide_password=True)
+    except Exception:
+        return '<invalid database URL>'
+
+
 if USING_EXTERNAL_DATABASE:
     # Production must never mutate an external schema implicitly. The database
     # is checked before startup and must be upgraded by the dedicated migrator.
@@ -292,7 +304,7 @@ def start_server():
 
     logging.info(f'APP_ROOT: {APP_ROOT}')
     using_external_database = USING_EXTERNAL_DATABASE
-    logging.info('Database: %s', 'external database from environment' if using_external_database else DB_PATH)
+    logging.info('Database: %s', _safe_database_log_target(_configured_database_uri))
 
     if using_external_database:
         from backend.config import Config

@@ -9,6 +9,15 @@ from backend.production_cli import (
 
 
 class ProductionEntryPointTestCase(unittest.TestCase):
+    def test_database_log_target_is_useful_and_hides_passwords(self):
+        sqlite_uri = "sqlite:///F:/deployment/data/app.db"
+        mysql_uri = "mysql+pymysql://medical:top-secret@db.example/medical_db"
+
+        self.assertEqual(run_prod._safe_database_log_target(sqlite_uri), sqlite_uri)
+        rendered_mysql = run_prod._safe_database_log_target(mysql_uri)
+        self.assertIn("db.example/medical_db", rendered_mysql)
+        self.assertNotIn("top-secret", rendered_mysql)
+
     def _run_with_failure(self, error):
         with patch.object(run_prod, "initialize_runtime"), patch(
             "backend.production_cli.execute_cli", return_value=None

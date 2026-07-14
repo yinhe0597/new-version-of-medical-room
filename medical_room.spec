@@ -117,6 +117,7 @@ exe = EXE(
     a.datas,
     [],
     name='医务室管理系统',
+    version=os.path.join(SPEC_DIR, 'version_info.txt'),
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

@@ -17,7 +17,7 @@ from sqlalchemy import (
     inspect as sa_inspect,
     text,
 )
-from sqlalchemy.dialects import mysql
+from sqlalchemy.dialects import mysql, sqlite
 from sqlalchemy.engine import URL
 from sqlalchemy.exc import OperationalError
 
@@ -92,6 +92,18 @@ class FakeInspector:
 
 
 class ProductionDatabasePreflightTestCase(unittest.TestCase):
+    def test_sqlite_text_affinity_accepts_legacy_text_for_varchar(self):
+        self.assertTrue(
+            preflight._type_compatible(
+                sqlite.TEXT(), String(50), dialect_name="sqlite"
+            )
+        )
+        self.assertFalse(
+            preflight._type_compatible(
+                mysql.TEXT(), String(50), dialect_name="mysql"
+            )
+        )
+
     def test_parse_database_urls_and_redact_secrets(self):
         password = "p@ss/word"
         target = preflight.parse_database_url(
