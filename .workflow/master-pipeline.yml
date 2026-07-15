@@ -1,50 +1,33 @@
 version: '1.0'
-name: master-pipeline
-displayName: MasterPipeline
+name: main-pipeline
+displayName: Main Verification
 stages:
-  - stage: 
-    name: compile
-    displayName: 编译
+  - stage:
+    name: verify
+    displayName: Verify main
     steps:
       - step: build@python
-        name: build_python
-        displayName: Python 构建
-        pythonVersion: '3.9'
-        # 非必填字段，开启后表示将构建产物暂存，但不会上传到制品库中，7天后自动清除
-        artifacts:
-            # 构建产物名字，作为产物的唯一标识可向下传递，支持自定义，默认为BUILD_ARTIFACT。在下游可以通过${BUILD_ARTIFACT}方式引用来获取构建物地址
-          - name: BUILD_ARTIFACT
-            # 构建产物获取路径，是指代码编译完毕之后构建物的所在路径
-            path:
-              - ./
+        name: backend_gate
+        displayName: Backend tests and dependency audit
+        pythonVersion: '3.11'
         commands:
           - python3 -m pip install --upgrade pip
-          - pip3 config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-          - pip3 install -r requirements.txt
-          - python3 ./main.py
-      - step: publish@general_artifacts
-        name: publish_general_artifacts
-        displayName: 上传制品
-        # 上游构建任务定义的产物名，默认BUILD_ARTIFACT
-        dependArtifact: BUILD_ARTIFACT
-        # 上传到制品库时的制品命名，默认output
-        artifactName: output
-        dependsOn: build_python
-  - stage: 
-    name: release
-    displayName: 发布
-    steps:
-      - step: publish@release_artifacts
-        name: publish_release_artifacts
-        displayName: '发布'
-        # 上游上传制品任务的产出
-        dependArtifact: output
-        # 发布制品版本号
-        version: '1.0.0.0'
-        # 是否开启版本号自增，默认开启
-        autoIncrement: true
+          - python3 -m pip install -r backend/requirements-ci.txt
+          - python3 run_backend_tests.py
+          - python3 -m pip_audit -r backend/requirements-build.txt
+          - python3 -m compileall -q -x '\.venv' backend scripts run_prod.py run_backend_tests.py
+          - python3 -m pip check
+      - step: build@nodejs
+        name: frontend_gate
+        displayName: Frontend audit and production build
+        nodeVersion: '22.12.0'
+        dependsOn: backend_gate
+        commands:
+          - cd frontend && npm ci
+          - cd frontend && npm run audit:production
+          - cd frontend && npm run build
 triggers:
   push:
     branches:
       include:
-        - master
+        - main

@@ -6,8 +6,8 @@
 #   2. AppImage - 单文件可执行（双击即运行，无需安装）
 #
 # 前置条件:
-#   - Python 3.8+
-#   - Node.js 16+ (用于前端构建)
+#   - Python 3.11+
+#   - Node.js 22.12+ (用于前端构建)
 #   - pip / npm
 #
 # 用法: bash build_linux.sh
@@ -18,7 +18,16 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$SCRIPT_DIR"
 
-VERSION="0.0.16"
+VERSION_FILE="$SCRIPT_DIR/VERSION"
+if [ ! -f "$VERSION_FILE" ]; then
+    echo "Missing release VERSION file: $VERSION_FILE" >&2
+    exit 1
+fi
+VERSION="$(tr -d '\r\n' < "$VERSION_FILE")"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "Invalid release VERSION: $VERSION" >&2
+    exit 1
+fi
 APP_NAME="medical_room"
 DIST_NAME="医务室管理系统-v${VERSION}-linux"
 BUILD_DIR="$SCRIPT_DIR/build_linux"
@@ -48,14 +57,22 @@ check_deps() {
 
     # Python
     if ! command -v python3 &>/dev/null; then
-        log_error "未找到 python3，请先安装 Python 3.8+"
+        log_error "未找到 python3，请先安装 Python 3.11+"
+        exit 1
+    fi
+    if ! python3 -c 'import sys; raise SystemExit(sys.version_info < (3, 11))'; then
+        log_error "Python 版本过低，生产构建需要 Python 3.11+"
         exit 1
     fi
     log_info "Python: $(python3 --version)"
 
     # Node.js
     if ! command -v node &>/dev/null; then
-        log_error "未找到 node，请先安装 Node.js 16+"
+        log_error "未找到 node，请先安装 Node.js 22.12+"
+        exit 1
+    fi
+    if ! node -e 'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 12) ? 0 : 1)'; then
+        log_error "Node.js 版本过低，生产构建需要 Node.js 22.12+"
         exit 1
     fi
     log_info "Node.js: $(node --version)"
@@ -160,7 +177,7 @@ package_tarball() {
   - data/backups/ 自动备份
 
 【系统要求】
-  - Linux x86_64 (glibc 2.17+)
+  - Linux x86_64 (glibc must be no older than the build host)
   - 无需安装 Python 或其他依赖
 ============================================================
 EOF

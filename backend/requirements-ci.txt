@@ -1,0 +1,4 @@
+-r requirements-build.txt
+
+# CI audits the exact dependency set used to produce release artifacts.
+pip-audit==2.10.1

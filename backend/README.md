@@ -1,7 +1,7 @@
 # 后端（Flask）
 
 ## 环境要求
-- Python 3.10+（推荐并由 CI 验证：3.11）
+- Python 3.11+（CI 与生产依赖锁均以 3.11 为最低版本）
 
 ## 启动（开发环境）
 ```bash
@@ -33,6 +33,10 @@ python run_backend_tests.py
 ```bash
 python scripts/check_production_database.py
 ```
+
+生产构建和 CI 不直接解析浮动依赖：`requirements-build.txt` 会加载
+`constraints.txt` 中经过审计的完整版本集合，`requirements-ci.txt` 再加入固定版本的
+`pip-audit`。更新依赖锁后必须重新执行全量测试、漏洞审计及 Windows/Linux 成品冒烟。
 
 远程 MySQL 在连接前要求 verified TLS。所有 MySQL 都强制要求当前 Alembic head、
 只读生产预检并关闭运行时隐式 schema 同步，危险环境变量覆盖会直接失败。正式 schema 升级使用

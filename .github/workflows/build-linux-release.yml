@@ -2,7 +2,7 @@
 # 医务室诊疗管理系统 - Linux 自动构建 & 发布
 # 触发方式：
 #   1. 手动触发 (Actions → Build Linux Release → Run workflow)
-#   2. 推送 v* 标签自动触发 (git tag v0.0.16 && git push github v0.0.16)
+#   2. 推送与 VERSION 一致的 v* 标签自动触发
 # ============================================================
 
 name: Build Linux Release
@@ -13,10 +13,6 @@ on:
       - 'v*'
   workflow_dispatch:
     inputs:
-      version:
-        description: '版本号 (如 0.0.16)'
-        required: true
-        default: '0.0.16'
       prerelease:
         description: '是否为预发布版本'
         type: boolean
@@ -63,12 +59,16 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-build.txt
+            backend/requirements-ci.txt
+            backend/constraints.txt
 
       - name: Install backend dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements.txt
+          pip install -r backend/requirements-ci.txt
 
       - name: Validate MySQL fresh, history, and interrupted-DDL retry scenarios
         run: |
@@ -198,11 +198,17 @@ jobs:
       - name: Set version
         id: version
         run: |
+          VERSION="$(tr -d '\r\n' < VERSION)"
+          if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid VERSION file: $VERSION" >&2
+            exit 1
+          fi
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            # 从 tag 提取版本号 (去掉 v 前缀)
-            VERSION="${GITHUB_REF#refs/tags/v}"
-          else
-            VERSION="${{ github.event.inputs.version }}"
+            TAG_VERSION="${GITHUB_REF#refs/tags/v}"
+            if [[ "$TAG_VERSION" != "$VERSION" ]]; then
+              echo "Tag version $TAG_VERSION does not match VERSION $VERSION" >&2
+              exit 1
+            fi
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
@@ -214,7 +220,11 @@ jobs:
         with:
           python-version: '3.11'
           cache: 'pip'
-          cache-dependency-path: backend/requirements.txt
+          cache-dependency-path: |
+            backend/requirements.txt
+            backend/requirements-build.txt
+            backend/requirements-ci.txt
+            backend/constraints.txt
 
       # ── 4. 设置 Node.js ──────────────────────────────────
       - name: Set up Node.js 22.12
@@ -239,11 +249,14 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r backend/requirements-build.txt
+          pip install -r backend/requirements-ci.txt
 
       # ── 7. 后端测试与编译检查 ────────────────────────────
       - name: Run backend tests
         run: python run_backend_tests.py
+
+      - name: Audit Python dependencies
+        run: python -m pip_audit -r backend/requirements-build.txt
 
       - name: Run MySQL migration gates
         run: |
@@ -260,13 +273,14 @@ jobs:
           from alembic.config import Config
           from alembic.script import ScriptDirectory
           import pymysql
+          from scripts.validate_mysql_alembic import CURRENT_HEAD
           from sqlalchemy.dialects.mysql import pymysql as mysql_pymysql
 
           config = Config("backend/migrations/alembic.ini")
           config.set_main_option("script_location", "backend/migrations")
           heads = ScriptDirectory.from_config(config).get_heads()
-          if heads != ["b6e1d8f3a2c4"]:
-              raise SystemExit(f"Expected one Alembic head b6e1d8f3a2c4, got {heads}")
+          if heads != [CURRENT_HEAD]:
+              raise SystemExit(f"Expected one Alembic head {CURRENT_HEAD}, got {heads}")
           print(f"MySQL static gate passed: PyMySQL {pymysql.__version__}, head {heads[0]}")
           PY
 
@@ -302,6 +316,11 @@ jobs:
           contents = Path("build/medical_room-archive.txt").read_text(
               encoding="utf-8", errors="replace"
           ).replace("\\", "/")
+          migration_files = sorted(
+              path.as_posix()
+              for path in Path("backend/migrations/versions").glob("*.py")
+              if path.name != "__init__.py"
+          )
           required = (
               "pymysql",
               "sqlalchemy.dialects.mysql.pymysql",
@@ -313,7 +332,7 @@ jobs:
               "backend/migrations/alembic.ini",
               "backend/migrations/env.py",
               "backend/migrations/script.py.mako",
-              "backend/migrations/versions/b6e1d8f3a2c4_current_model_schema_baseline.py",
+              *migration_files,
           )
           missing = [entry for entry in required if entry not in contents]
           if missing:
@@ -536,7 +555,7 @@ jobs:
             系统会生成随机临时密码并写入启动日志（./run.sh log）。
 
           【系统要求】
-            Linux x86_64 (glibc 2.17+)
+            Linux x86_64 (glibc 2.35+; built on Ubuntu 22.04)
             run.sh 进程管理命令需要 flock（通常由 util-linux 提供）
             SQLite 模式无需安装 Python 或数据库依赖
 
@@ -748,7 +767,7 @@ jobs:
             - SQLite 可使用兼容同步；外部 MySQL 必须先通过只读预检和正式 migration
             - 打包程序支持 `--check-database`、`--migrate-database`、`--import-sqlite`
             - MySQL 备份下载需要兼容的 `mysqldump`，恢复必须先在隔离库演练
-            - 系统要求：Linux x86_64 (glibc 2.17+)；tar 包的 `run.sh` 需要 `flock`（通常由 `util-linux` 提供）
+            - 系统要求：Linux x86_64 (glibc 2.35+，Ubuntu 22.04 构建)；tar 包的 `run.sh` 需要 `flock`（通常由 `util-linux` 提供）
 
             ### 🔗 访问地址
             - 本机：http://127.0.0.1:5000
