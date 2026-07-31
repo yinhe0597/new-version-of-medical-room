@@ -434,6 +434,7 @@ import { useRoute, useRouter } from 'vue-router'
 import request from '@/api/request'
 import { ElMessage } from 'element-plus'
 import { Refresh } from '@element-plus/icons-vue'
+import { calcScatteredQuantity } from '@/utils/prescription'
 
 const route = useRoute()
 const router = useRouter()
@@ -986,35 +987,11 @@ watch(
   (newItems) => {
     newItems.forEach(item => {
       if (item.type === 1 && item.is_scattered) {
-        // 解析用量
-        let dosageAmount = 0
-        if (item.dosage.includes('半')) {
-          dosageAmount = 0.5
-        } else {
-          const dosageMatch = item.dosage.match(/(\d+)([片粒袋包支瓶贴喷丸次滴])/)
-          if (!dosageMatch) return
-          dosageAmount = parseFloat(dosageMatch[1])
-          if (!dosageAmount) return
+        // 依据用量/频次/天数自动计算总数量（用量无法解析时保持不变）
+        const quantity = calcScatteredQuantity(item.dosage, item.frequency, item.days || 1)
+        if (quantity != null) {
+          item.quantity = quantity
         }
-        
-        // 解析频次
-        let frequencyAmount = 1
-        const frequencyMatch = item.frequency.match(/每日(\d+)次/)
-        if (frequencyMatch) {
-          frequencyAmount = parseFloat(frequencyMatch[1])
-        } else if (item.frequency.includes('每4小时')) {
-          frequencyAmount = 6
-        } else if (item.frequency.includes('每6小时')) {
-          frequencyAmount = 4
-        } else if (item.frequency.includes('每8小时')) {
-          frequencyAmount = 3
-        } else if (item.frequency.includes('每12小时')) {
-          frequencyAmount = 2
-        }
-        
-        // 计算总数量
-        const days = item.days || 1
-        item.quantity = Math.round(dosageAmount * frequencyAmount * days)
       }
     })
   },

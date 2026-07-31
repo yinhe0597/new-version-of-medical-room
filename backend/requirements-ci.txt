@@ -2,3 +2,6 @@
 
 # CI audits the exact dependency set used to produce release artifacts.
 pip-audit==2.10.1
+
+# CI runs error-level static checks (ruff check backend scripts).
+ruff==0.16.1

@@ -1,0 +1,14 @@
+# 最小静态检查配置：仅启用错误级规则，不做风格改造
+# 检查范围目标：backend/ 与 scripts/（通过 `ruff check backend scripts` 调用）
+
+exclude = [
+    ".venv",
+    "node_modules",
+    "build",
+    "dist",
+    "frontend",
+]
+
+[lint]
+# 仅错误级：语法/运行时致命错误（E9）、无效比较（F63）、逻辑错误（F7）、未定义名称（F82）
+select = ["E9", "F63", "F7", "F82"]

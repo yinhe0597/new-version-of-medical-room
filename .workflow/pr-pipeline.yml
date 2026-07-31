@@ -13,6 +13,8 @@ stages:
         commands:
           - python3 -m pip install --upgrade pip
           - python3 -m pip install -r backend/requirements-ci.txt
+          - python3 scripts/check_alembic_single_head.py
+          - python3 -m ruff check backend scripts
           - python3 run_backend_tests.py
           - python3 -m pip_audit -r backend/requirements-build.txt
           - python3 -m compileall -q -x '\.venv' backend scripts run_prod.py run_backend_tests.py
@@ -24,6 +26,7 @@ stages:
         dependsOn: backend_gate
         commands:
           - cd frontend && npm ci
+          - cd frontend && npm run test
           - cd frontend && npm run audit:production
           - cd frontend && npm run build
 triggers:

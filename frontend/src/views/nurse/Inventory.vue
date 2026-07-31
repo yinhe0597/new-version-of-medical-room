@@ -438,6 +438,7 @@ import { Search, Cpu } from '@element-plus/icons-vue'
 import { ElMessage, ElLoading, ElMessageBox } from 'element-plus'
 import request from '@/api/request'
 import DrugEntry from '@/components/DrugEntry.vue'
+import { calcGroupRetailLimit, calcGroupTotalUnits, splitGroupStock } from '@/utils/inventoryCalc'
 
 const activeTab = ref('inventory')
 
@@ -536,18 +537,17 @@ const groupRules = {
   remark: [{ required: true, message: '请填写盘点备注', trigger: 'blur' }]
 }
 
-const groupRetailLimit = computed(() => {
-  const packAmount = Number(currentDrug.value?.group_pack_amount || 0)
-  const retailAmount = Number(currentDrug.value?.group_retail_amount || 0)
-  if (!packAmount || !retailAmount) return 0
-  return Math.max(0, Math.floor(packAmount / retailAmount) - 1)
-})
+const groupRetailLimit = computed(() => calcGroupRetailLimit(
+  currentDrug.value?.group_pack_amount,
+  currentDrug.value?.group_retail_amount
+))
 
-const groupTotalUnits = computed(() => {
-  const packAmount = Number(currentDrug.value?.group_pack_amount || 0)
-  const retailAmount = Number(currentDrug.value?.group_retail_amount || 0)
-  return groupForm.value.actual_packs * packAmount + groupForm.value.actual_retail_units * retailAmount
-})
+const groupTotalUnits = computed(() => calcGroupTotalUnits(
+  groupForm.value.actual_packs,
+  groupForm.value.actual_retail_units,
+  currentDrug.value?.group_pack_amount,
+  currentDrug.value?.group_retail_amount
+))
 
 const fetchDrugs = async () => {
   loading.value = true
@@ -594,13 +594,13 @@ const fetchRecords = async () => {
 const openInventoryDialog = (drug) => {
   currentDrug.value = drug
   if (drug && drug.stock_group_code) {
-    const totalUnits = Number(drug.group_total_units || 0)
-    const packAmount = Number(drug.group_pack_amount || 1)
-    const retailAmount = Number(drug.group_retail_amount || 0)
-    const remainder = totalUnits % packAmount
-
-    groupForm.value.actual_packs = Math.floor(totalUnits / packAmount)
-    groupForm.value.actual_retail_units = retailAmount ? Math.floor(remainder / retailAmount) : 0
+    const { packs, retailUnits } = splitGroupStock(
+      drug.group_total_units,
+      drug.group_pack_amount,
+      drug.group_retail_amount
+    )
+    groupForm.value.actual_packs = packs
+    groupForm.value.actual_retail_units = retailUnits
     groupForm.value.remark = ''
     groupDialogVisible.value = true
   } else {

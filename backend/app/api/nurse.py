@@ -8,6 +8,7 @@ from backend.app.models import (
     InventoryRecord,
     DiagnosisDict,
     DailyStockSnapshot,
+    Patient,
     Payment,
     PrescriptionItem,
     User,
