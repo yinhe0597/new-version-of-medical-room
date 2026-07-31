@@ -47,6 +47,7 @@
 - 删除 `drug.monthly_sort_order` 模型漂移列，新增迁移 `a3f2e1c0d4b5`，新的 Alembic head 与 ORM 模型一致。
 - MySQL 连接会话统一 `SET time_zone = '+00:00'`，保证 naive-UTC 时间戳跨部署一致。
 - 单 head 静态门禁下沉为 `scripts/check_alembic_single_head.py`；手工验收脚本归位至 `backend/manual_checks/`；新增 `AGENTS.md` 代理操作约定。
+- 已重新打包 Windows exe 并验证：`--check-database` 确认 exe 内含新 Alembic head，隔离环境启动确认 `SERVER_PORT` 自定义端口生效。
 
 详细变更见[开发日志 2026-07-31](docs/开发日志-2026-07-31-生产发布问题修复.md)。
 
