@@ -1,6 +1,11 @@
-import sys
+"""手工验收：患者多路检索（学号/拼音首字母/姓名，本地 app，无需启动服务）。
 
-sys.path.append(r"e:\yws")
+临时测试用户口令来自 MEDICAL_CHECK_PASSWORD，未设置时随机生成。
+"""
+
+from _common import check_password, ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from flask_jwt_extended import create_access_token
 from backend.app import create_app, db
@@ -12,7 +17,7 @@ def get_doctor_token(app):
         user = User.query.filter_by(role="doctor").first()
         if not user:
             user = User(username="test_doctor2", role="doctor")
-            user.set_password("123456")
+            user.set_password(check_password())
             db.session.add(user)
             db.session.commit()
         return create_access_token(identity=str(user.id))

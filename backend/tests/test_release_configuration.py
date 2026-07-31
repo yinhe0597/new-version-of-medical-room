@@ -54,6 +54,9 @@ class ReleaseConfigurationTestCase(unittest.TestCase):
         workflow = (
             PROJECT_ROOT / ".github" / "workflows" / "build-linux-release.yml"
         ).read_text(encoding="utf-8")
+        head_gate = (
+            PROJECT_ROOT / "scripts" / "check_alembic_single_head.py"
+        ).read_text(encoding="utf-8")
 
         config = Config(str(BACKEND_DIR / "migrations" / "alembic.ini"))
         config.set_main_option(
@@ -62,11 +65,15 @@ class ReleaseConfigurationTestCase(unittest.TestCase):
         heads = ScriptDirectory.from_config(config).get_heads()
         self.assertEqual(len(heads), 1)
 
+        # 单 head 门禁已下沉至 scripts/check_alembic_single_head.py；workflow 调用它，
+        # 校验逻辑仍以 CURRENT_HEAD 为准，且不得硬编码 12 位 head 字面量。
+        self.assertIn("python scripts/check_alembic_single_head.py", workflow)
         self.assertIn(
-            "from scripts.validate_mysql_alembic import CURRENT_HEAD", workflow
+            "from scripts.validate_mysql_alembic import CURRENT_HEAD", head_gate
         )
-        self.assertIn("if heads != [CURRENT_HEAD]", workflow)
+        self.assertIn("if heads != [CURRENT_HEAD]", head_gate)
         self.assertNotRegex(workflow, r"Expected one Alembic head [0-9a-f]{12}")
+        self.assertNotRegex(head_gate, r"heads != \[\"[0-9a-f]{12}\"\]")
 
     def test_linux_release_checks_every_packaged_migration(self):
         workflow = (

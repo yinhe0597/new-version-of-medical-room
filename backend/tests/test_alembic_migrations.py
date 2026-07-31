@@ -17,7 +17,7 @@ from backend.app import (
 
 
 MIGRATIONS_DIR = str(Path(__file__).resolve().parents[1] / "migrations")
-CURRENT_HEAD = "d8b5f0a3c2e7"
+CURRENT_HEAD = "a3f2e1c0d4b5"
 HISTORICAL_SPLIT_REVISION = "bbf28ffdb4c0"
 PRE_BASELINE_HEAD = "e7f8a9b0c1d2"
 
@@ -73,7 +73,7 @@ class AlembicMigrationTestCase(unittest.TestCase):
                 1,
             )
 
-            allowed_legacy_columns = {"drug": {"monthly_sort_order"}}
+            allowed_legacy_columns = {}
             for table_name, model_table in db.metadata.tables.items():
                 model_columns = set(model_table.columns.keys())
                 actual_columns = {

@@ -269,20 +269,8 @@ jobs:
             backend.tests.test_production_cli \
             backend.tests.test_production_database_preflight \
             backend.tests.test_schema_compatibility
-          python - <<'PY'
-          from alembic.config import Config
-          from alembic.script import ScriptDirectory
-          import pymysql
-          from scripts.validate_mysql_alembic import CURRENT_HEAD
-          from sqlalchemy.dialects.mysql import pymysql as mysql_pymysql
-
-          config = Config("backend/migrations/alembic.ini")
-          config.set_main_option("script_location", "backend/migrations")
-          heads = ScriptDirectory.from_config(config).get_heads()
-          if heads != [CURRENT_HEAD]:
-              raise SystemExit(f"Expected one Alembic head {CURRENT_HEAD}, got {heads}")
-          print(f"MySQL static gate passed: PyMySQL {pymysql.__version__}, head {heads[0]}")
-          PY
+          # 单 head 静态门禁下沉至 scripts/（本地等价入口，见 AGENTS.md）
+          python scripts/check_alembic_single_head.py
 
       - name: Compile Python sources
         run: |

@@ -39,7 +39,7 @@ from sqlalchemy.schema import UniqueConstraint
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS_DIR = ROOT / "backend" / "migrations"
-CURRENT_HEAD = "d8b5f0a3c2e7"
+CURRENT_HEAD = "a3f2e1c0d4b5"
 HISTORICAL_SPLIT_REVISION = "bbf28ffdb4c0"
 IDENTIFIER_RE = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 LOGIN_PATH_RE = re.compile(r"^[A-Za-z0-9_.-]{1,64}$")
@@ -47,7 +47,6 @@ SERVER_UUID_RE = re.compile(r"^[A-Za-z0-9-]{1,64}$")
 LOCAL_MYSQL_HOST = "127.0.0.1"
 HISTORY_EXTRA_COLUMNS = {
     "drug": (
-        "monthly_sort_order",
         "is_herb",
         "herb_code",
         "herb_category",
@@ -72,7 +71,6 @@ HISTORY_EXTRA_COLUMNS = {
     ),
 }
 EXTRA_COLUMN_SPECS = {
-    ("drug", "monthly_sort_order"): (Integer(), True, None),
     ("drug", "is_herb"): (Boolean(), True, "0"),
     ("drug", "herb_code"): (String(12), True, None),
     ("drug", "herb_category"): (String(3), True, None),
@@ -1549,7 +1547,7 @@ def history_values(connection):
             connection.execute(
                 text(
                     "SELECT name, stock, type, purchase_price, has_scattered, "
-                    "monthly_sort_order, is_herb, herb_code, "
+                    "is_herb, herb_code, "
                     "herb_category, herb_variety, herb_spec, alias_name, "
                     "pinyin_code, processing_type, safety_stock, max_stock, "
                     "daily_loss_rate, shelf_life_days, storage_condition "
@@ -1688,7 +1686,6 @@ def run_history(resources: TemporaryResources, database: str) -> None:
             1,
             0.0,
             0,
-            None,
             1,
             "H001",
             "001",
@@ -1765,14 +1762,10 @@ def run_history(resources: TemporaryResources, database: str) -> None:
 
 def run_fresh(resources: TemporaryResources, database: str) -> None:
     run_upgrade(resources, database)
-    first_fingerprint = validate_schema(
-        resources, database, extra_columns={"drug": ("monthly_sort_order",)}
-    )
+    first_fingerprint = validate_schema(resources, database)
     insert_unicode_fixture(resources, database)
     run_upgrade(resources, database)
-    second_fingerprint = validate_schema(
-        resources, database, extra_columns={"drug": ("monthly_sort_order",)}
-    )
+    second_fingerprint = validate_schema(resources, database)
     if first_fingerprint != second_fingerprint:
         raise AssertionError("Second MySQL upgrade changed the schema fingerprint")
 
@@ -1871,13 +1864,9 @@ def run_retry(resources: TemporaryResources, database: str) -> None:
         raise AssertionError("DDL failure injection did not match CREATE TABLE user")
     validate_partial_retry_state(resources, database)
     run_upgrade(resources, database)
-    first_fingerprint = validate_schema(
-        resources, database, extra_columns={"drug": ("monthly_sort_order",)}
-    )
+    first_fingerprint = validate_schema(resources, database)
     run_upgrade(resources, database)
-    second_fingerprint = validate_schema(
-        resources, database, extra_columns={"drug": ("monthly_sort_order",)}
-    )
+    second_fingerprint = validate_schema(resources, database)
     if first_fingerprint != second_fingerprint:
         raise AssertionError("Second retry upgrade changed the MySQL schema")
 

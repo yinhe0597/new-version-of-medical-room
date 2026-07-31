@@ -1,7 +1,18 @@
+"""手工验收：收入统计日期过滤（内存库，本地 app，无需启动服务）。
+
+临时测试用户口令来自 MEDICAL_CHECK_PASSWORD，未设置时随机生成。
+"""
+
 from datetime import datetime
+
+from _common import check_password, ensure_repo_root_on_path
+
+ensure_repo_root_on_path()
 
 from backend.app import create_app, db
 from backend.app.models import Patient, Payment, User, Visit
+
+CHECK_PASSWORD = check_password()
 
 
 class TestConfig:
@@ -14,7 +25,7 @@ class TestConfig:
 
 def _create_user(username: str, role: str) -> User:
     user = User(username=username, real_name=username, role=role)
-    user.set_password("123456")
+    user.set_password(CHECK_PASSWORD)
     db.session.add(user)
     db.session.flush()
     return user
@@ -47,7 +58,7 @@ def _create_payment(nurse_id: int, doctor_id: int, paid_at: datetime, amount: fl
     return payment
 
 
-def run_tests():
+def run_checks():
     app = create_app(TestConfig)
     with app.app_context():
         db.create_all()
@@ -68,7 +79,7 @@ def run_tests():
         db.session.commit()
 
         client = app.test_client()
-        resp = client.post("/api/auth/login", json={"username": "admin", "password": "123456"})
+        resp = client.post("/api/auth/login", json={"username": "admin", "password": CHECK_PASSWORD})
         assert resp.status_code == 200, resp.get_data(as_text=True)
         token = resp.get_json()["access_token"]
         headers = {"Authorization": f"Bearer {token}"}
@@ -134,5 +145,4 @@ def run_tests():
 
 
 if __name__ == "__main__":
-    run_tests()
-
+    run_checks()

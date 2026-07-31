@@ -309,11 +309,29 @@ def _start_daily_snapshot_scheduler(app):
     return snapshot_thread
 
 
+def _resolve_server_port():
+    """解析监听端口，支持 SERVER_PORT 环境变量覆盖默认值 5000。"""
+    raw_port = os.environ.get('SERVER_PORT', '').strip()
+    if not raw_port:
+        return 5000
+    try:
+        port = int(raw_port)
+    except ValueError:
+        raise RuntimeError(
+            f'SERVER_PORT must be an integer between 1 and 65535, got: {raw_port!r}'
+        )
+    if not (1 <= port <= 65535):
+        raise RuntimeError(
+            f'SERVER_PORT must be between 1 and 65535, got: {port}'
+        )
+    return port
+
+
 def start_server():
     """启动服务器（可被外层重启循环调用）"""
     from backend.app import create_app, db
 
-    PORT = 5000
+    PORT = _resolve_server_port()
     bind_host = os.environ.get('SERVER_HOST', '127.0.0.1')
 
     logging.info(f'APP_ROOT: {APP_ROOT}')

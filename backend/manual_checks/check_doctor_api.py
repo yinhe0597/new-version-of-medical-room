@@ -1,25 +1,33 @@
-import requests
-import json
+"""手工验收：医生问诊全流程接口（需后端服务运行中）。
+
+凭据来自环境变量 MEDICAL_DOCTOR_PASSWORD。
+"""
+
 import os
+
+import requests
+
+from _common import api_base_url, require_password
 
 os.environ['NO_PROXY'] = '127.0.0.1,localhost'
 
-BASE_URL = 'http://127.0.0.1:5000/api'
+BASE_URL = api_base_url()
+
 
 def run_tests():
     session = requests.Session()
-    
+
     # 1. Login as Doctor
     print("Logging in as Doctor...")
     login_data = {
         "username": "doctor",
-        "password": "123456"
+        "password": require_password('doctor')
     }
     resp = session.post(f"{BASE_URL}/auth/login", json=login_data)
     if resp.status_code != 200:
         print(f"Login failed: {resp.text}")
         return
-    
+
     token = resp.json()['access_token']
     headers = {'Authorization': f'Bearer {token}'}
     print("Login Successful!")
@@ -89,6 +97,7 @@ def run_tests():
     resp = session.get(f"{BASE_URL}/doctor/visits/history", headers=headers)
     print(f"Status: {resp.status_code}")
     print(f"Response: {resp.json()}")
+
 
 if __name__ == '__main__':
     run_tests()

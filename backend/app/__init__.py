@@ -220,19 +220,37 @@ def _assert_database_at_alembic_head(app):
 def _configure_database(app):
     with app.app_context():
         engine = db.engine
-        if engine.dialect.name != "sqlite":
+        dialect = engine.dialect.name
+
+        if dialect == "sqlite":
+            def set_sqlite_pragmas(dbapi_connection, _connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA foreign_keys=ON")
+                cursor.execute("PRAGMA busy_timeout=15000")
+                cursor.close()
+
+            sqlalchemy.event.listen(engine, "connect", set_sqlite_pragmas)
+            with engine.connect() as conn:
+                conn.execute(sqlalchemy.text("PRAGMA foreign_keys=ON"))
+                conn.execute(sqlalchemy.text("PRAGMA busy_timeout=15000"))
             return
 
-        def set_sqlite_pragmas(dbapi_connection, _connection_record):
-            cursor = dbapi_connection.cursor()
-            cursor.execute("PRAGMA foreign_keys=ON")
-            cursor.execute("PRAGMA busy_timeout=15000")
-            cursor.close()
+        if dialect in {"mysql", "mariadb"}:
+            # Pin every pooled session to UTC so naive UTC DATETIME values and
+            # any server-side time function stay consistent regardless of the
+            # MySQL server's local time zone. Set at the session level rather
+            # than via connect_args init_command, which is intentionally
+            # rejected by the connection hardening layer. Registering the
+            # listener does not open a connection; it fires lazily when the
+            # pool establishes a real DBAPI connection.
+            def set_mysql_session_utc(dbapi_connection, _connection_record):
+                cursor = dbapi_connection.cursor()
+                try:
+                    cursor.execute("SET time_zone = '+00:00'")
+                finally:
+                    cursor.close()
 
-        sqlalchemy.event.listen(engine, "connect", set_sqlite_pragmas)
-        with engine.connect() as conn:
-            conn.execute(sqlalchemy.text("PRAGMA foreign_keys=ON"))
-            conn.execute(sqlalchemy.text("PRAGMA busy_timeout=15000"))
+            sqlalchemy.event.listen(engine, "connect", set_mysql_session_utc)
 
 
 def _runtime_config_bool(app, name):

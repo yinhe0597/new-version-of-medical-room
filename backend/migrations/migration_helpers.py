@@ -48,6 +48,20 @@ def add_missing_columns(table_name, columns):
             batch_op.add_column(column)
 
 
+def drop_existing_columns(table_name, columns):
+    """Drop the named columns if they exist, tolerating already-clean schemas."""
+    if not table_exists(table_name):
+        return
+    existing = column_names(table_name)
+    present = [name for name in columns if name in existing]
+    if not present:
+        return
+
+    with op.batch_alter_table(table_name, schema=None) as batch_op:
+        for name in present:
+            batch_op.drop_column(name)
+
+
 def refuse_unsafe_downgrade(revision):
     raise RuntimeError(
         f"Downgrade from revision {revision} is intentionally unsupported: "

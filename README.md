@@ -39,6 +39,17 @@
 
 详细变更见[开发日志 open0.0.22](docs/开发日志-open0.0.22.md)。
 
+## 维护更新（2026-07-31）
+
+针对生产发布前功能测试识别的问题完成一轮修复与整理（相关测试 120 项通过）：
+
+- 监听端口支持 `SERVER_PORT` 环境变量覆盖（缺省 `5000`），非法值明确报错而非静默退出。
+- 删除 `drug.monthly_sort_order` 模型漂移列，新增迁移 `a3f2e1c0d4b5`，新的 Alembic head 与 ORM 模型一致。
+- MySQL 连接会话统一 `SET time_zone = '+00:00'`，保证 naive-UTC 时间戳跨部署一致。
+- 单 head 静态门禁下沉为 `scripts/check_alembic_single_head.py`；手工验收脚本归位至 `backend/manual_checks/`；新增 `AGENTS.md` 代理操作约定。
+
+详细变更见[开发日志 2026-07-31](docs/开发日志-2026-07-31-生产发布问题修复.md)。
+
 ## open0.0.21 重点
 
 - 修复 Gitee `main`、分支和 PR 流水线，使其执行真实测试、审计与前端构建。
