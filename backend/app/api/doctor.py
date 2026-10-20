@@ -5,6 +5,8 @@ from backend.app.api import bp
 from backend.app.models import User, Patient, Visit, Drug, DrugStockGroup, PrescriptionItem, DiagnosisDict, TextTemplate, OperationLog, Payment, ParkedVisit, VISIT_STATUS_PENDING, utcnow
 import json
 from backend.app.utils.decorators import role_required
+from backend.app.utils.money import parse_nonnegative_money
+from backend.app.utils.pagination import parse_pagination
 from backend.app.utils.query import nulls_last_asc
 from backend.app.services.time_utils import format_local_datetime, local_now, parse_local_datetime
 from datetime import datetime, timedelta
@@ -46,16 +48,7 @@ PATIENT_TYPES = {
 }
 
 
-def _parse_nonnegative_money(value, field):
-    if isinstance(value, bool):
-        raise ValueError(field)
-    try:
-        amount = float(value)
-    except (TypeError, ValueError, OverflowError):
-        raise ValueError(field)
-    if not math.isfinite(amount) or amount < 0:
-        raise ValueError(field)
-    return round(amount, 2)
+_parse_nonnegative_money = parse_nonnegative_money
 
 def _age_from_id_card(id_card: str):
     """从 18 位中国身份证号提取出生日期并计算周岁"""
@@ -256,16 +249,12 @@ def _upsert_diagnosis_dict_from_text(diagnosis_text):
 @bp.route('/doctor/patient/search', methods=['GET'])
 @role_required('doctor')
 def search_patient():
-    import logging
-    logger = logging.getLogger(__name__)
-    
     start = time.perf_counter()
     keyword = request.args.get('keyword', '').strip()
     if not keyword:
         return jsonify({"msg": "Missing keyword parameter"}), 400
 
     kw_lower = keyword.lower()
-    logger.info(f"Searching for keyword: {keyword}, kw_lower: {kw_lower}")
 
     user_id = get_jwt_identity()
     now_ts = time.time()
@@ -290,8 +279,6 @@ def search_patient():
         )
     ).limit(50).all()
 
-    logger.info(f"Found {len(patients)} patients matching keyword")
-
     data = []
     for p in patients:
         data.append({
@@ -310,11 +297,8 @@ def search_patient():
             "patient_type": p.patient_type or 'student',
             "department": p.department,
             "shop_name": p.shop_name,
-            "id_card": p.id_card,
         })
 
-    logger.info(f"Returning {len(data)} patients")
-    
     resp = jsonify({"data": data})
     resp.headers["X-Response-Time-ms"] = f"{(time.perf_counter() - start) * 1000:.2f}"
     return resp, 200
@@ -731,7 +715,9 @@ def create_visit():
             "infusion_method": item.get("infusion_method"),
         })
 
-    if not math.isfinite(total_amount) or total_amount < 0:
+    try:
+        total_amount = _parse_nonnegative_money(total_amount, "items")
+    except ValueError:
         return jsonify({"msg": "Invalid total amount", "field": "items"}), 400
 
     # Create Visit
@@ -819,8 +805,7 @@ def create_visit():
 @role_required('doctor')
 def get_visit_history():
     user_id = get_jwt_identity()
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('size', 20, type=int)
+    page, per_page = parse_pagination()
 
     query = Visit.query.filter_by(doctor_id=int(user_id)).order_by(Visit.timestamp.desc())
 

@@ -1,10 +1,11 @@
 import { defineStore } from 'pinia'
 import request from '@/api/request'
+import { safeJsonParse } from '@/utils/storage'
 
 export const useUserStore = defineStore('user', {
   state: () => ({
     token: localStorage.getItem('token') || '',
-    userInfo: JSON.parse(localStorage.getItem('user')) || {}
+    userInfo: safeJsonParse(localStorage.getItem('user'), {})
   }),
   actions: {
     async login(username, password) {

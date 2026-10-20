@@ -206,6 +206,7 @@ import { ref, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import request from '@/api/request'
 import { ElMessage } from 'element-plus'
+import { printElement } from '@/utils/print'
 
 const router = useRouter()
 const historyList = ref([])
@@ -313,13 +314,6 @@ const getStatusText = (status) => {
   return map[status] || status
 }
 
-const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({
-  '&': '&amp;',
-  '<': '&lt;',
-  '>': '&gt;',
-  '"': '&quot;',
-  "'": '&#39;'
-})[char])
 
 const openCaseReview = async (visitId) => {
   dialogVisible.value = true
@@ -342,61 +336,27 @@ const exportCaseReviewPdf = async () => {
   await nextTick()
   if (!printRef.value) return
 
-  const win = window.open('', '_blank')
-  if (!win) {
-    ElMessage.error('浏览器拦截了弹窗，请允许弹窗后重试')
-    return
-  }
-
   const patientName = visitDetail.value.patient?.name || '患者'
   const createdAt = visitDetail.value.created_at || ''
   const title = `${patientName}-病例复盘${createdAt ? `-${createdAt}` : ''}`
-  const safeTitle = escapeHtml(title)
-  const safePatientName = escapeHtml(patientName)
-  const safeCreatedAt = escapeHtml(createdAt)
-  const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style'))
-    .map((el) => el.outerHTML)
-    .join('\n')
+  const styles = `
+    @page { size: A4; margin: 12mm; }
+    body { color: #000; background: #fff; }
+    .print-header { font-size: 18px; font-weight: 700; margin: 0 0 12px 0; }
+    .print-sub { font-size: 12px; color: #666; margin: 0 0 16px 0; }
+    table { page-break-inside: avoid; }
+  `
 
-  const contentHtml = printRef.value.outerHTML
-  const scriptTagOpen = '<scr' + 'ipt>'
-  const scriptTagClose = '</scr' + 'ipt>'
-  const html = `<!doctype html>
-<html lang="zh-CN">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>${safeTitle}</title>
-    ${styles}
-    <style>
-      @page { size: A4; margin: 12mm; }
-      body { color: #000; background: #fff; }
-      .print-header { font-size: 18px; font-weight: 700; margin: 0 0 12px 0; }
-      .print-sub { font-size: 12px; color: #666; margin: 0 0 16px 0; }
-      table { page-break-inside: avoid; }
-    </style>
-  </head>
-  <body>
-    <div class="print-header">病例复盘</div>
-    <div class="print-sub">${safePatientName}${createdAt ? ` · ${safeCreatedAt}` : ''}</div>
-    ${contentHtml}
-    ${scriptTagOpen}
-      window.onload = () => {
-        setTimeout(() => {
-          window.focus()
-          window.print()
-        }, 200)
-      }
-      window.onafterprint = () => {
-        window.close()
-      }
-    ${scriptTagClose}
-  </body>
-</html>`
-
-  win.document.open()
-  win.document.write(html)
-  win.document.close()
+  const started = printElement(printRef.value, {
+    title,
+    styles,
+    copyDocumentStyles: true,
+    header: '病例复盘',
+    subheader: `${patientName}${createdAt ? ` · ${createdAt}` : ''}`,
+  })
+  if (!started) {
+    ElMessage.error('浏览器拦截了弹窗，请允许弹窗后重试')
+  }
 }
 
 const openSupplementDialog = async (row) => {

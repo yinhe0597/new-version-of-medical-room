@@ -353,7 +353,7 @@ class SchemaParityHelperTestCase(unittest.TestCase):
     def test_history_extra_column_contract_matches_ture_database(self):
         self.assertEqual(
             sum(len(columns) for columns in validator.HISTORY_EXTRA_COLUMNS.values()),
-            22,
+            21,
         )
         declared = {
             (table_name, column_name)

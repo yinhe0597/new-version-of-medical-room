@@ -1,13 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router'
 import Login from '@/views/Login.vue'
-
-const safeJsonParse = value => {
-  try {
-    return value ? JSON.parse(value) : null
-  } catch (e) {
-    return null
-  }
-}
+import { safeJsonParse } from '@/utils/storage'
 
 const resolveHomeByRole = role => {
   if (role === 'doctor') return '/doctor'

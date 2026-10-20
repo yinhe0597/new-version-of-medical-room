@@ -210,6 +210,7 @@ import { ref, onMounted } from 'vue'
 import request from '@/api/request'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
+import { printElement, RECEIPT_PRINT_STYLES } from '@/utils/print'
 
 const loading = ref(false)
 const historyList = ref([])
@@ -356,20 +357,10 @@ const printReceipt = async () => {
   }
   const printArea = document.getElementById('receipt-print-area')
   if (!printArea) return
-  const printWindow = window.open('', '_blank', 'width=400,height=600')
-  if (!printWindow) {
+  if (!printElement(printArea, { title: '收费凭证', styles: RECEIPT_PRINT_STYLES })) {
     ElMessage.warning('请允许弹出窗口以完成打印')
     return
   }
-  printWindow.document.write(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>收费凭证</title><style>body{font-family:'Courier New',Courier,monospace;padding:10px;line-height:1.6;margin:0}p{margin:4px 0}.item-line{margin:2px 0 2px 10px;font-size:12px;line-height:1.4}.advice-print-info{font-size:13px}h3{text-align:center}hr{border:none;border-top:1px dashed #999;margin:8px 0}</style></head><body>${printArea.innerHTML}</body></html>`)
-  printWindow.document.close()
-  printWindow.onafterprint = () => {
-    printWindow.close()
-  }
-  printWindow.focus()
-  setTimeout(() => {
-    printWindow.print()
-  }, 500)
   showReceipt.value = false
 }
 

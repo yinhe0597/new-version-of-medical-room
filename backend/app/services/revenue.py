@@ -37,28 +37,27 @@ def _allocate(total, weights, keys):
     return result
 
 
-def allocate_payment_revenue(payment, visit, items):
-    """Return an actual-revenue breakdown that always reconciles to Payment.amount."""
+def allocate_revenue(
+    amount,
+    consultation_fee,
+    weights,
+    cost,
+    explicit_consult=None,
+    explicit_items=None,
+):
+    """Allocate a payment across revenue categories from pre-aggregated weights.
+
+    ``weights`` contains the original drug/service/consumable amounts per visit.
+    Callers may obtain them from ORM items or from a SQL aggregate; the rounding
+    behavior stays identical because every item amount is rounded before summing.
+    """
     original = {key: Decimal("0") for key in REVENUE_KEYS}
-    original["consultation"] = max(_money(getattr(visit, "consultation_fee", 0)), Decimal("0"))
-    cost = Decimal("0")
+    original["consultation"] = max(_money(consultation_fee), Decimal("0"))
+    for key in ("drug", "service", "consumable"):
+        original[key] = max(_money(weights.get(key, 0)), Decimal("0"))
+    cost = max(_money(cost), Decimal("0"))
 
-    for item in items:
-        amount = item.new_amount if item.new_amount is not None else item.amount
-        amount = max(_money(amount), Decimal("0"))
-        drug = getattr(item, "drug", None)
-        drug_type = int(getattr(drug, "type", 1) or 1)
-        if drug_type == 1:
-            original["drug"] += amount
-        elif drug_type == 3:
-            original["consumable"] += amount
-        else:
-            original["service"] += amount
-        cost += max(_money(getattr(item, "purchase_cost", 0)), Decimal("0"))
-
-    actual_total = max(_money(getattr(payment, "amount", 0)), Decimal("0"))
-    explicit_consult = getattr(payment, "actual_consultation_fee", None)
-    explicit_items = getattr(payment, "actual_drug_amount", None)
+    actual_total = max(_money(amount), Decimal("0"))
 
     if explicit_consult is not None and explicit_items is not None:
         consultation = max(_money(explicit_consult), Decimal("0"))
@@ -96,3 +95,31 @@ def allocate_payment_revenue(payment, visit, items):
         "profit": float(actual_total - cost),
         "original_total": float(sum(original.values(), Decimal("0"))),
     }
+
+
+def allocate_payment_revenue(payment, visit, items):
+    """Return an actual-revenue breakdown that always reconciles to Payment.amount."""
+    weights = {key: Decimal("0") for key in ("drug", "service", "consumable")}
+    cost = Decimal("0")
+
+    for item in items:
+        amount = item.new_amount if item.new_amount is not None else item.amount
+        amount = max(_money(amount), Decimal("0"))
+        drug = getattr(item, "drug", None)
+        drug_type = int(getattr(drug, "type", 1) or 1)
+        if drug_type == 1:
+            weights["drug"] += amount
+        elif drug_type == 3:
+            weights["consumable"] += amount
+        else:
+            weights["service"] += amount
+        cost += max(_money(getattr(item, "purchase_cost", 0)), Decimal("0"))
+
+    return allocate_revenue(
+        getattr(payment, "amount", 0),
+        getattr(visit, "consultation_fee", 0),
+        weights,
+        cost,
+        explicit_consult=getattr(payment, "actual_consultation_fee", None),
+        explicit_items=getattr(payment, "actual_drug_amount", None),
+    )

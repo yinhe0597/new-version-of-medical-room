@@ -4,12 +4,13 @@ from backend.app import db
 from backend.app.api import bp
 from backend.app.models import (
     User, Drug, DrugStockGroup, Payment, Visit, PrescriptionItem, Patient, InventoryRecord,
-    DailyStockSnapshot, OperationLog,
+    DailyStockSnapshot, OperationLog, ParkedVisit,
     INVENTORY_OPERATION_ADJUSTMENT, INVENTORY_OPERATION_INBOUND, INVENTORY_OPERATION_MERGE,
 )
 from backend.app.utils.decorators import role_required
 from backend.app.services.stock_lock import serialized_stock_mutation
-from backend.app.services.revenue import allocate_payment_revenue
+from backend.app.services.revenue import allocate_revenue
+from backend.app.services.revenue_query import fetch_revenue_weights
 from backend.app.services.time_utils import (
     format_local_datetime,
     local_naive_to_utc,
@@ -18,7 +19,9 @@ from backend.app.services.time_utils import (
     utc_naive_to_local,
 )
 from backend.app.services.bootstrap import validate_password
+from backend.app.utils.money import parse_nonnegative_money
 from backend.app.utils.query import nulls_last_asc
+from backend.app.utils.pagination import parse_pagination
 from datetime import datetime, date, timedelta, timezone
 from sqlalchemy import func
 from sqlalchemy.orm import aliased
@@ -129,13 +132,7 @@ def _name_pinyin_parts(text):
 
 
 def _nonnegative_float(value, field):
-    try:
-        result = float(value)
-    except (TypeError, ValueError):
-        raise ValueError(field)
-    if not math.isfinite(result) or result < 0:
-        raise ValueError(field)
-    return result
+    return parse_nonnegative_money(value, field)
 
 
 def _nonnegative_int(value, field):
@@ -719,8 +716,7 @@ def import_patients():
 @bp.route('/admin/patients', methods=['GET'])
 @role_required('admin')
 def get_patients():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('size', 20, type=int)
+    page, per_page = parse_pagination()
     keyword = request.args.get('keyword', '')
     patient_type = request.args.get('patient_type', '')
 
@@ -936,9 +932,33 @@ def delete_patient(id):
     patient = db.get_or_404(Patient, id)
     if patient.visits.count() > 0:
         return jsonify({"msg": "该人员已有就诊记录，无法删除"}), 400
+    if ParkedVisit.query.filter_by(patient_id=patient.id).first():
+        return jsonify({"msg": "该人员存在未完成的挂单，请先处理后再删除"}), 400
 
-    db.session.delete(patient)
-    db.session.commit()
+    log = OperationLog(
+        user_id=int(get_jwt_identity()),
+        action_type='delete_patient',
+        target_type='patient',
+        target_id=patient.id,
+        summary=f"删除人员: {patient.name}",
+        details=json.dumps({
+            "name": patient.name,
+            "student_id": patient.student_id or "",
+            "patient_type": patient.patient_type or "student",
+            "id_card_suffix": (patient.id_card or "")[-4:],
+        }, ensure_ascii=False),
+    )
+    db.session.add(log)
+    try:
+        db.session.delete(patient)
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({"msg": "该人员仍被其他记录引用，无法删除"}), 400
+    except Exception:
+        db.session.rollback()
+        current_app.logger.exception("Patient deletion failed: id=%s", id)
+        return jsonify({"msg": "删除失败，请稍后重试"}), 500
     return jsonify({"msg": "删除成功"}), 200
 
 @bp.route('/admin/patients/<int:id>/visits', methods=['GET'])
@@ -1009,8 +1029,7 @@ def admin_get_visit_detail(visit_id):
 @bp.route('/admin/drugs', methods=['GET'])
 @role_required(['admin', 'nurse', 'finance'])
 def get_drugs():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('size', 20, type=int)
+    page, per_page = parse_pagination()
     keyword = request.args.get('keyword', '')
 
     query = Drug.query.order_by(*nulls_last_asc(Drug.storage_location))
@@ -1331,6 +1350,21 @@ def delete_drug(id):
     drug = Drug.query.filter_by(id=id).with_for_update().first_or_404()
     if drug.stock_group_code:
         return jsonify({"msg": "整散库存组药品不支持直接删除，请先停用或由管理员做库存组清理"}), 400
+    log = OperationLog(
+        user_id=int(get_jwt_identity()),
+        action_type='delete_drug',
+        target_type='drug',
+        target_id=drug.id,
+        summary=f"永久删除{'药品' if drug.type == 1 else '诊疗项目' if drug.type == 2 else '耗材'}: {drug.name}",
+        details=json.dumps({
+            "name": drug.name,
+            "type": drug.type,
+            "specification": drug.specification or "",
+            "stock": drug.stock,
+            "batch_no": drug.batch_no or "",
+        }, ensure_ascii=False),
+    )
+    db.session.add(log)
     try:
         db.session.delete(drug)
         db.session.commit()
@@ -1937,7 +1971,7 @@ def get_revenue_stats():
         query = Payment.query.join(Visit).filter(
             Payment.payment_date >= start,
             Payment.payment_date < end
-        )
+        ).order_by(Payment.payment_date.desc(), Payment.id.desc())
         if doctor_id:
             query = query.filter(Visit.doctor_id == doctor_id)
         if nurse_id:
@@ -1950,15 +1984,7 @@ def get_revenue_stats():
         ).all()
 
         visit_ids = [p.visit_id for p in payments if p.visit_id]
-        items_by_visit = {}
-        if visit_ids:
-            items = PrescriptionItem.query.options(
-                db.joinedload(PrescriptionItem.drug)
-            ).filter(
-                PrescriptionItem.visit_id.in_(visit_ids)
-            ).all()
-            for it in items:
-                items_by_visit.setdefault(it.visit_id, []).append(it)
+        weights_by_visit = fetch_revenue_weights(visit_ids)
 
         total_revenue = 0.0
         drug_revenue = 0.0
@@ -1968,14 +1994,26 @@ def get_revenue_stats():
         total_cost = 0.0
         total_profit = 0.0
 
+        # 只构造当前页的明细，汇总仍遍历全量支付记录。
         details = []
+        detail_index = 0
+        start_idx = (page - 1) * per_page
+        end_idx = start_idx + per_page
         finance_view = _current_user_is_finance()
         for p in payments:
             v = p.visit
             if v is None:
                 continue
 
-            breakdown = allocate_payment_revenue(p, v, items_by_visit.get(v.id, []))
+            weights = weights_by_visit.get(v.id, {})
+            breakdown = allocate_revenue(
+                p.amount,
+                v.consultation_fee,
+                weights,
+                weights.get("cost", 0),
+                explicit_consult=p.actual_consultation_fee,
+                explicit_items=p.actual_drug_amount,
+            )
             consult = breakdown["consultation"]
             drug_amt = breakdown["drug"]
             service_amt = breakdown["service"]
@@ -1992,29 +2030,28 @@ def get_revenue_stats():
             total_cost += cost
             total_profit += profit
 
-            details.append({
-                "date": format_local_datetime(p.payment_date, "%Y-%m-%d %H:%M:%S") or "",
-                "visit_id": p.visit_id,
-                "patient_name": _mask_patient_name(v.patient.name if v.patient else "", finance_view),
-                "student_id": "" if finance_view else (v.patient.student_id if v.patient else ""),
-                "doctor_name": v.doctor.real_name if getattr(v, "doctor", None) else "",
-                "nurse_name": p.nurse.real_name if getattr(p, "nurse", None) else "",
-                "diagnosis": "" if finance_view else (v.diagnosis or ""),
-                "chief_complaint": "" if finance_view else (v.chief_complaint or ""),
-                "drug_amount": drug_amt,
-                "service_amount": service_amt,
-                "consumable_amount": consumable_amt,
-                "consultation_fee": consult,
-                "amount": amount,
-                "cost": cost,
-                "profit": profit,
-            })
+            if start_idx <= detail_index < end_idx:
+                details.append({
+                    "date": format_local_datetime(p.payment_date, "%Y-%m-%d %H:%M:%S") or "",
+                    "visit_id": p.visit_id,
+                    "patient_name": _mask_patient_name(v.patient.name if v.patient else "", finance_view),
+                    "student_id": "" if finance_view else (v.patient.student_id if v.patient else ""),
+                    "doctor_name": v.doctor.real_name if getattr(v, "doctor", None) else "",
+                    "nurse_name": p.nurse.real_name if getattr(p, "nurse", None) else "",
+                    "diagnosis": "" if finance_view else (v.diagnosis or ""),
+                    "chief_complaint": "" if finance_view else (v.chief_complaint or ""),
+                    "drug_amount": drug_amt,
+                    "service_amount": service_amt,
+                    "consumable_amount": consumable_amt,
+                    "consultation_fee": consult,
+                    "amount": amount,
+                    "cost": cost,
+                    "profit": profit,
+                })
+            detail_index += 1
 
-        # 分页切割明细数据（汇总统计仍基于全量数据）
-        total = len(details)
-        start_idx = (page - 1) * per_page
-        end_idx = start_idx + per_page
-        paged_details = details[start_idx:end_idx]
+        total = detail_index
+        paged_details = details
 
         return jsonify({
             "data": {
@@ -2124,15 +2161,7 @@ def export_revenue_stats():
     ).all()
 
     visit_ids = [p.visit_id for p in payments if p.visit_id]
-    items_by_visit = {}
-    if visit_ids:
-        items = PrescriptionItem.query.options(
-            db.joinedload(PrescriptionItem.drug)
-        ).filter(
-            PrescriptionItem.visit_id.in_(visit_ids)
-        ).all()
-        for it in items:
-            items_by_visit.setdefault(it.visit_id, []).append(it)
+    weights_by_visit = fetch_revenue_weights(visit_ids)
 
     wb = Workbook()
     ws = wb.active
@@ -2172,7 +2201,15 @@ def export_revenue_stats():
         v = p.visit
         if v is None:
             continue
-        breakdown = allocate_payment_revenue(p, v, items_by_visit.get(v.id, []))
+        weights = weights_by_visit.get(v.id, {})
+        breakdown = allocate_revenue(
+            p.amount,
+            v.consultation_fee,
+            weights,
+            weights.get("cost", 0),
+            explicit_consult=p.actual_consultation_fee,
+            explicit_items=p.actual_drug_amount,
+        )
         consult = breakdown["consultation"]
         drug_amt = breakdown["drug"]
         service_amt = breakdown["service"]
@@ -2617,8 +2654,7 @@ def disable_user(id):
 @role_required(['admin'])
 def get_operation_logs():
     """获取运营日志列表"""
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('size', 20, type=int)
+    page, per_page = parse_pagination()
     action_type = request.args.get('action_type', '')
     start_date = request.args.get('start_date', '')
     end_date = request.args.get('end_date', '')

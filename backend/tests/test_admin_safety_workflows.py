@@ -1,9 +1,12 @@
+import json
 import os
 import tempfile
 import unittest
+from datetime import timedelta
 
 from backend.app import create_app, db
-from backend.app.models import Drug, InventoryRecord, OperationLog, User
+from backend.app.models import Drug, InventoryRecord, OperationLog, ParkedVisit, Patient, User, utcnow
+from backend.app.utils.pagination import MAX_PAGE_SIZE
 
 
 class AdminSafetyWorkflowsTestCase(unittest.TestCase):
@@ -170,6 +173,83 @@ class AdminSafetyWorkflowsTestCase(unittest.TestCase):
             },
         )
         self.assertEqual(strong.status_code, 201)
+
+    def test_admin_patient_list_caps_page_size(self):
+        response = self.client.get(
+            "/api/admin/patients?page=0&size=1000000",
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        meta = response.get_json()["meta"]
+        self.assertEqual(meta["page"], 1)
+        self.assertEqual(meta["per_page"], MAX_PAGE_SIZE)
+
+    def test_patient_deletion_writes_audit_log_without_full_id_card(self):
+        patient = Patient(
+            name="待删除人员",
+            student_id="DEL-001",
+            id_card="11010519491231002X",
+            patient_type="student",
+        )
+        db.session.add(patient)
+        db.session.commit()
+
+        response = self.client.delete(
+            f"/api/admin/patients/{patient.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(db.session.get(Patient, patient.id))
+
+        log = OperationLog.query.filter_by(action_type="delete_patient").one()
+        details = json.loads(log.details)
+        self.assertEqual(details["id_card_suffix"], "002X")
+        self.assertNotIn("id_card", details)
+
+    def test_patient_with_parked_visit_cannot_be_deleted(self):
+        patient = Patient(name="挂单人员", student_id="DEL-002", patient_type="student")
+        db.session.add(patient)
+        db.session.flush()
+        db.session.add(ParkedVisit(
+            patient_id=patient.id,
+            doctor_id=self.admin.id,
+            expires_at=utcnow() + timedelta(hours=1),
+        ))
+        db.session.commit()
+
+        response = self.client.delete(
+            f"/api/admin/patients/{patient.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNotNone(db.session.get(Patient, patient.id))
+        self.assertIsNone(OperationLog.query.filter_by(action_type="delete_patient").first())
+
+    def test_drug_deletion_writes_audit_log(self):
+        drug = Drug(
+            name="待删除药品",
+            type=1,
+            specification="1盒",
+            unit="盒",
+            price=10,
+            purchase_price=5,
+            stock=1,
+            status=0,
+        )
+        db.session.add(drug)
+        db.session.commit()
+
+        response = self.client.delete(
+            f"/api/admin/drugs/{drug.id}",
+            headers=self.headers,
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(db.session.get(Drug, drug.id))
+
+        log = OperationLog.query.filter_by(action_type="delete_drug").one()
+        details = json.loads(log.details)
+        self.assertEqual(details["name"], "待删除药品")
+        self.assertEqual(details["stock"], 1)
 
 
 if __name__ == "__main__":

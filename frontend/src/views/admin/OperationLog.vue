@@ -16,6 +16,8 @@
             <el-option label="编辑药品/项目" value="drug_update" />
             <el-option label="临时就诊" value="temp_patient_visit" />
             <el-option label="新增人员" value="create_patient" />
+            <el-option label="删除人员" value="delete_patient" />
+            <el-option label="永久删除药品/项目" value="delete_drug" />
             <el-option label="护士审核通过" value="nurse_verify" />
             <el-option label="护士驳回" value="nurse_reject" />
             <el-option label="护士执行收费" value="nurse_execute" />
@@ -134,6 +136,8 @@ const actionTypeMap = {
   drug_update: { label: '编辑药品/项目', type: 'success' },
   temp_patient_visit: { label: '临时就诊', type: 'warning' },
   create_patient: { label: '新增人员', type: '' },
+  delete_patient: { label: '删除人员', type: 'danger' },
+  delete_drug: { label: '永久删除药品/项目', type: 'danger' },
   nurse_verify: { label: '护士审核通过', type: 'primary' },
   nurse_reject: { label: '护士驳回', type: 'danger' },
   nurse_execute: { label: '护士执行收费', type: 'success' },

@@ -290,7 +290,7 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, onMounted, onActivated } from 'vue'
+import { ref, computed, watch, onMounted, onActivated, h } from 'vue'
 import { useRouter } from 'vue-router'
 import { Search } from '@element-plus/icons-vue'
 import request from '@/api/request'
@@ -486,15 +486,6 @@ onActivated(() => {
   }
 })
 
-const escapeHtml = (value) => {
-  return String(value ?? '')
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;')
-}
-
 const createForm = ref({
   is_temporary: false,
   student_id: '',
@@ -685,30 +676,32 @@ const confirmStartVisit = async () => {
 
   const p = patient.value
   const typeLabel = typeLabelMap[p.patient_type] || '学生'
-  let extraInfo = ''
+  const rows = [
+    ['人员类型', typeLabel],
+    ['学号/工号', p.student_id || '-'],
+    ['姓名', p.name || '-'],
+    ['性别', p.gender || '-'],
+    ['年龄', p.age || '-'],
+  ]
   if (p.patient_type === 'staff') {
-    extraInfo = `<div><b>所在单位：</b>${escapeHtml(p.department || '-')}</div>`
+    rows.push(['所在单位', p.department || '-'])
   } else if (p.patient_type === 'shop') {
-    extraInfo = `<div><b>商铺名称：</b>${escapeHtml(p.shop_name || '-')}</div>`
+    rows.push(['商铺名称', p.shop_name || '-'])
   } else if (p.patient_type === 'student' || !p.patient_type) {
-    extraInfo = `<div><b>班级：</b>${escapeHtml(p.class_name || '-')}</div>`
+    rows.push(['班级', p.class_name || '-'])
   }
-  const html = `
-    <div style="line-height: 1.8;">
-      <div style="margin-bottom: 10px;">请再次确认患者基本信息无误：</div>
-      <div><b>人员类型：</b>${typeLabel}</div>
-      <div><b>学号/工号：</b>${escapeHtml(p.student_id || '-')}</div>
-      <div><b>姓名：</b>${escapeHtml(p.name || '-')}</div>
-      <div><b>性别：</b>${escapeHtml(p.gender || '-')}</div>
-      <div><b>年龄：</b>${escapeHtml(p.age || '-')}</div>
-      ${extraInfo}
-      <div><b>电话：</b>${escapeHtml(p.phone || '-')}</div>
-    </div>
-  `
+  rows.push(['电话', p.phone || '-'])
+
+  const message = h('div', { style: { lineHeight: '1.8' } }, [
+    h('div', { style: { marginBottom: '10px' } }, '请再次确认患者基本信息无误：'),
+    ...rows.map(([label, value]) => h('div', [
+      h('b', `${label}：`),
+      String(value ?? '-'),
+    ])),
+  ])
 
   try {
-    await ElMessageBox.confirm(html, '确认接诊信息', {
-      dangerouslyUseHTMLString: true,
+    await ElMessageBox.confirm(message, '确认接诊信息', {
       confirmButtonText: '确认并开始接诊',
       cancelButtonText: '返回检查',
       type: 'warning',

@@ -2,11 +2,12 @@ from flask import request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from backend.app import db
 from backend.app.api import bp
-from backend.app.models import Payment, Visit, PrescriptionItem, Drug, User, OperationLog
+from backend.app.models import Payment, Visit, PrescriptionItem
 from backend.app.utils.decorators import role_required
-from datetime import datetime, date, timedelta
+from datetime import datetime, timedelta
 from sqlalchemy import func
-from backend.app.services.revenue import allocate_payment_revenue
+from backend.app.services.revenue import allocate_revenue
+from backend.app.services.revenue_query import fetch_revenue_weights
 from backend.app.services.time_utils import (
     local_naive_to_utc,
     local_now,
@@ -187,13 +188,7 @@ def finance_revenue_by_type():
     consultation_revenue = 0.0
 
     visit_ids = [p.visit_id for p in payments if p.visit_id]
-    items_by_visit = {}
-    if visit_ids:
-        items = PrescriptionItem.query.options(
-            db.joinedload(PrescriptionItem.drug)
-        ).filter(PrescriptionItem.visit_id.in_(visit_ids)).all()
-        for it in items:
-            items_by_visit.setdefault(it.visit_id, []).append(it)
+    weights_by_visit = fetch_revenue_weights(visit_ids)
 
     visits_by_id = {}
     if visit_ids:
@@ -206,7 +201,15 @@ def finance_revenue_by_type():
         v = visits_by_id.get(p.visit_id)
         if v is None:
             continue
-        breakdown = allocate_payment_revenue(p, v, items_by_visit.get(v.id, []))
+        weights = weights_by_visit.get(v.id, {})
+        breakdown = allocate_revenue(
+            p.amount,
+            v.consultation_fee,
+            weights,
+            weights.get("cost", 0),
+            explicit_consult=p.actual_consultation_fee,
+            explicit_items=p.actual_drug_amount,
+        )
         consultation_revenue += breakdown["consultation"]
         drug_revenue += breakdown["drug"]
         service_revenue += breakdown["service"]

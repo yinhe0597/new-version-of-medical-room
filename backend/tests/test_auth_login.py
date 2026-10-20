@@ -1,7 +1,9 @@
+import time
 import unittest
 
 from backend.app import create_app, db
 from backend.app.models import User
+from backend.app.services.login_throttle import reset_login_throttle
 
 
 class TestConfig:
@@ -10,10 +12,14 @@ class TestConfig:
     JWT_SECRET_KEY = "test-jwt-secret-key-at-least-32-bytes"
     SQLALCHEMY_DATABASE_URI = "sqlite:///:memory:"
     SQLALCHEMY_TRACK_MODIFICATIONS = False
+    LOGIN_MAX_ATTEMPTS = 3
+    LOGIN_ATTEMPT_WINDOW_SECONDS = 60
+    LOGIN_LOCKOUT_SECONDS = 1
 
 
 class AuthLoginTestCase(unittest.TestCase):
     def setUp(self):
+        reset_login_throttle()
         self.app = create_app(TestConfig)
         self.ctx = self.app.app_context()
         self.ctx.push()
@@ -29,6 +35,7 @@ class AuthLoginTestCase(unittest.TestCase):
         db.session.remove()
         db.drop_all()
         self.ctx.pop()
+        reset_login_throttle()
 
     def test_login_returns_token_and_user(self):
         resp = self.client.post(
@@ -73,6 +80,44 @@ class AuthLoginTestCase(unittest.TestCase):
             json={"username": "doctor", "password": "new-password-123"},
         )
         self.assertEqual(relogin.status_code, 200)
+
+    def test_login_locks_after_repeated_failures_and_recovers(self):
+        for _ in range(2):
+            failed = self.client.post(
+                "/api/auth/login",
+                json={"username": "doctor", "password": "wrong-password"},
+            )
+            self.assertEqual(failed.status_code, 401)
+
+        locked = self.client.post(
+            "/api/auth/login",
+            json={"username": "doctor", "password": "wrong-password"},
+        )
+        self.assertEqual(locked.status_code, 429)
+        self.assertGreaterEqual(int(locked.headers["Retry-After"]), 1)
+
+        blocked = self.client.post(
+            "/api/auth/login",
+            json={"username": "doctor", "password": "123456"},
+        )
+        self.assertEqual(blocked.status_code, 429)
+
+        time.sleep(1.1)
+        recovered = self.client.post(
+            "/api/auth/login",
+            json={"username": "doctor", "password": "123456"},
+        )
+        self.assertEqual(recovered.status_code, 200)
+
+    def test_login_rejects_non_object_json(self):
+        response = self.client.post("/api/auth/login", json=["doctor", "123456"])
+        self.assertEqual(response.status_code, 400)
+
+        invalid_type = self.client.post(
+            "/api/auth/login",
+            json={"username": ["doctor"], "password": "123456"},
+        )
+        self.assertEqual(invalid_type.status_code, 400)
 
     def test_unknown_api_is_json_404_and_large_body_is_413(self):
         missing = self.client.get("/api/definitely-not-a-route")

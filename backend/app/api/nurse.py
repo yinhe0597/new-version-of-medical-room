@@ -27,7 +27,9 @@ from backend.app.models import (
     utcnow,
 )
 from backend.app.utils.decorators import role_required
+from backend.app.utils.money import parse_nonnegative_money
 from backend.app.utils.query import nulls_last_asc
+from backend.app.utils.pagination import parse_pagination
 from backend.app.utils.spreadsheet import safe_spreadsheet_text
 from backend.app.services.drug_stock import (
     ValidationError,
@@ -48,7 +50,7 @@ from backend.app.services.time_utils import (
 )
 from datetime import datetime, date, timezone, timedelta
 from sqlalchemy import and_, or_, func
-from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from decimal import Decimal, InvalidOperation
 import re
 import math
 import json
@@ -62,16 +64,7 @@ _MAX_STOCK_VALUE = 2_147_483_647
 _INVENTORY_REMARK_MAX_LENGTH = 200
 
 
-def _parse_nonnegative_money(value, field):
-    if isinstance(value, bool):
-        raise ValueError(field)
-    try:
-        amount = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        raise ValueError(field)
-    if not amount.is_finite() or amount < 0:
-        raise ValueError(field)
-    return float(amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+_parse_nonnegative_money = parse_nonnegative_money
 
 def _format_local_dt(dt, fmt="%Y-%m-%d %H:%M"):
     return format_local_datetime(dt, fmt)
@@ -741,8 +734,7 @@ def update_group_inventory():
 @bp.route('/nurse/inventory/records', methods=['GET'])
 @role_required(['nurse', 'admin'])
 def get_inventory_records():
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('size', 20, type=int)
+    page, per_page = parse_pagination()
 
     query = InventoryRecord.query.order_by(InventoryRecord.timestamp.desc())
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
@@ -1991,8 +1983,7 @@ def list_drugs():
         except ValueError:
             return jsonify({"msg": "Invalid inbound_end"}), 400
 
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('size', 20, type=int)
+    page, per_page = parse_pagination()
     query = query.order_by(*nulls_last_asc(Drug.storage_location), Drug.id.desc())
     pagination = query.paginate(page=page, per_page=per_page, error_out=False)
     page_group_codes = {
@@ -2054,8 +2045,7 @@ def get_my_history():
     status = request.args.get('status', default=None)
 
     # 分页参数
-    page = request.args.get('page', 1, type=int)
-    per_page = request.args.get('size', 20, type=int)
+    page, per_page = parse_pagination()
 
     query = Visit.query.options(
         db.joinedload(Visit.patient),
