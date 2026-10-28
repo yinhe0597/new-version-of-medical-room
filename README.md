@@ -6,7 +6,7 @@
 
 **面向学校医务室的诊疗、处方、收费、库存与统计一体化系统**
 
-[![Version](https://img.shields.io/badge/version-open0.0.22-red)](docs/开发日志-open0.0.22.md)
+![Version](https://img.shields.io/badge/version-open0.0.22-red)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue)](https://python.org)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883)](https://vuejs.org)
 [![Database](https://img.shields.io/badge/Database-SQLite%20%7C%20MySQL-336791)](docs/部署与维护说明.md)
@@ -122,6 +122,133 @@ npm run dev
 - 远程 MySQL 强制 verified TLS、数据库结构须与当前迁移版本一致（Alembic head）、只读预检与受保护迁移入口。
 - 每个候选版本必须恢复真实备份到隔离库，完成升级、预检、业务冒烟与数据对账。
 
+## Linux 生产部署（systemd + nginx + MySQL）
+
+以下流程已在 Ubuntu 26.04 / Python 3.14 / MySQL 8.4 / nginx 1.28 上完整跑通。
+
+### 目录与依赖
+
+- 代码和数据盘可以放在独立卷（含 NTFS），但 **virtualenv 必须建在 ext4**：NTFS 默认没有可执行位，venv 里的脚本无法运行。
+- 需要 Python 3.11+、Node.js 22.12+、MySQL 8.0.21+、nginx。
+
+```bash
+python3 -m venv ~/venvs/medical-room
+~/venvs/medical-room/bin/pip install -r backend/requirements.txt
+```
+
+### 配置 `.env`
+
+从 `.env.production.example` 复制为项目根目录的 `.env`（权限 `600`），至少确认：
+
+| 变量 | 值 | 说明 |
+| --- | --- | --- |
+| `DATABASE_URL` | `mysql+pymysql://...` | 本机 127.0.0.1 可省略 TLS |
+| `REQUIRE_ALEMBIC_HEAD` | `1` | MySQL 上 fail-closed，必须开启 |
+| `RUNTIME_SCHEMA_SYNC_ENABLED` | `0` | 禁止运行时自动改表 |
+| `PRODUCTION_DATABASE_PREFLIGHT_ENABLED` | `1` | 启动时执行只读预检 |
+| `SERVER_HOST` | `127.0.0.1` | 只监听回环，由 nginx 对外发布 |
+| `TRUST_PROXY_HEADERS` | `1` | 反代场景必须，否则限流与审计只能看到 127.0.0.1 |
+
+### 升级数据库并构建前端
+
+```bash
+cd backend && ../venvs/medical-room/bin/flask db upgrade && cd ..
+cd frontend && npm ci && npm run build && cd ..
+rm -rf dist && cp -r frontend/dist dist
+```
+
+`dist/` 必须是真正的构建产物。系统会跳过仍引用 `/src/main.*` 的 Vite 开发入口目录，避免线上加载开发版 `index.html`。
+
+### systemd
+
+```ini
+# /etc/systemd/system/medical-room.service
+[Unit]
+Description=Medical Room Management System
+After=network-online.target mysql.service
+Wants=network-online.target
+Requires=mysql.service
+# 数据在独立卷上时补上：RequiresMountsFor=/data/yws
+
+[Service]
+User=vincrnt
+WorkingDirectory=/data/yws
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/vincrnt/venvs/medical-room/bin/python run_prod.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now medical-room
+systemctl is-active medical-room
+```
+
+如果项目放在独立数据盘上（例如按 UUID 挂载的 NTFS），请同时配置 `.mount` 单元，并让服务通过 `RequiresMountsFor=` 依赖该路径，否则重启后服务会在空目录上启动失败。
+
+### nginx（80 跳转 HTTPS）
+
+```nginx
+server {
+    listen 80 default_server;
+    server_name _;
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl default_server;
+    http2 on;
+    server_name _;
+
+    ssl_certificate     /etc/nginx/ssl/medical-room.crt;
+    ssl_certificate_key /etc/nginx/ssl/medical-room.key;
+    ssl_protocols TLSv1.2 TLSv1.3;
+
+    client_max_body_size 64m;
+
+    location / {
+        proxy_pass http://127.0.0.1:5000;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+        proxy_read_timeout 120s;
+    }
+}
+```
+
+内网可用自签 CA：先 `openssl req -x509` 生成 CA，再签发带 `subjectAltName=IP:<服务器IP>` 的服务器证书（有效期建议不超过 397 天），最后把 CA 公钥分发给客户端导入受信任根。未安装 CA 的客户端会提示证书不受信任。
+
+### 部署自检
+
+```bash
+curl -k https://127.0.0.1/api/health/live
+curl -k https://127.0.0.1/api/health/ready
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1/   # 期望 301
+```
+
+再验证客户端 IP 透传：连续 5 次错误登录应依次返回 `401…429`，且本机直连 `127.0.0.1:5000` 的失败计数与局域网来源相互独立。
+
+### 本次部署遇到的问题与处理
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 页面白屏，浏览器加载 `/src/main.js` | 服务命中了源码目录里的 Vite 开发版 `index.html` | 构建产物放到 `dist/`；代码已改为只接受构建版 index |
+| 限流不生效，操作日志 IP 全是 `127.0.0.1` | Waitress 3 默认清除 `X-Forwarded-*`，ProxyFix 拿不到头 | `.env` 设置 `TRUST_PROXY_HEADERS=1`，代码已联动 Waitress 保留该头 |
+| 重启后服务启动失败或目录为空 | 数据盘开机未挂载 | 配置 `.mount` 单元并给服务加 `RequiresMountsFor=` |
+| JWT 立即过期、日志时间错乱 | 主板时钟漂移且未启用 NTP | `timedatectl set-ntp true`，必要时先手动校准 |
+| `mysqldump` 备份报 `PROCESS` 权限不足 | 备份账号缺少 `PROCESS` 权限 | 使用本机 root socket，或单独授予备份账号该权限 |
+| venv 内脚本提示 `Permission denied` | venv 建在 NTFS 分区 | 把 venv 移到了 ext4 |
+| 旧 SQLite 库导入被拒绝 | 存在废弃字段与外键孤儿 | 先在隔离副本升级到 Alembic head、处置孤儿并删废弃列，再执行 `migrate_to_mysql.py` |
+
 ## 文档导航
 
 | 你想…… | 看这里 |
@@ -135,12 +262,12 @@ npm run dev
 
 ## 当前版本与状态
 
-`open0.0.22` 为文档维护版本，记录 Go 重构版后端的备份修复、财务性能优化与 MySQL 验收（Go 源码暂未入库）；Python 成品的生产候选版本仍为 `open0.0.21`。
+`open0.0.22` 为当前维护版本；Python 成品的生产候选版本为 `open0.0.21`。
 
 | 项目 | 结果 |
 | --- | --- |
-| 后端测试 | 244 项中 243 通过，1 项存量失败待排查 |
-| 前端测试/构建 | Vitest 6/6 通过，Vite 生产构建通过 |
+| 后端测试 | 259 项全部通过，1 项因 Windows 无原生 /proc 语义跳过 |
+| 前端测试/构建 | Vitest 8/8 通过，Vite 生产构建通过 |
 | 依赖安全 | Python 与 npm 生产依赖均为 0 个已知漏洞 |
 | 本地 SQLite | 生产预检 0 blocking、1 个非阻断警告 |
 | 历史业务库 | 仍有 1,227 条外键孤儿，须审批后在隔离副本处置 |
@@ -150,7 +277,7 @@ npm run dev
 
 | 版本 | 日期 | 摘要 |
 | --- | --- | --- |
-| [open0.0.22](docs/开发日志-open0.0.22.md) | 2026-07-31 | Go 版 MySQL 备份修复、财务性能优化与验收记录 |
+| open0.0.22 | 2026-07-31 | 维护版本 |
 | [open0.0.21](docs/开发日志-open0.0.21.md) | 2026-07-15 | 修复发布流水线、锁定依赖、统一版本、建立上线清单 |
 | [open0.0.20](docs/开发日志-open0.0.20.md) | 2026-06-24 | 库存流水、单独购药、职工优惠和营收分页 |
 | [open0.0.19](docs/开发日志-open0.0.19.md) | 2026-06-23 | 旧数据库字段兼容修复 |
