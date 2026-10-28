@@ -333,6 +333,13 @@ def start_server():
 
     PORT = _resolve_server_port()
     bind_host = os.environ.get('SERVER_HOST', '127.0.0.1')
+    trust_proxy = os.environ.get('TRUST_PROXY_HEADERS') == '1'
+    if trust_proxy and bind_host not in ('127.0.0.1', '::1', 'localhost'):
+        logging.warning(
+            'TRUST_PROXY_HEADERS=1 while SERVER_HOST=%s: clients can spoof '
+            'X-Forwarded-For; keep the app bound to loopback behind the proxy',
+            bind_host,
+        )
 
     logging.info(f'APP_ROOT: {APP_ROOT}')
     using_external_database = USING_EXTERNAL_DATABASE
@@ -404,7 +411,10 @@ def start_server():
     logging.info(f'Starting waitress server on {bind_host}:{PORT}')
     serve(app, host=bind_host, port=PORT, threads=4,
           channel_timeout=120, recv_bytes=65536,
-          url_scheme='http')
+          url_scheme='http',
+          # waitress 3 strips X-Forwarded-* by default; the loopback-only
+          # listener is reached solely through the local reverse proxy
+          clear_untrusted_proxy_headers=not trust_proxy)
 
 
 def main(argv=None):

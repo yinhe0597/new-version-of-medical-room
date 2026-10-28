@@ -579,6 +579,18 @@ def create_app(config_class=None, *, initialize_database=True):
             app.logger.exception("Failed to initialize parked-visit scheduler")
 
     # 静态文件和前端文件支持
+    def _is_built_frontend(directory):
+        """Only a production build qualifies; frontend/ also holds the Vite dev entry."""
+        index_path = os.path.join(directory, 'index.html')
+        if not os.path.isfile(index_path):
+            return False
+        try:
+            with open(index_path, encoding='utf-8', errors='ignore') as handle:
+                markup = handle.read()
+        except OSError:
+            return False
+        return '/src/main.' not in markup and '@vite/client' not in markup
+
     def _get_dist_dir():
         """Get frontend dist directory, with fallback for different environments."""
         if hasattr(sys, '_MEIPASS'):
@@ -588,10 +600,10 @@ def create_app(config_class=None, *, initialize_database=True):
         # Fallback: relative to APP_ROOT (for onefile mode or dev)
         app_root = os.environ.get('APP_ROOT', '')
         if app_root:
-            # 先尝试 dist/，再尝试 frontend/（兼容旧编译输出目录结构）
-            for candidate in ('dist', 'frontend'):
+            # 先尝试 dist/、frontend/dist；旧布局把产物直接放在 frontend/
+            for candidate in ('dist', os.path.join('frontend', 'dist'), 'frontend'):
                 d = os.path.join(app_root, candidate)
-                if os.path.isdir(d):
+                if os.path.isdir(d) and _is_built_frontend(d):
                     return d
         # Dev environment fallback
         return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'frontend', 'dist')
@@ -613,6 +625,13 @@ def create_app(config_class=None, *, initialize_database=True):
             # fall back to index.html so the SPA can handle it
             path = 'index.html'
         return send_from_directory(dist_dir, path)
+
+    if os.environ.get('TRUST_PROXY_HEADERS') == '1':
+        from werkzeug.middleware.proxy_fix import ProxyFix
+
+        app.wsgi_app = ProxyFix(
+            app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1
+        )
 
     return app
 
